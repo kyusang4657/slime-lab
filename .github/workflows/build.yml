@@ -45,3 +45,13 @@ jobs:
           name: experiment-seed1-100gen
           path: results/ci
           retention-days: 14
+
+      # 오프라인 분석 도구(파이썬). GODOT 를 주면 실제 실행기로 아주 짧은 묶음도 한 번 돌린다.
+      - name: 분석 도구 검사(tools/test_analyze.py)
+        env:
+          GODOT: ${{ github.workspace }}/godot
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          . "$RUNNER_TEMP/venv/bin/activate"
+          python3 -m pip install -q -r tools/requirements.txt
+          python3 -m unittest discover -s tools -p "test_*.py" -v
