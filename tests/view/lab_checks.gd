@@ -455,8 +455,14 @@ func _multi_tick_motion(t, lab: LabMain) -> void:
 	var worst := 0.0
 	var seen := 0
 	var multi := 0
+	var budget_frames := 0
 	for f in 120:
 		var n := lab.advance_frame(DT)
+		# 예산에 걸린 프레임은 밀린 틱을 버리므로(F18) 한 프레임 이동이 원래 길다 — 기계 부하에 따라 생기므로 재지 않는다
+		if lab.last_budget_hit:
+			budget_frames += 1
+			last = {}
+			continue
 		if n >= 2:
 			multi += 1
 		var occ := {}
@@ -473,8 +479,8 @@ func _multi_tick_motion(t, lab: LabMain) -> void:
 				worst = maxf(worst, (now[w.s_id[i]] as Vector2).distance_to(last[w.s_id[i]]) / tl)
 				seen += 1
 		last = now
-	t.check(multi > 0 and seen > 0 and worst <= MULTI_TICK_MAX_STEP,
-			"16배: 2틱 프레임 %d번, 혼자 있는 개체의 한 프레임 이동 최대 %.2f칸 ≤ %.1f(고치기 전 2.6칸)" % [multi, worst, MULTI_TICK_MAX_STEP])
+	t.check(multi > 0 and seen > 0 and worst <= MULTI_TICK_MAX_STEP and budget_frames < 60,
+			"16배: 2틱 프레임 %d번(예산 걸린 프레임 %d번 제외), 혼자 있는 개체의 한 프레임 이동 최대 %.2f칸 ≤ %.1f(고치기 전 2.6칸)" % [multi, budget_frames, worst, MULTI_TICK_MAX_STEP])
 
 
 ## 실제 배속 창: 다시 재생·배속 바꿈 직후 거짓 "뒤처짐" 경고 없음(F09), 느린 프레임(4FPS 미만)은 정직하게 낮게(F10),
@@ -543,6 +549,18 @@ func _toast_rules(t, lab: LabMain) -> void:
 	t.check(lab.new_experiment("default", {}, 1) == "" and lab.visible_toasts().is_empty(), "새 실험 → 앞 세계의 알림을 지움")
 	await t.frames(1)
 	t.check(lab._toast_box.get_child_count() == 0, "알림 상자도 비었음(%d)" % lab._toast_box.get_child_count())
+	# 강조 알림으로 꽉 찼을 때 새 일반 알림(단축키 반응 등)은 바로 사라지지 않고, 가장 오래된 강조 알림이 밀려남
+	var cap := UiConfig.integer("lab.toast_max")
+	for k in cap:
+		lab.show_toast("시험 발견 %d" % k, "discovery", k)
+	lab.show_toast("따라가기 켬", "info", cap)
+	var texts: Array[String] = []
+	for vt in lab.visible_toasts():
+		texts.append(str(vt.text))
+	t.check(texts.size() == cap and texts.has("따라가기 켬") and not texts.has("시험 발견 0") and texts.has("시험 발견 1"),
+			"강조 알림으로 꽉 찼을 때 새 알림이 보이고 가장 오래된 강조 알림이 밀려남: %s" % [texts])
+	lab._clear_toasts()
+	await t.frames(1)
 	lab.set_paused(true)
 	# 백업에서 연 스냅숏: 바뀐 세계 위에 경고 알림 하나
 	var path := "user://lab_checks_backup.json"

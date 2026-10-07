@@ -490,7 +490,7 @@ func _handle_key(code: Key) -> bool:
 ## 또는 info·warn·error. 왼쪽 띠는 종류 색, 발견은 강조 색·멸종과 오류는 위험 색·경고는 경고 색 테두리
 ## (밭 잃음은 경고 색 띠만). tick >= 0 이면 끝에 흐리게 틱을 붙인다. 긴 문장은 지도 폭 안에서 줄을 바꾼다.
 ## lab.toast_coalesce_kinds 의 종류(밭 잃음 등)는 이미 보이는 같은 종류 알림을 새 문장으로 고쳐 쓰고 "×N" 을 붙인다.
-## 최대 lab.toast_max 개: 넘치면 강조 알림이 아닌 것 가운데 오래된 것부터 지운다(모두 강조면 가장 오래된 것).
+## 최대 lab.toast_max 개: 넘치면 (방금 띄운 것을 빼고) 강조 알림이 아닌 것 가운데 오래된 것부터 지운다(모두 강조면 가장 오래된 것).
 func show_toast(text: String, kind: String = "info", tick: int = -1) -> void:
 	if kind in _coalesce:
 		for idx in range(_toasts.size() - 1, -1, -1):
@@ -564,9 +564,10 @@ func show_toast(text: String, kind: String = "info", tick: int = -1) -> void:
 	_toasts.append(entry)
 	_fit_toast(entry)
 	var cap := maxi(1, UiConfig.integer("lab.toast_max"))
+	# 방금 띄운 알림(맨 뒤)은 지우지 않는다 — 강조 알림으로 꽉 차 있어도 단축키 반응 같은 새 알림이 보이게
 	while _toasts.size() > cap:
 		var drop := 0
-		for k in _toasts.size():
+		for k in _toasts.size() - 1:
 			if not _is_highlight(str(_toasts[k].kind)):
 				drop = k
 				break

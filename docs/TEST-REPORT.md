@@ -18,7 +18,7 @@
 ```
 godot --headless --path . --script res://tests/run_tests.gd                  RESULT: 157 checks passed, 0 failed
 godot --headless --path . --script res://tests/run_tests.gd -- --skip-slow   RESULT: 157 checks passed, 0 failed
-godot --headless --path . --script res://tests/run_view_tests.gd             RESULT: 351 passed, 0 failed (view)
+godot --headless --path . --script res://tests/run_view_tests.gd             RESULT: 352 passed, 0 failed (view)
     geo_checks 76 · info_checks 55 · lab_checks 119 · map_checks 84 · smoke_checks 17 (모듈마다 MIN_CHECKS 이상)
 xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd
                                                                              RESULT: 32 passed, 0 failed (ui)
@@ -134,6 +134,14 @@ python3 -m unittest discover -s tools -p "test_*.py"                         Ran
 | F43 | `--param` 배열 값(괄호 안 쉼표), 괄호·JSON 오류는 실행 전에 거부 | test_analyze |
 
 # 1단계 2/5: 시뮬레이션 핵심·헤드리스 실행기 (v0.1.0-dev)
+
+
+최종 확인(독립 에이전트)에서 나온 2건도 고쳤습니다.
+
+| 항목 | 내용 | 검사 |
+| --- | --- | --- |
+| R1 | `lab_checks` 의 16배 한 프레임 이동 검사가 예산에 걸린 프레임(밀린 틱을 버림)에서 1.92칸을 재 부하가 큰 기계에서 간헐 실패 → 예산에 걸린 프레임은 재지 않음(그 수를 출력, 절반 미만이어야 함) | 수정 뒤 `lab_checks` 통과(예산에 걸리는 상황을 강제로 만들어 본 재현은 하지 않음) |
+| R2 | 강조 알림 4개로 꽉 찼을 때 새 일반 알림(예: F 키 "따라가기 켬")이 바로 사라짐 → 방금 띄운 알림은 지우지 않고 가장 오래된 강조 알림을 밀어냄 | `lab_checks` 새 검사(고치기 전 코드에서 실패 확인) |
 
 ## 1. 대상 기록
 
