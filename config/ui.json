@@ -83,8 +83,28 @@
 	"info": {
 		"refresh_frames": 6,
 		"children_max": 24,
-		"heatmap_cell": 9,
+		"heatmap_cell": 16,
 		"heatmap_positive": "#e8a05a",
-		"heatmap_negative": "#5aa0e8"
+		"heatmap_negative": "#5aa0e8",
+		"heatmap_gap": 1,
+		"heatmap_gamma": 0.5,
+		"heatmap_font_size": 12,
+		"heatmap_label_width": 66,
+		"heatmap_header_height": 88,
+		"heatmap_block_gap": 10,
+		"heatmap_legend_height": 28,
+		"padding": 14,
+		"section_gap": 12,
+		"row_gap": 5,
+		"key_width": 64,
+		"swatch_size": 44,
+		"energy_bar_height": 18,
+		"energy_warn_frac": 0.35,
+		"energy_danger_frac": 0.15,
+		"relative_dot": 8,
+		"relative_gap": 4,
+		"dead_alpha": 0.5,
+		"corner_radius": 4,
+		"scrollbar_width": 6
 	}
 }
