@@ -2,6 +2,71 @@
 
 판정은 `통과 / 실패 / 미검증` 중 하나만 씁니다. 자동 검사로 확인한 것과 확인하지 못한 것을 구분합니다.
 
+# 1단계 3/5: 실험실 화면·분석 도구 통합 (v0.1.0-dev)
+
+## 1. 대상 기록
+
+| 항목 | 기록 |
+| --- | --- |
+| 검수 일시 / 담당 | 2026-10-07 / 제작 AI(Claude Code) — 워크트리 5개(SlimeGeo·MapView·InfoPanel·LabMain·분석 도구)를 main 에 병합 |
+| 엔진 | Godot 4.4.1-stable, Compatibility(GL) 렌더러 |
+| 실행 환경 | 클라우드 리눅스 컨테이너 4코어. 화면은 가상 디스플레이(xvfb) + **llvmpipe**(Mesa 25.2, CPU 소프트웨어 GL) — 실제 GPU 아님 |
+| 범위 | `scripts/view/*`, `scripts/ui/*`, `scenes/lab.tscn`, `config/ui.json`, `tests/view/*`, `tests/*_capture.gd`, `tests/ui_driver.gd`, `tests/perf_capture.gd`, `tools/analyze.py` |
+
+## 2. 검사 결과
+
+```
+godot --headless --path . --script res://tests/run_tests.gd                  RESULT: 150 checks passed, 0 failed
+godot --headless --path . --script res://tests/run_tests.gd -- --skip-slow   RESULT: 150 checks passed, 0 failed
+godot --headless --path . --script res://tests/run_view_tests.gd             RESULT: 262 passed, 0 failed (view)
+xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd
+                                                                             RESULT: 29 passed, 0 failed (ui)   (1280×720 도 29/0)
+python3 -m unittest discover -s tools -p "test_*.py"                         Ran 22 tests … OK
+```
+
+| ID | 확인 내용 | 판정 | 근거 |
+| --- | --- | --- | --- |
+| V01 | 화면을 거쳐 진행해도 역사 해시가 헤드리스와 같음(프레임 구동 480틱, 실제 `_process` 64배 약 800틱, 지도 검사 150틱) | 통과 | smoke_checks, map_checks, lab_checks, ui_driver |
+| V02 | 실제 MapView·SlimeGeo·InfoPanel 로 지도 클릭(실제 마우스 입력) → `pick_slime` → 정보 창 같은 id | 통과 | ui_driver |
+| V03 | 메시 예산(슬라임 398·식물 112·열매 80·저장고 312·밭 148·고리 288 삼각형), 닫힌 슬라임 곡면 | 통과 | geo_checks |
+| V04 | 실험을 바꿔도 앞 세계의 저장고·밭이 남지 않음 | 통과(통합 때 고침) | map_checks — 고치기 전 64배 장면(새 기본 세계, 문명 없음)에 fast_civ 의 저장고 4·밭 3 이 남아 보였음 |
+| V05 | 화면 갱신 없이 세계만 진행한 뒤 `focus_on` 이 낡은 그린 위치가 아니라 지금 칸으로 | 통과(통합 때 고침) | map_checks |
+| V06 | F 키 따라가기 ↔ 정보 창 "따라가기" 단추 상태 일치 | 통과(통합 때 연결) | lab_checks |
+| V07 | 1600×900 에서 보통 개체(자식 두 줄 이하)의 정보 창이 스크롤 없이 두뇌 범례까지 들어감 | 통과(통합 때 간격 조정) | 정보 창 내용 높이 879 → 796px(보이는 높이 797px). `info.heatmap_cell` 16 → 14 등 |
+| V08 | 캡처: 전경·농사 낮(저장고·밭 옆 개체)·같은 자리 밤·64배, 지도 3장, 정보 창 2장, 메시 모음 | 통과(눈으로 확인) | `docs/screenshots/v0.1/` (3D 장면은 JPG 품질 0.85, 100~160KB) |
+
+## 3. 성능 실측
+
+`tests/perf_capture.gd` (VIEW-API "성능 측정").
+
+**① 헤드리스 미세 측정** — MapView `before_steps + update_view`, 프레임 600개(60fps 가정):
+
+| 세계 · 배속 | 개체 | 화면 µs/프레임 평균(중앙 / 95%) | 틱 있는 프레임 / 없는 프레임 | 시뮬레이션 µs/프레임 |
+| --- | --- | --- | --- | --- |
+| 기본·250마리 · 1배 | 250 | **381** (326 / 924) | 654 / 350 | 333 |
+| 기본·250마리 · 4배 | 174 | 429 (329 / 1,050) | 605 / 311 | 1,108 |
+| 기본·250마리 · 64배 | 170 | 1,164 (1,153 / 1,678) | 1,164 / — | 19,054 |
+| fast_civ 1,760틱 · 1배 | 170 | 274 (232 / 820) | 559 / 242 | 282 |
+| fast_civ 1,760틱 · 64배 | 209 | 1,120 (1,109 / 1,377) | 1,120 / — | 21,869 |
+
+**② 실험실 실측(xvfb + llvmpipe, 1600×900, 지도 MSAA 2×)** — 기본·씨앗 1 을 2,132틱(개체 200)까지 진행한 뒤 개체 하나를 골라 둔 채 각 10초:
+
+| 배속 | 평균 FPS | 프레임 시간 중앙 | 우리 스크립트(`advance_frame`) | 그중 시뮬레이션 / 화면·UI | 실제 배속 | 개체 평균 | 그리기 호출 · 기본 도형 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1배 | **8.4** | 117.8ms | **3.84ms** | 2.71 / 1.13ms | 1.0배 | 236 | 176 · 40.6만 |
+| 64배 | **8.7** | 112.5ms | **12.41ms** | 11.03 / 1.37ms | 7.4배 | 160 | 174 · 37.3만 |
+
+- llvmpipe 는 CPU 로 그리므로 프레임 시간(중앙 112~118ms) 가운데 우리 스크립트 몫을 뺀 100ms 넘게가 그리기다. 우리 스크립트 몫은 1배 3.8ms·64배 12.4ms 로, 실제 GPU 에서 그리기가 수 ms 라면 1배는 60FPS 안, 64배는 시뮬레이션 예산(10ms)이 프레임을 정한다. MSAA 를 끄면 llvmpipe 1배 10.6FPS(참고).
+- 64배의 실제 배속은 시뮬레이션 비용(200마리 근처에서 틱당 약 3~4ms)과 프레임당 예산 10ms 로 정해진다(헤드리스 지도 뼈대로 28~33배, llvmpipe 에서는 프레임이 느려 7~10배). 표시는 "목표 64배 / 실제 M배" 를 경고 색으로 정직하게 보인다.
+- 기본 도형의 대부분은 식물(약 2,500포기 × 112삼각형). 실제 GPU 에서는 문제없는 양이지만, 느린 기기 대응이 필요하면 멀리서 식물 메시를 낮은 단계로 바꾸는 것이 첫 후보.
+
+## 4. 미검증
+
+| ID | 내용 | 이유 |
+| --- | --- | --- |
+| U02′ | 실제 GPU 에서 200마리 60FPS | 이 환경에는 GPU 가 없어 llvmpipe 로만 쟀음(위 ②). 우리 스크립트 몫(1배 3.8ms)만 확인 |
+| U03 | Windows·macOS 에서 화면 실행 | 리눅스뿐 |
+
 # 1단계 2/5: 시뮬레이션 핵심·헤드리스 실행기 (v0.1.0-dev)
 
 ## 1. 대상 기록

@@ -374,6 +374,8 @@ func _handle_key(code: Key) -> bool:
 			return true
 		KEY_F:
 			map_view.follow_selected = not map_view.follow_selected
+			# 정보 창의 "따라가기" 단추도 같은 상태로(신호 없이)
+			info_panel.set_follow(map_view.follow_selected)
 			if map_view.follow_selected and _selected >= 0:
 				map_view.focus_on(_selected)
 			show_toast("따라가기 켬" if map_view.follow_selected else "따라가기 끔", "info")

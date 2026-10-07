@@ -84,7 +84,7 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 
 - 노드(이름 고정, 검사가 씀): `Camera`(궤도 카메라) · `Environment`(WorldEnvironment) · `Sun` · `Terrain`(ArrayMesh 하나) · `Farms` · `Stores` · `Plants` · `Dropped` · `Slimes` · `SlimeShadows` · `Carry`(MultiMeshInstance3D) · `SelectRing`.
 - 궤도 카메라 `scripts/view/orbit_camera.gd`(Camera3D, 전역 이름 없이 `MapView.OrbitCamera` 로 preload): `target`·`yaw`·`pitch`·`distance`, `apply()`, `fit_rect(rect, aspect)`(네 모서리를 투영해 지도 전체가 들어오게), `pan_pixels(rel, vp_h)`, `zoom_at(screen_pos, steps)`(커서 아래 땅 점 고정), `rotate_pixels(rel)`, `ground_point(screen_pos, plane_y)`, `reset_orientation()`. 수치는 `camera` 절(`pitch_min_deg`·`pitch_max_deg`·`fit_margin`·`near`·`far`·`focus_distance`·`click_threshold_px`·`gesture_pan_px` 추가).
-- `bind` 는 카메라를 처음 방위·고각으로 돌려 지도 전체를 맞춘다. 사용자가 카메라를 움직이기 전에는 뷰포트 크기가 바뀔 때(SubViewportContainer 배치 뒤 등) 다시 맞춘다.
+- `bind` 는 앞 세계의 저장고·밭 인스턴스를 지우고(통합 때 고침: 건물 없는 새 세계에 앞 세계 건물이 남던 문제), 카메라를 처음 방위·고각으로 돌려 지도 전체를 맞춘다. 사용자가 카메라를 움직이기 전에는 뷰포트 크기가 바뀔 때(SubViewportContainer 배치 뒤 등) 다시 맞춘다.
 - 트리에 들어가면 자기 SubViewport 의 `own_world_3d` 를 켠다(지연 호출) — 비교 모드에서 두 지도의 3D 세계가 섞이지 않게.
 - `pick_slime` 은 땅(y 0)이 아니라 **슬라임 중심 높이**(메시 높이의 절반)의 수평면과 광선을 교차하고, 마지막으로 그린(보간된) 위치 중 `ui.map.pick_radius` 칸 안의 가장 가까운 개체를 고른다. 클릭은 누른 곳에서 `click_threshold_px` 이상 움직이지 않고 뗐을 때.
 - 보간: `before_steps()` 가 (틱이 바뀌었을 때만) id·칸·방향 배열을 복사해 두고, `update_view` 는 틱이 진행한 프레임에 그 복사본을 "이전 위치"로 올린다. 두 배열이 id 오름차순이라 두 포인터로 맞춘다(새로 태어난 개체는 지금 칸에 바로 나타남). 움직인 개체는 `sin(π·alpha)` 로 뛰고 `sin(2π·alpha)` 로 늘었다 눌리며(부피 유지), 가만히 있으면 숨쉬기, 먹기·줍기·심기 중이면 끄덕임. 같은 칸의 여러 개체는 `slime.stack_offset` 둘레에 나뉜다.
@@ -95,7 +95,7 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 - 밤에는 해·주변광·배경을 `night_*` 쪽 푸른 색으로 섞고, 슬라임 인스턴스 색을 `night_slime_boost` 배까지 밝혀 계통 색이 읽히게 한다. 계절마다 풀밭 색에 `season_tints` 를 조금 섞는다.
 - 검사·기록용 추가 함수: `terrain_tile_color(c) -> Color`(칸의 지금 위 사각형 색), `slime_instance_position(k) -> Vector3`(k 번째 슬라임 인스턴스 위치), `view_stats()` 의 `slime_us`·`plant_us`·`terrain_us`(마지막 갱신 시간 µs).
 - 측정(헤드리스, 이 기계 Xeon 2.3GHz): 슬라임 250마리 갱신 약 0.35ms/프레임(`update_view` 평균 약 0.45ms, 식물·땅 갱신 몫 포함), 식물 2,587포기 갱신 약 0.6ms(2틱·2프레임마다), 땅 색 3,072칸 약 0.9~1.1ms(10틱·2프레임마다). `tests/view/map_checks.gd` 가 매번 출력한다.
-- 캡처: `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/map_capture.gd -- --out=폴더` → `map-overview`·`map-closeup`·`map-night`(500KB 넘으면 JPG).
+- 캡처: `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/map_capture.gd -- --out=폴더` → `map-overview`·`map-closeup`·`map-night`(JPG 품질 0.85).
 
 ## InfoPanel — `scripts/ui/info_panel.gd` (`class_name InfoPanel`, PanelContainer)
 
@@ -168,7 +168,7 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 - 위쪽 막대: 재생/멈춤·빨리 감기는 **코드로 그린 아이콘**(`UiTheme.icon`, ⏩ 가 나눔고딕에 없음), 멈추면 ▶ 가 경고 색. 속도 단추는 `ButtonGroup`(빨리 감기 중에는 모두 꺼짐, 속도를 고르면 빨리 감기 꺼짐). 상태: 틱 · 날(`tick / day_ticks + 1`) · 계절(봄·여름·가을·겨울 / 계절 없음) · 낮/밤(`light ≥ lab.day_light_threshold`) │ 평균 세대 · 개체(0 이면 "멸종", 위험 색) · 문명(`SimWorld.STAGE_NAMES`) …… "목표 N배 / 실제 M배"·"빨리 감기 / 실제 M배"·"멈춤 · 목표 N배". 가장 긴 표시(틱 7자리 등)에서도 최소 창 폭 1280 안(검사).
 - 알림: 사건 문장 그대로 + 흐린 "틱 N". 왼쪽 띠 = 종류 색, 발견(`★ 새 발견` 머리)은 강조 색, 멸종·오류는 위험 색, 밭 잃음·경고는 경고 색 테두리. 최대 `lab.toast_max` 개(오래된 것부터 지움), `toast_seconds` 뒤 사라지며 마지막 `toast_fade_seconds` 동안 흐려짐.
 - 선택: `map_view.slime_clicked(id)` → `select_slime(id)`(-1·없는 id = 해제; 죽은 개체 id 는 기록으로 표시), `info_panel.slime_requested(id)` → `select_slime(id)` + `map_view.focus_on(id)`, `info_panel.follow_toggled(on)` → `map_view.follow_selected = on`.
-- 단축키는 `_input` 에서 받아 처리하면 소비한다(초점 있는 단추가 스페이스를 먹지 않게). **`LineEdit`·`TextEdit` 에 초점이 있거나 Ctrl·Alt·Meta 가 눌렸으면 무시**. 1~7 은 숫자판 키도. F 는 `map_view.follow_selected` 를 뒤집고 알림(정보 창의 따라가기 단추 모양은 따라 바뀌지 않음 — 계약에 InfoPanel 쪽 설정 함수가 없음).
+- 단축키는 `_input` 에서 받아 처리하면 소비한다(초점 있는 단추가 스페이스를 먹지 않게). **`LineEdit`·`TextEdit` 에 초점이 있거나 Ctrl·Alt·Meta 가 눌렸으면 무시**. 1~7 은 숫자판 키도. F 는 `map_view.follow_selected` 를 뒤집고 알림, 정보 창의 따라가기 단추도 `info_panel.set_follow()` 로 맞춘다(통합 때 연결).
 - 날 표시에 하루 틱 수가 필요해 `world.cfg.time.day_ticks` 를 읽기만 한다(SIM-API 목록 밖 — 보고서에 기록).
 - 창 최소 크기 `lab.min_width × min_height`(헤드리스에서는 건너뜀). 창 제목 = "프로젝트 이름 — 예설정 · 씨앗 N".
 
@@ -205,4 +205,9 @@ func run(t) -> void:
 `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd -- --out=폴더` 로 실험실 장면을 띄워 시나리오(전경·가까이·개체 선택+정보 창·밤·농사 단계)를 진행·캡처하고, 동작(클릭 → 정보 창 id, 속도 바꾸기, 화면 진행 중 역사 해시가 헤드리스와 같음)을 확인해 `RESULT: N passed, M failed (ui)` 를 출력합니다.
 
 **구현 메모(3단계)**: `--out` 기본값 `res://docs/screenshots/v0.1`, `--copy=폴더` 를 주면 그림을 그곳에도 복사. 프레임은 `advance_frame(1/60)` 으로 몬다(④만 실제 `_process`).
-① `lab-01-overview` 기본·씨앗 1 을 8배로 600프레임(480틱) → 해시 비교, 지도 클릭(실제 MapView 면 `pick_slime` 이 찾은 개체를 실제 마우스 입력으로, 뼈대면 `slime_clicked` 신호로) → 정보 창 id, 재생·속도·빨리 감기 단추 클릭, 스페이스. ② `lab-02-farm-selected` fast_civ·씨앗 1 을 농사 단계 + 밭 3칸까지(약 1,670틱) → 자식이 가장 많은 개체 선택·`focus_on` → 쌓인 사건 알림. ③ `lab-03-night` 밤까지 진행 후 멈춘 모습. ④ `lab-04-speed64` 64배 단추 클릭 → 실제 시간 150프레임 → "목표 64배 / 실제 M배" 와 해시 비교. 600KB 넘으면 JPG. 그림 폴더 `docs/screenshots/` 에는 `.gdignore`(가져오기 제외).
+① `lab-01-overview` 기본·씨앗 1 을 8배로 600프레임(480틱) → 해시 비교, 지도 클릭(실제 MapView 면 `pick_slime` 이 찾은 개체를 실제 마우스 입력으로, 뼈대면 `slime_clicked` 신호로) → 정보 창 id, 재생·속도·빨리 감기 단추 클릭, 스페이스. ② `lab-02-farm-selected` fast_civ·씨앗 1 을 농사 단계 + 밭 3칸까지(약 1,670틱) → 해가 다 뜰 때까지 진행(낮 장면) → 밭에서 2·4·6칸 안(가까운 것부터)에 있고 남은 수명이 90틱 이상인 개체 가운데 자식이 가장 많은 개체 선택·`focus_on` → 쌓인 사건 알림. ③ `lab-03-night` 밤까지 진행 → 같은 개체로 다시 `focus_on`(②와 같은 자리를 낮·밤으로 견줌) → 멈춘 모습. ④ `lab-04-speed64` 64배 단추 클릭 → 실제 시간 150프레임 → "목표 64배 / 실제 M배" 와 해시 비교. 그림은 JPG(품질 0.85, 600KB 이하 확인). 그림 폴더 `docs/screenshots/` 에는 `.gdignore`(가져오기 제외).
+
+## 성능 측정 — `tests/perf_capture.gd` (통합)
+
+- 헤드리스 미세 측정: `godot --headless --path . --script res://tests/perf_capture.gd -- --bench` — 1260×856 SubViewport 의 MapView 에 대해 프레임마다 `before_steps` + `update_view` 시간(틱 있는 프레임·없는 프레임 따로, 중앙·95%·최대)과 시뮬레이션 시간을 1·4·64배(60fps 가정)로 잰다. 세계: 기본 `population.initial = 250`(씨앗 11), fast_civ 1,760틱(씨앗 1).
+- 실험실 실측: `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/perf_capture.gd [-- --seconds=N]` — 기본·씨앗 1 을 1,500틱 넘게, 개체 200 이상이 될 때까지 진행한 뒤 1배·64배로 각 N초(기본 10) 실제 시간 진행. `LabMain.advance_frame` 을 실제 프레임 시간으로 직접 불러 FPS·프레임 시간·우리 스크립트 시간(시뮬레이션 `last_sim_ms` + 화면·UI 나머지)·그리기 호출·기본 도형 수를 출력한다. llvmpipe(CPU 소프트웨어 GL)에서는 그리기 몫이 대부분이라 실제 GPU 의 FPS 를 뜻하지 않는다.

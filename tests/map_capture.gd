@@ -2,11 +2,11 @@ extends SceneTree
 ## 지도 관찰 창 캡처(가상 디스플레이에서):
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/map_capture.gd -- --out=폴더
 ## 예설정 fast_civ·씨앗 1 을 농사 단계(약 1,700틱)까지 돌린 뒤 MapView 를 1600×900 SubViewport 에 띄워
-## 전경(map-overview)·저장고 부근 가까이(map-closeup)·밤(map-night)을 찍는다. 파일이 500KB 를 넘으면 JPG 로 저장.
+## 전경(map-overview)·저장고 부근 가까이(map-closeup)·밤(map-night)을 JPG(품질 0.85)로 찍는다.
 ## 선택 인자: --ticks=N(시작 틱, 기본 1764), --size=WxH
 
 const SIZE_LIMIT := 500 * 1024
-const JPG_QUALITY := 0.88
+const JPG_QUALITY := 0.85
 ## 진행 틱 수(낮 한가운데·밭이 몇 칸 생긴 때).
 const DEFAULT_TICKS := 1764
 ## 찍기 전에 화면을 거쳐 진행할 틱(보간 기억이 생기게).
@@ -118,16 +118,13 @@ func _frames(n: int) -> void:
 	await RenderingServer.frame_post_draw
 
 
+## 3D 장면이라 JPG 로 저장한다(PNG 의 절반 아래 크기, 글자가 없어 손실이 눈에 띄지 않음).
 func _save(name: String) -> void:
 	var img := _sv.get_texture().get_image()
-	var png := img.save_png_to_buffer()
-	var path := _abs(_out).path_join(name)
-	if png.size() <= SIZE_LIMIT:
-		img.save_png(path + ".png")
-		print("저장: %s.png (%d KB)" % [path, png.size() / 1024])
-	else:
-		img.save_jpg(path + ".jpg", JPG_QUALITY)
-		print("저장: %s.jpg (PNG %d KB 라서 JPG)" % [path, png.size() / 1024])
+	var path := _abs(_out).path_join(name + ".jpg")
+	img.save_jpg(path, JPG_QUALITY)
+	var sz := FileAccess.get_file_as_bytes(path).size()
+	print("저장: %s (%d KB)%s" % [path, sz / 1024, "" if sz <= SIZE_LIMIT else " — 크기 한도 초과"])
 
 
 static func _abs(p: String) -> String:

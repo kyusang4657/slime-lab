@@ -2,14 +2,15 @@ extends SceneTree
 ## 실험실 화면 캡처·동작 확인(가상 디스플레이 필요). 계약: docs/VIEW-API.md "캡처".
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd -- --out=폴더 [--copy=폴더]
 ## scenes/lab.tscn 을 뿌리 창(1600×900)에 띄우고 프레임은 LabMain.advance_frame 으로 직접 몬다.
-## 시나리오: ① 전경(기본·씨앗 1, 8배로 약 10초) ② fast_civ 농사 단계, 자식 있는 개체 선택·카메라 맞춤 ③ 밤(멈춤) ④ 64배와 실제 배속 표시.
+## 시나리오: ① 전경(기본·씨앗 1, 8배로 약 10초) ② fast_civ 농사 단계 낮, 밭 가까이 자식 있는 개체 선택·카메라 맞춤
+## ③ 같은 자리의 밤(멈춤) ④ 64배와 실제 배속 표시.
 ## 동작: 지도 클릭 → 정보 창 id(실제 MapView 면 실제 입력, 뼈대면 신호), 속도·멈춤 단추 클릭, 단축키,
-## 화면으로 진행해도 역사 해시가 헤드리스와 같음. 그림은 lab-*.png(600KB 넘으면 JPG). 끝에 RESULT 줄.
+## 화면으로 진행해도 역사 해시가 헤드리스와 같음. 그림은 lab-*.jpg(품질 0.85, 600KB 이하 확인). 끝에 RESULT 줄.
 ## 이전 프로젝트(little-monster-village, 같은 저자·MIT)의 tests/integration_driver.gd 입력 흉내(_click)를 가져와 고침.
 
 const DT := 1.0 / 60.0
 const SIZE_LIMIT := 600 * 1024
-const JPG_QUALITY := 0.88
+const JPG_QUALITY := 0.85
 ## 전경: 8배로 10초(600프레임)
 const OVERVIEW_FRAMES := 600
 ## 농사 단계 뒤 밭이 생길 때까지 더 돌리는 한도(틱)와 바라는 밭 수
@@ -18,6 +19,14 @@ const FARM_WANT := 3
 const STAGE_MAX_TICKS := 20000
 ## 64배 장면: 실제 시간으로 도는 프레임 수
 const REALTIME_FRAMES := 150
+## 농사 장면: 해가 뜨기를 기다리는 틱 한도(하루 이상), 해가 다 뜬 뒤 더 진행할 틱, 고를 개체가 밭에서 떨어진 칸 한도(차례로 넓힘, -1 = 아무 데나),
+## 찍기 전 그리는 프레임(실제 배속 표시가 "—" 를 벗어나게 0.25초 넘게)
+const DAY_WAIT_MAX := 200
+const DAY_SETTLE_TICKS := 6
+const FARM_NEAR: Array[int] = [2, 4, 6, -1]
+const FARM_RENDER_FRAMES := 24
+## 고를 개체의 남은 수명 하한(틱, 낮 장면에서 밤 장면까지 약 하루 = 60틱)
+const MIN_LIFE_LEFT := 90
 
 var out := "res://docs/screenshots/v0.1"
 var copy_to := ""
@@ -102,15 +111,21 @@ func _farm() -> void:
 	print("  농사: %d틱(%.1f초), 인구 %d, 저장고 %d, 밭 %d, 평균 %.1f세대" % [w.tick, float(Time.get_ticks_msec() - t0) / 1000.0,
 			w.population(), w.store_tiles.size(), w.farms.size(), w.mean_generation()])
 	check(w.stage == SimWorld.STAGE_FARM, "fast_civ 가 농사 단계에 도달(틱 %d)" % w.tick)
-	# 살아 있는 개체 가운데 자식이 가장 많은 개체
+	# 낮에 찍는다(밤 장면 lab-03 과 같은 자리를 낮·밤으로 견주도록): 해가 다 뜰 때까지 + 조금 더
+	var dawn := 0
+	while w.light < 1.0 and dawn < DAY_WAIT_MAX:
+		w.step()
+		dawn += 1
+	w.step_n(DAY_SETTLE_TICKS)
+	# 밭 가까이(FARM_NEAR 의 칸 수 안, 가까운 것부터)에 있는 개체 가운데 자식이 가장 많은 개체. 없으면 전체에서.
+	# 밭이 화면 가운데 근처에 와야 위쪽 알림에 가리지 않는다.
 	var best := -1
-	var best_children := 0
-	for i in w.population():
-		var info := w.slime_info(w.s_id[i])
-		if int(info.children) > best_children:
-			best_children = int(info.children)
-			best = w.s_id[i]
-	check(best >= 0, "자식 있는 개체 #%d(자식 %d)" % [best, best_children])
+	for near: int in FARM_NEAR:
+		best = _most_children(w, near)
+		if best >= 0:
+			break
+	var best_children := int(w.slime_info(best).get("children", 0)) if best >= 0 else 0
+	check(best >= 0 and best_children > 0, "밭 가까이 자식 있는 개체 #%d(자식 %d)" % [best, best_children])
 	lab.set_paused(false)
 	lab.set_speed(2)
 	lab.select_slime(best)
@@ -118,8 +133,10 @@ func _farm() -> void:
 	var got := {n = 0}
 	var cb := func(list: Array) -> void: got.n += list.size()
 	lab.events.connect(cb)
-	await _render(12)
+	# 실제 배속 창(0.25초)이 차도록 조금 넉넉히
+	await _render(FARM_RENDER_FRAMES)
 	lab.events.disconnect(cb)
+	check(w.light >= UiConfig.num("lab.day_light_threshold") and lab._lbl_daynight.text == "낮", "농사 장면은 낮(빛 %.2f)" % w.light)
 	check(int(got.n) > 0 and not lab.visible_toasts().is_empty(), "쌓인 사건 %d건 → 알림" % int(got.n))
 	check(lab.info_panel.current_id() == best, "정보 창 = 고른 개체 #%d" % best)
 	check(lab._lbl_stage.text == SimWorld.STAGE_NAMES[SimWorld.STAGE_FARM], "문명 단계 표시: " + lab._lbl_stage.text)
@@ -137,10 +154,17 @@ func _night() -> void:
 		w.step()
 		k += 1
 	w.step_n(6)
+	# 낮 장면에서 고른 개체를 다시 화면 가운데로(밤에도 선택 고리가 보이게). 지도를 먼저 한 번 갱신해
+	# (멈춘 채라 진행은 없음) 위에서 직접 돌린 틱 뒤의 위치로 맞춘다.
+	await _render(1)
+	if lab.selected_id() >= 0:
+		lab.map_view.focus_on(lab.selected_id())
 	lab.set_paused(false)
 	lab.set_speed(1)
 	await _render(10)
 	check(lab._lbl_daynight.text == "밤", "밤 표시(빛 %.2f)" % w.light)
+	check(w.index_of_id(lab.selected_id()) >= 0 and lab.info_panel.current_id() == lab.selected_id(),
+			"밤에도 고른 개체 #%d 가 살아 있고 정보 창에 그대로" % lab.selected_id())
 	# 멈춘 모습(▶ 아이콘·지도 위 멈춤 표지)도 함께 찍는다
 	lab.set_paused(true)
 	await _render(2)
@@ -260,6 +284,31 @@ func _click(pos: Vector2) -> void:
 
 # ── 도움 ──
 
+## 살아 있는 개체 가운데 자식이 가장 많은 개체 id(없으면 -1). near >= 0 이면 어느 밭과 체비쇼프 거리 near 칸 안인 개체만.
+## 남은 수명이 MIN_LIFE_LEFT 틱보다 짧은 개체는 뺀다.
+func _most_children(w: SimWorld, near: int) -> int:
+	var best := -1
+	var best_children := 0
+	for i in w.population():
+		if near >= 0:
+			var close := false
+			for c in w.farms:
+				if maxi(absi(c % w.w - w.s_x[i]), absi(c / w.w - w.s_y[i])) <= near:
+					close = true
+					break
+			if not close:
+				continue
+		var info := w.slime_info(w.s_id[i])
+		# 밤 장면(lab-03)까지 살아 있도록 남은 수명이 넉넉한 개체만
+		if int(info.max_age) - int(info.age) < MIN_LIFE_LEFT:
+			continue
+		var n := int(info.children)
+		if n > best_children:
+			best_children = n
+			best = w.s_id[i]
+	return best
+
+
 func _headless(preset: String, seed_value: int, ticks: int) -> SimWorld:
 	var w := SimWorld.new()
 	w.setup(SimConfig.build(preset, {}).config, seed_value)
@@ -282,12 +331,9 @@ func _frames(n: int) -> void:
 func _shot(name: String) -> void:
 	await RenderingServer.frame_post_draw
 	var img := root.get_texture().get_image()
-	var path := _abs(out).path_join(name + ".png")
-	img.save_png(path)
-	if FileAccess.get_file_as_bytes(path).size() > SIZE_LIMIT:
-		DirAccess.remove_absolute(path)
-		path = _abs(out).path_join(name + ".jpg")
-		img.save_jpg(path, JPG_QUALITY)
+	# 3D 지도가 대부분인 화면이라 JPG(PNG 의 절반 크기, 품질 0.85 에서 글자도 또렷함)
+	var path := _abs(out).path_join(name + ".jpg")
+	img.save_jpg(path, JPG_QUALITY)
 	var sz := FileAccess.get_file_as_bytes(path).size()
 	check(sz > 0 and sz <= SIZE_LIMIT and img.get_size() == Vector2i(root.size), "그림 %s %dx%d (%d KB)" % [path.get_file(), img.get_width(), img.get_height(), sz / 1024])
 	_files.append(path)

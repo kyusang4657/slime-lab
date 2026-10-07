@@ -35,6 +35,11 @@ jobs:
           ./godot --headless --path . --script res://tests/run_tests.gd 2>&1 | tee /tmp/t1.log | grep -E "^(PASS|FAIL|RESULT)|실패|성능|농사 도달"
           grep -q "^RESULT: .* 0 failed" /tmp/t1.log
 
+      - name: 화면 검사(run_view_tests, 헤드리스)
+        run: |
+          ./godot --headless --path . --script res://tests/run_view_tests.gd 2>&1 | tee /tmp/t3.log | grep -E "^(PASS|FAIL|RESULT)|실패|MapView 시간"
+          grep -q "^RESULT: .* 0 failed (view)" /tmp/t3.log
+
       - name: 헤드리스 실험 짧게(100세대)
         run: |
           ./godot --headless --path . --script res://tests/run_experiment.gd -- --seed=1 --generations=100 --out=results/ci --quiet 2>&1 | tee /tmp/t2.log | tail -1

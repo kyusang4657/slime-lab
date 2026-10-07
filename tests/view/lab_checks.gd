@@ -185,7 +185,9 @@ func _keys(t, lab: LabMain) -> void:
 	var f0 := lab.map_view.follow_selected
 	_key(t, KEY_F)
 	t.check(lab.map_view.follow_selected != f0, "F → 따라가기 바꿈")
+	t.check(lab.info_panel._follow.button_pressed == lab.map_view.follow_selected, "F → 정보 창 따라가기 단추도 같은 상태")
 	_key(t, KEY_F)
+	t.check(lab.info_panel._follow.button_pressed == lab.map_view.follow_selected, "F 다시 → 정보 창 따라가기 단추도 되돌아감")
 	lab.select_slime(lab.world.s_id[0])
 	_key(t, KEY_ESCAPE)
 	t.check(lab.selected_id() == -1 and lab.info_panel.current_id() == -1, "Esc → 선택 해제")

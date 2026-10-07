@@ -336,6 +336,28 @@ func _check_camera(t, mv: MapView, w: SimWorld) -> void:
 	t.check(Vector2(tg.x - p2.x, tg.z - p2.z).length() < 0.05, "따라가기: 목표가 선택 개체로 수렴")
 	mv.follow_selected = false
 	mv.set_selected(-1)
+	# 화면 갱신 없이 세계만 진행한 뒤 focus_on: 낡은 그린 위치가 아니라 지금 칸 가운데로(통합 때 고침)
+	mv.update_view(1.0)
+	var drawn := {}
+	for k in w.population():
+		drawn[w.s_id[k]] = mv.slime_instance_position(k)
+	w.step_n(6)
+	var fid := -1
+	for k in w.population():
+		var id_k := w.s_id[k]
+		if drawn.has(id_k):
+			var d: Vector3 = drawn[id_k]
+			if absf(d.x - (float(w.s_x[k]) + 0.5)) >= 0.5 or absf(d.z - (float(w.s_y[k]) + 0.5)) >= 0.5:
+				fid = id_k
+				break
+	t.check(fid >= 0, "6틱 사이 움직인 개체가 있음")
+	if fid >= 0:
+		var j := w.index_of_id(fid)
+		mv.focus_on(fid)
+		tg = cam.get("target")
+		t.check(absf(tg.x - (float(w.s_x[j]) + 0.5)) < EPS and absf(tg.z - (float(w.s_y[j]) + 0.5)) < EPS,
+				"갱신 전 focus_on → 낡은 그린 위치가 아니라 지금 칸 가운데 (%d, %d)" % [w.s_x[j], w.s_y[j]])
+	mv.update_view(1.0)
 
 
 # ── 낮밤 ──
@@ -396,6 +418,11 @@ func _check_buildings(t, mv: MapView) -> void:
 	t.check(ok, "진행 중 저장고·밭 수가 계속 맞음 (밭 %d)" % w.farms.size())
 	var st := mv.view_stats()
 	t.check(int(st.stores) == w.store_tiles.size() and int(st.farms) == w.farms.size(), "view_stats 저장고·밭")
+	# 건물 없는 새 세계로 다시 붙이면 앞 세계의 저장고·밭이 남지 않아야 함(통합 때 찾은 버그)
+	var fresh: SimWorld = t.make_world({}, 1)
+	mv.bind(fresh)
+	t.check(fresh.store_tiles.is_empty() and stores.instance_count == 0 and farms.instance_count == 0,
+			"건물 없는 세계로 다시 bind → 저장고·밭 인스턴스 0")
 
 
 # ── 결정성 ──

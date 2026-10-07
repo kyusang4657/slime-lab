@@ -483,6 +483,9 @@ func bind(w: SimWorld) -> void:
 	_plant_tick = -1
 	_last_stores = PackedInt32Array()
 	_last_farms = PackedInt32Array()
+	# 앞 세계의 건물을 지운다(새 세계도 건물이 없으면 _sync_buildings 가 "바뀜 없음"으로 보고 넘어가므로)
+	_store_mm.instance_count = 0
+	_farm_mm.instance_count = 0
 	_camera_touched = false
 	if world == null:
 		_terrain_mi.mesh = null
@@ -1127,11 +1130,12 @@ func _update_slimes(alpha: float) -> void:
 	_slime_last_us = Time.get_ticks_usec() - t0
 
 
-## 지금 그려진 위치(없으면 칸 가운데).
+## 지금 그려진 위치(없으면 칸 가운데). 마지막 update_view 뒤에 세계가 더 진행했으면 그린 위치가 낡았으므로 칸 가운데.
 func _rendered_pos(id: int, i: int) -> Vector3:
-	for k in _pick_id.size():
-		if _pick_id[k] == id:
-			return Vector3(_pick_x[k], 0.0, _pick_z[k])
+	if _shown_tick == world.tick:
+		for k in _pick_id.size():
+			if _pick_id[k] == id:
+				return Vector3(_pick_x[k], 0.0, _pick_z[k])
 	return Vector3((float(world.s_x[i]) + 0.5) * _tile, 0.0, (float(world.s_y[i]) + 0.5) * _tile)
 
 
