@@ -32,6 +32,7 @@
 | `s_last_action[i]` | PackedInt32Array | 마지막 행동 `SimBrain.ACT_*` |
 | `lin_hue[id]` | PackedFloat32Array | 색(계통 표지) — 죽은 개체도 id 로 바로 찾음 |
 | `slime_info(id) -> Dictionary` | | 개체 정보(부모·세대·출생·사망·원인·자식 수·특성, 살아 있으면 위치·에너지·행동·유전체) |
+| `children_of(id, limit) -> PackedInt32Array` | | 자식 id(태어난 순서, 최대 limit 개). 계통 전체를 훑으므로 클릭 때만 |
 | `index_of_id(id) -> int` | | 살아 있으면 배열 위치, 아니면 -1 |
 | `mean_generation()`, `mean_of(arr)`, `sum_of(arr)`, `mean_sense()`, `mean_age()` | float | 통계 |
 | `sample() -> Dictionary` | | 시계열 한 줄(`SimRecorder.TIMESERIES_COLUMNS` 키). **호출하면 기간 출생·사망 수를 0 으로** 되돌리므로 기록기만 부른다 |

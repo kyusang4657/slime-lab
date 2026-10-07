@@ -1150,6 +1150,19 @@ func slime_info(id: int) -> Dictionary:
 	return d
 
 
+## id 의 자식 id 목록(태어난 순서, 최대 limit 개). 계통 배열을 처음부터 훑으므로 클릭 때만 부른다.
+func children_of(id: int, limit: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	if id < 0 or id >= lin_pa.size():
+		return out
+	for c in range(id + 1, lin_pa.size()):
+		if lin_pa[c] == id or lin_pb[c] == id:
+			out.append(c)
+			if out.size() >= limit:
+				break
+	return out
+
+
 ## 시계열 한 줄(기록기가 CSV 로 씀). 호출하면 기간 출생·사망 수를 0 으로 되돌린다.
 func sample() -> Dictionary:
 	var stored := sum_of(store_food)

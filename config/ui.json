@@ -1,0 +1,90 @@
+{
+	"_comment": "화면 수치의 단일 기준(색·크기·속도·예산). 시뮬레이션 규칙 수치는 sim-defaults.json. 각 구성 요소는 자기 절(section)에만 키를 더한다.",
+	"speed": {
+		"ticks_per_second_1x": 6.0,
+		"steps": [1, 2, 4, 8, 16, 32, 64],
+		"sim_budget_ms": 10.0,
+		"fast_forward_budget_ms": 14.0,
+		"actual_speed_window_s": 1.0
+	},
+	"lab": {
+		"default_preset": "default",
+		"default_seed": 1,
+		"min_width": 1280,
+		"min_height": 720,
+		"right_panel_width": 340,
+		"left_panel_width": 260,
+		"bottom_panel_height": 220,
+		"toast_seconds": 4.0,
+		"font_size": 15,
+		"font_size_small": 13,
+		"font_size_title": 18
+	},
+	"theme": {
+		"background": "#15181d",
+		"panel": "#1e2229",
+		"panel_border": "#2c323c",
+		"text": "#e4e6ea",
+		"text_dim": "#9aa3ad",
+		"accent": "#7fd1b9",
+		"warn": "#e8a05a",
+		"danger": "#e06464"
+	},
+	"map": {
+		"tile_size": 1.0,
+		"terrain_refresh_ticks": 10,
+		"grass_poor": "#7b7a46",
+		"grass_rich": "#3f8f3a",
+		"water": "#2d5c86",
+		"rock": "#77716a",
+		"farm": "#8a6236",
+		"food_tint": "#5fcf4a",
+		"night_light_energy": 0.25,
+		"day_light_energy": 1.1,
+		"night_ambient": 0.25,
+		"day_ambient": 0.55,
+		"plant_min_scale": 0.12,
+		"plant_max_scale": 0.55,
+		"plant_color": "#3fae49",
+		"dropped_color": "#d2563f",
+		"water_depth": 0.08,
+		"rock_height": 0.25
+	},
+	"slime": {
+		"triangles_max": 400,
+		"segments": 18,
+		"rings": 12,
+		"radius": 0.3,
+		"hop_height": 0.14,
+		"squash": 0.16,
+		"saturation": 0.62,
+		"value": 0.95,
+		"stack_offset": 0.2,
+		"selected_ring_color": "#fff3a0"
+	},
+	"camera": {
+		"pitch_deg": 55.0,
+		"yaw_deg": 0.0,
+		"distance_min": 5.0,
+		"distance_max": 95.0,
+		"distance_start": 60.0,
+		"zoom_step": 1.12,
+		"rotate_speed": 0.006,
+		"pan_speed": 1.0,
+		"follow_lerp": 0.15,
+		"fov_deg": 45.0
+	},
+	"buildings": {
+		"store_wall": "#b08850",
+		"store_roof": "#7a4f2a",
+		"farm_soil": "#6b4a2b",
+		"farm_crop": "#9ccf4a"
+	},
+	"info": {
+		"refresh_frames": 6,
+		"children_max": 24,
+		"heatmap_cell": 9,
+		"heatmap_positive": "#e8a05a",
+		"heatmap_negative": "#5aa0e8"
+	}
+}
