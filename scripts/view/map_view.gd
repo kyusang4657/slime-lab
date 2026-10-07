@@ -7,7 +7,10 @@ extends Node3D
 ##        위 사각형 부분의 색 영역만 다시 올린다(surface_update_attribute_region).
 ##   식물·바닥 먹이·슬라임·운반 열매·저장고·밭 = MultiMesh 하나씩. 선택 고리 = MeshInstance3D 하나.
 ## 보간: before_steps() 가 진행 전 위치(id → 칸)를 기억하고, update_view(alpha) 가 그 칸에서 지금 칸으로 옮긴다.
-## 두 배열 모두 id 오름차순이므로 사전 없이 두 포인터로 맞춘다.
+## 두 배열 모두 id 오름차순이므로 사전 없이 두 포인터로 맞춘다. 보간은 언제나 **마지막 한 틱**만:
+## LabMain 은 step() 마다 그 직전에 before_steps() 를 불러 기억이 지금 틱의 한 틱 전이 되게 하고,
+## 기억이 두 틱 이상 낡았으면(한 번만 부르고 여러 틱 진행) 보간하지 않고 지금 칸에 그린다.
+## 겹친 개체의 둘레 자리(겹침 배치·저장고 문 앞)도 이전 틱 자리에서 지금 자리로 함께 보간한다.
 
 signal slime_clicked(id: int)
 
@@ -56,6 +59,8 @@ const DISC_INNER_ALPHA := 0.85
 const SHADOW_SHRINK := 1.5
 ## 먹기·줍기 동작의 고개 끄덕임 주기(틱당 반 번).
 const BOB_FREQ := PI
+## 고리 메시 바깥 반지름(SlimeGeo.ring_mesh, 배율 1). 화면 최소 크기를 반지름으로 바꿀 때 쓴다.
+const RING_OUTER := 1.0
 
 var world: SimWorld
 var follow_selected := false
@@ -74,6 +79,8 @@ var _store_mm: MultiMesh
 var _farm_mm: MultiMesh
 var _ring: MeshInstance3D
 var _ring_mat: StandardMaterial3D
+## 멀리서(화면 최소 크기로 키운 고리) 쓰는 재질: 깊이 검사 없이 맨 위에 그려 풀·밭·다른 개체에 가리지 않게
+var _ring_mat_top: StandardMaterial3D
 var _selected := -1
 
 # ── ui.json 에서 한 번 읽는 값 ──
@@ -144,6 +151,14 @@ var _c_amb_day := Color()
 var _c_amb_night := Color()
 var _c_bg_day := Color()
 var _c_bg_night := Color()
+var _store_off := 0.0
+var _store_arc := 0.0
+var _store_arc_max := 0.0
+var _occ_scale := 1.0
+var _ring_min_px := 0.0
+var _slime_min_px := 0.0
+var _scale_max := 1.0
+var _follow_fps := 60.0
 
 # ── 메시 정보(바닥 맞춤·삼각형 수) ──
 var _slime_base := 0.0
@@ -154,6 +169,9 @@ var _berry_base := 0.0
 var _berry_mid := 0.0
 var _store_base := 0.0
 var _farm_base := 0.0
+## 밭 칸의 땅 높이(흙판 윗면)와 선택 고리를 올릴 높이(이랑 꼭대기). 슬라임·그림자·고리가 흙판에 묻히지 않게.
+var _farm_ground := 0.0
+var _farm_ring := 0.0
 var _tri := {}
 var _plant_col := Color.WHITE
 var _crop_col := Color.WHITE
@@ -182,6 +200,14 @@ var _plant_kind := PackedByteArray()
 var _plant_tint := PackedFloat32Array()
 var _plant_buf := PackedFloat32Array()
 var _plant_inv_ref := 0.0
+## 칸 → 풀포기 번호(-1 없음), 풀포기마다 줄이기 전 배율(먹이량), 슬라임이 서 있어 줄였는지(1)
+var _plant_of_tile := PackedInt32Array()
+var _plant_s := PackedFloat32Array()
+var _plant_occ := PackedByteArray()
+var _plant_stamp := PackedInt32Array()
+var _stamp := 0
+var _shrunk := PackedInt32Array()
+var _plant_dirty := false
 var _plant_visible := 0
 var _plant_tick := -1
 var _plant_frames := 0
@@ -208,6 +234,14 @@ var _prev_y := PackedInt32Array()
 var _prev_h := PackedInt32Array()
 var _has_prev := false
 var _shown_tick := -1
+## 둘레 자리(겹침·저장고 문 앞) [x0, z0, x1, z1, …]: 지금 배열 순서 / 이전 배열 순서. 틱이 바뀔 때만 다시 계산.
+var _cur_off := PackedFloat32Array()
+var _prev_off := PackedFloat32Array()
+var _offsets_tick := -1
+## 저장고 칸 표시(칸마다 1/0). 저장고 목록이 바뀔 때 다시 만든다.
+var _store_mask := PackedByteArray()
+## 표시 배율(멀리서 작은 슬라임을 키움, 1 = 실제 크기). update_view 마다 카메라 거리로 정한다.
+var _display_k := 1.0
 ## 마지막으로 그린 위치(고르기·선택 고리·따라가기용).
 var _pick_id := PackedInt32Array()
 var _pick_x := PackedFloat32Array()
@@ -309,6 +343,14 @@ func _load_ui() -> void:
 	_c_amb_night = UiConfig.color("map.night_ambient_color")
 	_c_bg_day = UiConfig.color("map.day_background")
 	_c_bg_night = UiConfig.color("map.night_background")
+	_store_off = UiConfig.num("map.store_slime_offset")
+	_store_arc = deg_to_rad(UiConfig.num("map.store_slime_arc_deg"))
+	_store_arc_max = deg_to_rad(UiConfig.num("map.store_slime_arc_max_deg"))
+	_occ_scale = clampf(UiConfig.num("map.plant_occupied_scale"), 0.0, 1.0)
+	_ring_min_px = UiConfig.num("map.ring_min_px")
+	_slime_min_px = UiConfig.num("map.slime_min_px")
+	_scale_max = maxf(1.0, UiConfig.num("map.slime_display_scale_max"))
+	_follow_fps = maxf(1.0, UiConfig.num("camera.follow_ref_fps"))
 
 
 ## 카메라·빛·환경·땅·MultiMesh 노드. 트리에 들어가기 전에 bind 해도 되도록 _init 에서 만든다.
@@ -363,7 +405,8 @@ func _build_nodes() -> void:
 	shm.albedo_color = Color(0.0, 0.0, 0.0, UiConfig.num("map.blob_shadow_alpha"))
 	shm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	shm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_shadow_mm = _add_mm("SlimeShadows", _disc_mesh(UiConfig.integer("map.blob_shadow_segments")), shm, false, false)
+	var disc := _disc_mesh(UiConfig.integer("map.blob_shadow_segments"))
+	_shadow_mm = _add_mm("SlimeShadows", disc, shm, false, false)
 
 	_ring = MeshInstance3D.new()
 	_ring.name = "SelectRing"
@@ -371,6 +414,9 @@ func _build_nodes() -> void:
 	_ring_mat = StandardMaterial3D.new()
 	_ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_ring_mat.albedo_color = UiConfig.color("slime.selected_ring_color")
+	_ring_mat_top = _ring_mat.duplicate() as StandardMaterial3D
+	_ring_mat_top.no_depth_test = true
+	_ring_mat_top.render_priority = 1
 	_ring.material_override = _ring_mat
 	_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_ring.visible = false
@@ -387,10 +433,13 @@ func _build_nodes() -> void:
 	_berry_mid = -(ba.position.y + ba.size.y * 0.5)
 	_store_base = -SlimeGeo.storehouse_mesh().get_aabb().position.y
 	_farm_base = -SlimeGeo.farm_mesh().get_aabb().position.y
+	_farm_ground = _farm_lift + SlimeGeo.FARM_THICK
+	_farm_ring = _farm_ground + SlimeGeo.FARM_RIDGE_H
 	_tri = {
 		slime = SlimeGeo.triangle_count(SlimeGeo.slime_mesh()), plant = SlimeGeo.triangle_count(SlimeGeo.plant_mesh()),
 		berry = SlimeGeo.triangle_count(SlimeGeo.berry_mesh()), store = SlimeGeo.triangle_count(SlimeGeo.storehouse_mesh()),
 		farm = SlimeGeo.triangle_count(SlimeGeo.farm_mesh()), ring = SlimeGeo.triangle_count(SlimeGeo.ring_mesh()),
+		shadow = SlimeGeo.triangle_count(disc),
 	}
 	# 대용품 메시(정점 색 없음)일 때 대신 쓸 색
 	_plant_col = _tint_for(SlimeGeo.plant_mesh(), _c_plant)
@@ -481,8 +530,10 @@ func bind(w: SimWorld) -> void:
 	_shown_tick = -1
 	_terrain_tick = -1
 	_plant_tick = -1
+	_offsets_tick = -1
 	_last_stores = PackedInt32Array()
 	_last_farms = PackedInt32Array()
+	_store_mask = PackedByteArray()
 	# 앞 세계의 건물을 지운다(새 세계도 건물이 없으면 _sync_buildings 가 "바뀜 없음"으로 보고 넘어가므로)
 	_store_mm.instance_count = 0
 	_farm_mm.instance_count = 0
@@ -497,13 +548,16 @@ func bind(w: SimWorld) -> void:
 	_tile_cnt.fill(0)
 	_tile_slot.resize(_n_tiles)
 	_tile_slot.fill(0)
+	_store_mask.resize(_n_tiles)
+	_store_mask.fill(0)
 	_build_terrain()
 	_build_plants()
 	_frame_camera()
 	update_view(1.0)
 
 
-## 이 프레임에 step() 을 부르기 전에 호출. 보간용으로 지금 위치(id → 칸)를 기억한다.
+## step() 을 부르기 **직전마다** 호출(LabMain 은 한 프레임에 여러 틱을 돌리면 틱마다 부른다). 보간용으로 지금 위치(id → 칸)를
+## 기억한다. 틱이 바뀌었을 때만 복사하므로 같은 틱에 여러 번 불러도 된다. 마지막 기억 = 그린 틱의 한 틱 전.
 func before_steps() -> void:
 	if world == null or _snap_tick == world.tick:
 		return
@@ -514,14 +568,31 @@ func before_steps() -> void:
 	_snap_tick = world.tick
 
 
-## 매 프레임 step() 뒤에 호출. alpha(0~1) = 다음 틱까지의 진행률.
-func update_view(alpha: float) -> void:
+## 지도 전체가 들어오게 카메라를 처음 방위·고각으로 되돌리고 따라가기를 끈다(Home 키·"전체 보기" 단추).
+## 사용자가 다시 카메라를 움직이기 전까지는 bind 직후처럼 뷰포트 크기가 바뀌면 다시 맞춘다.
+func fit_map() -> void:
+	if world == null:
+		return
+	follow_selected = false
+	_frame_camera()
+	_camera_touched = false
+
+
+## 지금 표시 배율(멀리서 작은 슬라임을 키운 배수, 가까이서는 1). 검사·캡처용.
+func display_scale() -> float:
+	return _display_k
+
+
+## 매 프레임 step() 뒤에 호출. alpha(0~1) = 마지막 틱의 진행률(보간·통통 튐).
+## delta = 이 프레임의 시간(초, 따라가기 카메라의 부드러움을 프레임 빠르기와 무관하게).
+func update_view(alpha: float, delta: float = 1.0 / 60.0) -> void:
 	if world == null:
 		return
 	var t := world.tick
 	if t != _shown_tick:
-		# 이번 프레임에 진행했다: 진행 전 기억을 "이전 위치"로 올린다(버퍼는 맞바꿔 다시 씀)
-		if _snap_tick != -1 and _snap_tick != t:
+		# 이번 프레임에 진행했다: 진행 전 기억을 "이전 위치"로 올린다(버퍼는 맞바꿔 다시 씀).
+		# 기억이 한 틱 전이 아니면(여러 틱을 기억 없이 진행) 낡은 출발점에서 미끄러지지 않게 보간하지 않는다.
+		if _snap_tick != -1 and _snap_tick == t - 1:
 			var a := _prev_id
 			_prev_id = _snap_id
 			_snap_id = a
@@ -539,6 +610,13 @@ func update_view(alpha: float) -> void:
 			_has_prev = false
 		_snap_tick = -1
 		_shown_tick = t
+	_sync_buildings()
+	# 둘레 자리·풀포기 줄이기는 틱이 바뀌었을 때만(같은 틱 안에서는 점유가 그대로)
+	if _offsets_tick != t or _cur_off.size() != world.s_id.size() * 2:
+		_cur_off = _calc_offsets(world.s_x, world.s_y)
+		_prev_off = _calc_offsets(_prev_x, _prev_y) if _has_prev else PackedFloat32Array()
+		_update_plant_occupancy()
+		_offsets_tick = t
 	# 식물과 땅 색은 틱이 일정 이상 지났을 때만, 같은 프레임에 둘 다 하지 않게
 	_plant_frames += 1
 	_terrain_frames += 1
@@ -546,15 +624,20 @@ func update_view(alpha: float) -> void:
 	if _plant_tick == -1 or (t - _plant_tick >= _plant_every and _plant_frames >= _plant_min_frames) or t < _plant_tick:
 		_refresh_plants()
 		did_plants = true
+	elif _plant_dirty:
+		_plant_mm.buffer = _plant_buf
+		_plant_dirty = false
 	if _terrain_tick == -1 or ((t - _terrain_tick >= _terrain_every and _terrain_frames >= _terrain_min_frames) and not did_plants) or t < _terrain_tick:
 		_recolor_terrain()
-	_sync_buildings()
+	_display_k = _calc_display_scale()
 	_update_slimes(clampf(alpha, 0.0, 1.0))
 	_update_light()
 	_update_ring()
 	if follow_selected and _sel_found:
 		_camera_touched = true
-		_camera.target = _camera.target.lerp(Vector3(_sel_pos.x, 0.0, _sel_pos.z), _follow_k)
+		# 프레임 빠르기와 무관하게: follow_lerp 는 기준 프레임(follow_ref_fps) 한 장에 좁히는 몫
+		var k := clampf(1.0 - pow(1.0 - _follow_k, maxf(delta, 0.0) * _follow_fps), 0.0, 1.0)
+		_camera.target = _camera.target.lerp(Vector3(_sel_pos.x, 0.0, _sel_pos.z), k)
 		_camera.apply()
 
 
@@ -569,12 +652,14 @@ func set_selected(id: int) -> void:
 func pick_slime(screen_pos: Vector2) -> int:
 	if world == null or not _camera.is_inside_tree():
 		return -1
-	var g: Variant = _camera.ground_point(screen_pos, _slime_center)
+	# 표시 배율로 키운 몸에 맞춰 교차 높이·반경도 키운다
+	var g: Variant = _camera.ground_point(screen_pos, _slime_center * _display_k)
 	if g == null:
 		return -1
 	var p: Vector3 = g
 	var best := -1
-	var best_d := _pick_r * _tile * _pick_r * _tile
+	var pr := _pick_r * _tile * _display_k
+	var best_d := pr * pr
 	for i in _pick_id.size():
 		var dx := _pick_x[i] - p.x
 		var dz := _pick_z[i] - p.z
@@ -604,12 +689,13 @@ func get_camera() -> Camera3D:
 	return _camera
 
 
-## 성능 기록용 수치.
+## 성능 기록용 수치. plants = 먹이가 있어 보이는 풀포기 수, triangles_estimate = 그리기에 넘기는 삼각형
+## (숨긴 풀포기도 배율 0 인스턴스로 넘어가므로 풀포기 인스턴스 전부 + 슬라임 발밑 그림자 포함).
 func view_stats() -> Dictionary:
 	if world == null:
 		return {slimes = 0, plants = 0, stores = 0, farms = 0, triangles_estimate = 0}
 	var n := world.s_id.size()
-	var tris := _terrain_tris + n * int(_tri.slime) + _plant_visible * int(_tri.plant)
+	var tris := _terrain_tris + n * (int(_tri.slime) + int(_tri.shadow)) + _plant_mm.instance_count * int(_tri.plant)
 	tris += (_drop_count + _carry_count) * int(_tri.berry)
 	tris += world.store_tiles.size() * int(_tri.store) + world.farms.size() * int(_tri.farm)
 	if _ring.visible:
@@ -848,6 +934,19 @@ func _build_plants() -> void:
 	_plant_hy.resize(n)
 	_plant_tint.resize(n)
 	_plant_kind.resize(n)
+	_plant_s.resize(n)
+	_plant_s.fill(0.0)
+	_plant_occ.resize(n)
+	_plant_occ.fill(0)
+	_plant_stamp.resize(n)
+	_plant_stamp.fill(0)
+	_stamp = 0
+	_shrunk = PackedInt32Array()
+	_plant_dirty = false
+	_plant_of_tile.resize(_n_tiles)
+	_plant_of_tile.fill(-1)
+	for k in n:
+		_plant_of_tile[_plant_tile[k]] = k
 	_plant_mm.instance_count = n
 	_plant_buf.resize(n * XFC)
 	_plant_buf.fill(0.0)
@@ -888,6 +987,8 @@ func _refresh_plants() -> void:
 	var smin := _p_min
 	var sspan := _p_max - _p_min
 	var base := _plant_base
+	var occ := _plant_occ
+	var ps := _plant_s
 	var vis := 0
 	var nd := 0
 	for k in _plant_tile.size():
@@ -897,6 +998,10 @@ func _refresh_plants() -> void:
 		if f > hide:
 			s = smin + sspan * minf(f, 1.0)
 			vis += 1
+		ps[k] = s
+		# 슬라임이 서 있는 칸의 풀포기는 몸을 뚫고 나오지 않게 줄인다(_update_plant_occupancy)
+		if occ[k] != 0:
+			s *= _occ_scale
 		var o := k * XFC
 		var cs := _plant_cs[k] * s
 		var sn := _plant_sn[k] * s
@@ -921,11 +1026,117 @@ func _refresh_plants() -> void:
 			_drop_tiles[nd] = c
 			nd += 1
 	_plant_mm.buffer = buf
+	_plant_dirty = false
 	_plant_visible = vis
 	_write_dropped(nd)
 	_plant_tick = world.tick
 	_plant_frames = 0
 	_plant_last_us = Time.get_ticks_usec() - t0
+
+
+## 슬라임이 서 있는(또는 이번 틱에 떠난) 칸의 풀포기를 map.plant_occupied_scale 배로 줄이고, 비게 된 칸은 되돌린다.
+## 틱이 바뀔 때만 부르고, 바뀐 풀포기의 변환만 버퍼에 다시 쓴다(올리기는 update_view 가 한 번).
+func _update_plant_occupancy() -> void:
+	if _occ_scale >= 1.0 or _plant_occ.size() != _plant_tile.size() or _plant_of_tile.size() != _n_tiles:
+		return
+	_stamp += 1
+	var now := PackedInt32Array()
+	var W := world.w
+	for pass_i in 2:
+		var xs := world.s_x if pass_i == 0 else _prev_x
+		var ys := world.s_y if pass_i == 0 else _prev_y
+		if pass_i == 1 and not _has_prev:
+			break
+		for i in xs.size():
+			var p := _plant_of_tile[ys[i] * W + xs[i]]
+			if p < 0 or _plant_stamp[p] == _stamp:
+				continue
+			_plant_stamp[p] = _stamp
+			now.append(p)
+			if _plant_occ[p] == 0:
+				_plant_occ[p] = 1
+				_write_plant_basis(p)
+	for p in _shrunk:
+		if _plant_stamp[p] != _stamp:
+			_plant_occ[p] = 0
+			_write_plant_basis(p)
+	_shrunk = now
+
+
+## 풀포기 k 의 3×3 기저(방향·배율)만 다시 쓴다(먹이량 배율 × 점유 줄이기).
+func _write_plant_basis(k: int) -> void:
+	var s := _plant_s[k] * (_occ_scale if _plant_occ[k] != 0 else 1.0)
+	var o := k * XFC
+	var cs := _plant_cs[k] * s
+	var sn := _plant_sn[k] * s
+	var sy := s * _plant_hy[k]
+	_plant_buf[o] = cs
+	_plant_buf[o + 2] = sn
+	_plant_buf[o + 5] = sy
+	_plant_buf[o + 7] = _plant_base * sy
+	_plant_buf[o + 8] = -sn
+	_plant_buf[o + 10] = cs
+	_plant_dirty = true
+
+
+## 칸 c 의 땅 높이(밭은 흙판 윗면, 나머지 0 — 물·바위 칸에는 슬라임이 서지 않음).
+func _ground_at(c: int) -> float:
+	return _farm_ground if world.tiles[c] == SimGrid.TILE_FARM else 0.0
+
+
+## 칸 점유에 따른 둘레 자리 [x0, z0, x1, z1, …](배열 순서 = id 오름차순 = 칸 안 자리 순서).
+## 여러 개체가 한 칸에 있으면 slime.stack_offset 둘레에 나누고, 저장고 칸이면 움집 안에 묻히지 않게
+## 문 앞(+Z, 남쪽) 반지름 map.store_slime_offset 의 호에 나눠 세운다. 이전 틱 배열로도 불러 둘레 자리를 보간한다.
+func _calc_offsets(xs: PackedInt32Array, ys: PackedInt32Array) -> PackedFloat32Array:
+	var n := xs.size()
+	var out := PackedFloat32Array()
+	out.resize(n * 2)
+	if n == 0 or _tile_cnt.size() != _n_tiles:
+		return out
+	var W := world.w
+	var cnt := _tile_cnt
+	var slot := _tile_slot
+	var stores := _store_mask.size() == _n_tiles
+	var tl := _tile
+	for i in n:
+		cnt[ys[i] * W + xs[i]] += 1
+	for i in n:
+		var c := ys[i] * W + xs[i]
+		var m := cnt[c]
+		var k := slot[c]
+		slot[c] = k + 1
+		var ox := 0.0
+		var oz := 0.0
+		if stores and _store_mask[c] != 0:
+			var step := _store_arc if m < 2 else minf(_store_arc, _store_arc_max / float(m - 1))
+			var a := (float(k) - float(m - 1) * 0.5) * step
+			ox = sin(a) * _store_off * tl
+			oz = cos(a) * _store_off * tl
+		elif m > 1:
+			var ang := TAU * (float(k) / float(m) + _hash01(c, SALT_STACK))
+			var r := minf(_stack * (1.0 + STACK_GROW * float(maxi(0, m - STACK_RING))), STACK_MAX) * tl
+			ox = cos(ang) * r
+			oz = sin(ang) * r
+		out[i * 2] = ox
+		out[i * 2 + 1] = oz
+	# 칸별 세기 되돌리기(다음에 다시 씀)
+	for i in n:
+		var c2 := ys[i] * W + xs[i]
+		cnt[c2] = 0
+		slot[c2] = 0
+	return out
+
+
+## 표시 배율: 카메라 목표 거리에서 크기 1 슬라임의 화면 지름이 map.slime_min_px 보다 작으면 그만큼 키운다
+## (최대 map.slime_display_scale_max). 가까이(focus_distance 근처)서는 1 = 실제 크기. 시뮬레이션과 무관.
+func _calc_display_scale() -> float:
+	if _slime_min_px <= 0.0 or not is_inside_tree() or not _camera.is_inside_tree():
+		return 1.0
+	var px_per_unit := _vp_height() / maxf(2.0 * tan(deg_to_rad(_camera.fov) * 0.5) * _camera.distance, 0.0001)
+	var slime_px := 2.0 * _radius * px_per_unit
+	if slime_px <= 0.0:
+		return 1.0
+	return clampf(_slime_min_px / slime_px, 1.0, _scale_max)
 
 
 ## 바닥 먹이 열매(칸 가운데에서 조금 비켜, 양에 따라 크기). 개수가 늘면 용량을 두 배로.
@@ -969,7 +1180,8 @@ func _write_dropped(nd: int) -> void:
 
 # ════════════════════════════ 슬라임 ════════════════════════════
 
-## 개체마다 위치(이전 칸 → 지금 칸 보간 + 겹침 배치)·방향·통통 튐·눌림·숨쉬기·색을 MultiMesh 버퍼에 쓴다.
+## 개체마다 위치(이전 칸 → 지금 칸 보간, 둘레 자리도 이전 → 지금 보간)·방향·통통 튐·눌림·숨쉬기·색을 MultiMesh 버퍼에 쓴다.
+## 밭 칸에서는 흙판 위에 올리고(땅 높이도 보간), 표시 배율(_display_k)만큼 몸·그림자·열매를 키운다(자리는 그대로).
 func _update_slimes(alpha: float) -> void:
 	var t0 := Time.get_ticks_usec()
 	var ids := world.s_id
@@ -994,17 +1206,15 @@ func _update_slimes(alpha: float) -> void:
 		_carry_mm.instance_count = n
 		_carry_buf.resize(n * XFC)
 		_carry_buf.fill(0.0)
-	# 칸별 개체 수(겹친 개체를 둘레에 나눠 놓기 위해)
-	var cnt := _tile_cnt
-	var slot := _tile_slot
-	for i in n:
-		cnt[sy[i] * W + sx[i]] += 1
+	var co_off := _cur_off
+	var po_off := _prev_off
 	var e := alpha * alpha * (3.0 - 2.0 * alpha)
 	var hop_s := sin(PI * alpha)
 	var sq_s := sin(TAU * alpha)
 	var bob_s := sin(BOB_FREQ * alpha)
 	var tl := _tile
-	var pn := _prev_id.size() if _has_prev else 0
+	var dk := _display_k
+	var pn := _prev_id.size() if _has_prev and po_off.size() == _prev_id.size() * 2 else 0
 	var pid := _prev_id
 	var j := 0
 	var buf := _slime_buf
@@ -1020,9 +1230,14 @@ func _update_slimes(alpha: float) -> void:
 		var x := sx[i]
 		var y := sy[i]
 		var hd := sh[i]
+		var c := y * W + x
+		var ox := co_off[i * 2]
+		var oz := co_off[i * 2 + 1]
 		var px := x
 		var py := y
 		var ph := hd
+		var pox := ox
+		var poz := oz
 		if pn > 0:
 			while j < pn and pid[j] < id:
 				j += 1
@@ -1030,20 +1245,14 @@ func _update_slimes(alpha: float) -> void:
 				px = _prev_x[j]
 				py = _prev_y[j]
 				ph = _prev_h[j]
-		var c := y * W + x
-		var m := cnt[c]
-		var ox := 0.0
-		var oz := 0.0
-		if m > 1:
-			var k := slot[c]
-			slot[c] = k + 1
-			var ang := TAU * (float(k) / float(m) + _hash01(c, SALT_STACK))
-			var r := minf(_stack * (1.0 + STACK_GROW * float(maxi(0, m - STACK_RING))), STACK_MAX) * tl
-			ox = cos(ang) * r
-			oz = sin(ang) * r
-		var wx := (float(px) + (float(x - px)) * e + 0.5) * tl + ox
-		var wz := (float(py) + (float(y - py)) * e + 0.5) * tl + oz
-		var s := size[i]
+				pox = po_off[j * 2]
+				poz = po_off[j * 2 + 1]
+		var wx := lerpf((float(px) + 0.5) * tl + pox, (float(x) + 0.5) * tl + ox, e)
+		var wz := lerpf((float(py) + 0.5) * tl + poz, (float(y) + 0.5) * tl + oz, e)
+		var g := _ground_at(c)
+		if px != x or py != y:
+			g = lerpf(_ground_at(py * W + px), g, e)
+		var s := size[i] * dk
 		var hy := 0.0
 		var stretch := 1.0
 		if px != x or py != y:
@@ -1070,7 +1279,7 @@ func _update_slimes(alpha: float) -> void:
 		buf[o + 4] = 0.0
 		buf[o + 5] = tall
 		buf[o + 6] = 0.0
-		buf[o + 7] = _slime_base * tall + hy
+		buf[o + 7] = _slime_base * tall + hy + g
 		buf[o + 8] = -si * wide
 		buf[o + 9] = 0.0
 		buf[o + 10] = co * wide
@@ -1080,7 +1289,7 @@ func _update_slimes(alpha: float) -> void:
 		buf[o + 13] = col.g * gain
 		buf[o + 14] = col.b * gain
 		buf[o + 15] = 1.0
-		# 둥근 그림자: 뛰어오른 만큼 작게
+		# 둥근 그림자: 뛰어오른 만큼 작게(땅 높이 위)
 		var sr := _radius * s * _shadow_scale / (1.0 + SHADOW_SHRINK * hy)
 		var so := i * XF
 		sbuf[so] = sr
@@ -1090,7 +1299,7 @@ func _update_slimes(alpha: float) -> void:
 		sbuf[so + 4] = 0.0
 		sbuf[so + 5] = 1.0
 		sbuf[so + 6] = 0.0
-		sbuf[so + 7] = _shadow_lift
+		sbuf[so + 7] = _shadow_lift + g
 		sbuf[so + 8] = 0.0
 		sbuf[so + 9] = 0.0
 		sbuf[so + 10] = sr
@@ -1100,14 +1309,14 @@ func _update_slimes(alpha: float) -> void:
 		_pick_z[i] = wz
 		if id == _selected:
 			_sel_found = true
-			_sel_pos = Vector3(wx, 0.0, wz)
+			_sel_pos = Vector3(wx, g, wz)
 		if carry[i] > 0.0:
 			var cs := _carry_scale * s
 			var co2 := nc * XFC
 			cbuf[co2] = cs
 			cbuf[co2 + 3] = wx
 			cbuf[co2 + 5] = cs
-			cbuf[co2 + 7] = _slime_top * tall + hy + _carry_gap + cs * 0.5 + _berry_mid * cs
+			cbuf[co2 + 7] = _slime_top * tall + hy + g + _carry_gap * dk + cs * 0.5 + _berry_mid * cs
 			cbuf[co2 + 10] = cs
 			cbuf[co2 + 11] = wz
 			cbuf[co2 + 12] = carry_col.r
@@ -1115,11 +1324,6 @@ func _update_slimes(alpha: float) -> void:
 			cbuf[co2 + 14] = carry_col.b
 			cbuf[co2 + 15] = 1.0
 			nc += 1
-	# 칸별 세기 되돌리기(다음 프레임에 다시 씀)
-	for i in n:
-		var c2 := sy[i] * W + sx[i]
-		cnt[c2] = 0
-		slot[c2] = 0
 	if n > 0:
 		_slime_mm.buffer = buf
 		_shadow_mm.buffer = sbuf
@@ -1130,13 +1334,14 @@ func _update_slimes(alpha: float) -> void:
 	_slime_last_us = Time.get_ticks_usec() - t0
 
 
-## 지금 그려진 위치(없으면 칸 가운데). 마지막 update_view 뒤에 세계가 더 진행했으면 그린 위치가 낡았으므로 칸 가운데.
+## 지금 그려진 위치(없으면 칸 가운데, y = 땅 높이). 마지막 update_view 뒤에 세계가 더 진행했으면 그린 위치가 낡았으므로 칸 가운데.
 func _rendered_pos(id: int, i: int) -> Vector3:
+	var c := world.s_y[i] * world.w + world.s_x[i]
 	if _shown_tick == world.tick:
 		for k in _pick_id.size():
 			if _pick_id[k] == id:
-				return Vector3(_pick_x[k], 0.0, _pick_z[k])
-	return Vector3((float(world.s_x[i]) + 0.5) * _tile, 0.0, (float(world.s_y[i]) + 0.5) * _tile)
+				return Vector3(_pick_x[k], _ground_at(c), _pick_z[k])
+	return Vector3((float(world.s_x[i]) + 0.5) * _tile, _ground_at(c), (float(world.s_y[i]) + 0.5) * _tile)
 
 
 ## 개체 k 번째 인스턴스의 그려진 위치(검사용). 순서 = 배열 순서(id 오름차순).
@@ -1147,15 +1352,61 @@ func slime_instance_position(k: int) -> Vector3:
 	return Vector3(_slime_buf[o + 3], _slime_buf[o + 7], _slime_buf[o + 11])
 
 
+## k 번째 슬라임 인스턴스의 축별 배율(가로 = 기저 0열 길이, 세로, 앞뒤). 크기 × 표시 배율 × 늘어남(검사용).
+func slime_instance_scale(k: int) -> Vector3:
+	if k < 0 or k >= _slime_mm.instance_count:
+		return Vector3.ZERO
+	var o := k * XFC
+	return Vector3(Vector2(_slime_buf[o], _slime_buf[o + 8]).length(), _slime_buf[o + 5], Vector2(_slime_buf[o + 2], _slime_buf[o + 10]).length())
+
+
+## 칸 c 의 풀포기 세로 배율 (그린 값, 먹이량만으로 정한 값). 풀포기가 없으면 (-1, -1). 검사용.
+func plant_scale_at(c: int) -> Vector2:
+	if c < 0 or c >= _plant_of_tile.size() or _plant_of_tile[c] < 0:
+		return Vector2(-1.0, -1.0)
+	var k := _plant_of_tile[c]
+	return Vector2(_plant_buf[k * XFC + 5], _plant_s[k] * _plant_hy[k])
+
+
+## k 번째 슬라임 그림자 인스턴스의 위치(검사용).
+func shadow_instance_position(k: int) -> Vector3:
+	if k < 0 or k >= _shadow_mm.instance_count:
+		return Vector3.ZERO
+	var o := k * XF
+	return Vector3(_shadow_buf[o + 3], _shadow_buf[o + 7], _shadow_buf[o + 11])
+
+
+## 선택 고리: 개체 발밑(밭 칸이면 이랑 위). 실제 크기 = 반지름 × 크기 × ring_scale × 표시 배율이고,
+## 그 화면 지름이 map.ring_min_px 보다 작으면(멀리서 본 전경) 최소 크기로 키우고 맨 위에 그린다(풀·밭·다른 개체에 안 가림).
 func _update_ring() -> void:
 	if world == null or _selected < 0 or world.index_of_id(_selected) == -1:
 		_ring.visible = false
 		return
 	var i := world.index_of_id(_selected)
 	var p := _sel_pos if _sel_found else _rendered_pos(_selected, i)
-	var s := _radius * world.s_size[i] * _ring_scale * (1.0 + _ring_pulse * sin(_anim_time * _ring_pulse_w))
+	var c := world.s_y[i] * world.w + world.s_x[i]
+	var y := (_farm_ring if world.tiles[c] == SimGrid.TILE_FARM else p.y) + _ring_lift
+	var s := _radius * world.s_size[i] * _ring_scale * _display_k
+	var far := false
+	if _ring_min_px > 0.0 and _camera.is_inside_tree():
+		var d := _camera.global_position.distance_to(Vector3(p.x, y, p.z))
+		var per_px := 2.0 * d * tan(deg_to_rad(_camera.fov) * 0.5) / maxf(_vp_height(), 1.0)
+		var min_s := _ring_min_px * 0.5 * per_px / RING_OUTER
+		if min_s > s:
+			s = min_s
+			far = true
+	s *= 1.0 + _ring_pulse * sin(_anim_time * _ring_pulse_w)
+	var mat := _ring_mat_top if far else _ring_mat
+	if _ring.material_override != mat:
+		_ring.material_override = mat
 	_ring.visible = true
-	_ring.transform = Transform3D(Basis.from_scale(Vector3(s, s, s)), Vector3(p.x, _ring_lift, p.z))
+	_ring.transform = Transform3D(Basis.from_scale(Vector3(s, s, s)), Vector3(p.x, y, p.z))
+
+
+## 선택 고리의 지금 바깥 반지름(월드)과 맨 위 그리기 여부(검사용).
+func ring_info() -> Dictionary:
+	return {visible = _ring.visible, radius = _ring.transform.basis.get_scale().x * RING_OUTER, on_top = _ring.material_override == _ring_mat_top,
+			position = _ring.position}
 
 
 # ════════════════════════════ 건물 ════════════════════════════
@@ -1164,6 +1415,13 @@ func _update_ring() -> void:
 func _sync_buildings() -> void:
 	if world.store_tiles != _last_stores:
 		_last_stores = world.store_tiles.duplicate()
+		# 저장고 칸 표시(문 앞 자리용). 둘레 자리를 다시 계산하게 한다.
+		_store_mask.resize(_n_tiles)
+		_store_mask.fill(0)
+		for c in _last_stores:
+			if c >= 0 and c < _n_tiles:
+				_store_mask[c] = 1
+		_offsets_tick = -1
 		# 저장고 정면(-Z, 문)을 남쪽(처음 카메라 쪽)으로: Y 축 반 바퀴
 		_fill_static(_store_mm, _last_stores, _store_base, 0.0, _store_col, -1.0)
 	if world.farms != _last_farms:

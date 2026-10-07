@@ -8,7 +8,8 @@ extends SceneTree
 ## ② 실측: 실험실 장면을 띄우고 기본 예설정 인구가 불어난 뒤(SECONDS 동안) 1배·64배로 실제 시간 진행하며
 ##    FPS, 프레임 시간, 우리 스크립트 시간(LabMain.advance_frame = 시뮬레이션 + 화면 갱신)을 잰다.
 ##    llvmpipe 는 CPU 로 그리는 소프트웨어 렌더러라 실제 GPU 와 수치가 다르다(그리기 몫이 훨씬 큼).
-## 선택 인자: --seconds=N(실측 구간 길이, 기본 10)
+##    지도 3D 와 UI 2D 의 그리기 호출을 뷰포트별로 따로 출력한다(전체 모니터 값은 모든 뷰포트의 합).
+## 선택 인자: --seconds=N(실측 구간 길이, 기본 10), --msaa=N(지도 MSAA 0~3 으로 바꿔 재기, 기본 ui.lab.map_msaa)
 
 const BENCH_FRAMES := 600
 const BENCH_WARM := 30
@@ -21,12 +22,15 @@ const WARM_SECONDS := 1.0
 const USEC := 1000000.0
 
 var _seconds := SECONDS
+var _msaa := -1
 
 
 func _initialize() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--seconds="):
 			_seconds = maxf(1.0, a.substr(10).to_float())
+		elif a.begins_with("--msaa="):
+			_msaa = clampi(a.substr(7).to_int(), 0, 3)
 	var bench := OS.get_cmdline_user_args().has("--bench") or DisplayServer.get_name() == "headless"
 	if bench:
 		_bench.call_deferred()
@@ -117,14 +121,17 @@ func _live() -> void:
 		await process_frame
 	# LabMain._process 대신 여기서 같은 advance_frame 을 실제 프레임 시간으로 불러 스크립트 시간을 잰다
 	lab.set_process(false)
+	if _msaa >= 0:
+		(lab.map_view.get_viewport() as SubViewport).msaa_3d = _msaa as Viewport.MSAA
 	lab.new_experiment("default", {}, 1)
 	var w := lab.world
 	var g := 0
 	while (g < GROW_MIN_TICKS or w.population() < POP_TARGET) and g < GROW_MAX_TICKS:
 		w.step()
 		g += 1
-	print("[실험실 실측] 창 %s, 렌더러 %s / %s, 기본·씨앗 1 을 %d틱까지 진행(개체 %d)" % [str(root.size),
-			RenderingServer.get_current_rendering_method(), RenderingServer.get_video_adapter_name(), w.tick, w.population()])
+	print("[실험실 실측] 창 %s, 렌더러 %s / %s, 지도 MSAA %d, 기본·씨앗 1 을 %d틱까지 진행(개체 %d)" % [str(root.size),
+			RenderingServer.get_current_rendering_method(), RenderingServer.get_video_adapter_name(),
+			int((lab.map_view.get_viewport() as SubViewport).msaa_3d), w.tick, w.population()])
 	# 개체 하나를 골라 정보 창 갱신도 포함(오래 살 개체)
 	var pick := -1
 	var best_left := 0
@@ -155,6 +162,12 @@ func _measure(lab: LabMain, mult: int) -> void:
 	var fps_sum := 0.0
 	var draw_sum := 0.0
 	var prim_sum := 0.0
+	# 뷰포트별: 지도 SubViewport(3D, 보이는 것) 그리기 호출·기본 도형, 뿌리 창 2D(UI) 그리기 호출
+	var map_rid := lab.map_view.get_viewport().get_viewport_rid()
+	var root_rid := root.get_viewport_rid()
+	var map_draw := 0.0
+	var map_prim := 0.0
+	var ui_draw := 0.0
 	var warm := true
 	while true:
 		await process_frame
@@ -178,6 +191,12 @@ func _measure(lab: LabMain, mult: int) -> void:
 		fps_sum += Engine.get_frames_per_second()
 		draw_sum += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
 		prim_sum += Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
+		map_draw += RenderingServer.viewport_get_render_info(map_rid, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+				RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME)
+		map_prim += RenderingServer.viewport_get_render_info(map_rid, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+				RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME)
+		ui_draw += RenderingServer.viewport_get_render_info(root_rid, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_CANVAS,
+				RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME)
 		if float(now - t_start) / USEC >= _seconds:
 			break
 	var secs := float(last - t_start) / USEC
@@ -188,6 +207,8 @@ func _measure(lab: LabMain, mult: int) -> void:
 		mult, secs, frames, f / secs, fps_sum / f, float(_pct(frame_us, 0.5)) / 1000.0, float(_pct(frame_us, 0.95)) / 1000.0,
 		adv_ms, sim_avg, adv_ms - sim_avg, w.tick - ticks0, float(w.tick - ticks0) / secs / UiConfig.num("speed.ticks_per_second_1x"),
 		lab.speed_text(), float(pop_sum) / f, draw_sum / f, prim_sum / f])
+	print("      뷰포트별: 지도(3D) 그리기 호출 %.0f · 기본 도형 %.0f, UI(뿌리 창 2D) 그리기 호출 %.0f — 지도 삼각형 추정 %d(숨긴 풀포기·그림자 포함)" % [
+		map_draw / f, map_prim / f, ui_draw / f, int(lab.map_view.view_stats().triangles_estimate)])
 
 
 # ── 도움 ──

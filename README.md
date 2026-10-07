@@ -38,7 +38,7 @@ xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 \
 python3 tools/analyze.py run --seeds 1-8 --generations 100 --preset fast_civ --out results/fast8   # 씨앗 여러 개 묶음
 ```
 
-실험실 조작: 끌기 = 이동, 휠 = 확대·축소, 오른쪽 끌기 = 회전, 클릭 = 슬라임 고르기 · 스페이스 = 멈춤, 1~7 = 속도(1·2·4·8·16·32·64배), F = 따라가기, Esc = 선택 해제. 위쪽 막대 오른쪽에 "목표 N배 / 실제 M배"(시뮬레이션이 프레임 예산에 걸리면 실제가 낮게, 경고 색으로 보임).
+실험실 조작: 끌기 = 이동, 휠 = 확대·축소, 오른쪽 끌기 = 회전, 클릭 = 슬라임 고르기 · 스페이스 = 멈춤, 1~7 = 속도(1·2·4·8·16·32·64배), F = 따라가기, Home(또는 0, 지도 위 "전체 보기") = 지도 전체 보기, Esc = 선택 해제. 위쪽 막대 오른쪽에 "목표 N배 / 실제 M배"(따라가면 정확히 목표 배속, 시뮬레이션이 프레임 예산에 걸리거나 화면이 아주 느려 실제가 목표의 90% 아래면 경고 색). 개체가 모두 죽으면 그 순간 멈추고 지도 위에 "멸종 · 틱 N" 을 남깁니다(다시 재생하면 빈 지도가 계속).
 
 실행기 선택 인자: `--preset=default|abundant|harsh_winter|fast_civ|no_resources`, `--set=mutation.rate=0.08`(여러 번), `--max-ticks=N`, `--no-lineage`, `--snapshot-every=N`, `--resume=스냅숏.json`, `--quiet`.
 
@@ -63,4 +63,4 @@ tools/analyze.py           오프라인 분석(씨앗 묶음·파라미터 격�
 
 ## 출처와 라이선스
 
-소스는 [MIT](LICENSE) (저작권 kyusang4657). 출처는 [`CREDITS.md`](CREDITS.md).
+소스는 [MIT](LICENSE) (저작권 kyusang4657). 함께 들어 있는 글꼴 나눔고딕(`assets/fonts/`, © NHN Corporation)은 SIL OFL 1.1 — 전문 [`assets/fonts/OFL-NanumGothic.txt`](assets/fonts/OFL-NanumGothic.txt). 출처는 [`CREDITS.md`](CREDITS.md).

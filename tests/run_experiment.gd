@@ -112,8 +112,9 @@ static func run(a: Dictionary) -> int:
 		rec.record(wd)
 	var secs := float(Time.get_ticks_msec() - t0) / 1000.0
 	var out_dir: String = ProjectSettings.globalize_path(a.out)
+	# max_ticks = 실제로 쓴 틱 상한(--max-ticks 또는 설정 run.max_ticks): 분석 도구가 이어 돌리기 때 다른 상한의 결과를 가려냄
 	var extra := {end_reason = reason, run_seconds = secs, generations_target = a.generations, preset = a.preset,
-		overrides = a.sets, resumed_from = resumed_from}
+		overrides = a.sets, resumed_from = resumed_from, max_ticks = max_ticks}
 	var failed := rec.write_all(out_dir, wd, extra, a.lineage)
 	var serr := SimSnapshot.save_file(wd, out_dir.path_join("final.snapshot.json"))
 	if serr != "":

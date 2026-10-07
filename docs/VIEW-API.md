@@ -70,31 +70,40 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 |---|---|
 | `signal slime_clicked(id: int)` | 왼쪽 클릭(끌기 아님)으로 슬라임을 골랐을 때. 빈 곳이면 `-1` |
 | `func bind(world: SimWorld) -> void` | 세계를 붙이고 지형·식물·건물·슬라임을 새로 만든다. 다른 세계로 다시 불러도 됨 |
-| `func before_steps() -> void` | 이 프레임에 `step()` 을 부르기 **전에** 호출. 보간용으로 현재 위치(id → 칸)를 기억 |
-| `func update_view(alpha: float) -> void` | 매 프레임 `step()` 뒤에 호출. `alpha`(0~1) = 다음 틱까지의 진행률(보간·통통 튐). 슬라임·식물·건물·빛(낮밤)·선택 표시 갱신. 지형 색은 `ui.map.terrain_refresh_ticks` 마다 |
+| `func before_steps() -> void` | `step()` 을 부르기 **직전마다** 호출(한 프레임에 여러 틱이면 틱마다, 프레임 처음에도 한 번). 보간용으로 현재 위치(id → 칸)를 기억(틱이 바뀌었을 때만 복사) |
+| `func update_view(alpha: float, delta: float = 1/60) -> void` | 매 프레임 `step()` 뒤에 호출. `alpha`(0~1) = **마지막 틱**의 진행률(보간·통통 튐), `delta` = 이 프레임 시간(따라가기 카메라). 슬라임·식물·건물·빛(낮밤)·선택 표시 갱신. 지형 색은 `ui.map.terrain_refresh_ticks` 마다 |
 | `func set_selected(id: int) -> void` | 선택 표시(-1 = 없음). 죽은 개체면 표시 없음 |
-| `func pick_slime(screen_pos: Vector2) -> int` | 뷰포트 좌표의 광선을 땅(y 0)과 교차해 가장 가까운 살아 있는 슬라임 id(반경 안에 없으면 -1) |
+| `func pick_slime(screen_pos: Vector2) -> int` | 뷰포트 좌표의 광선을 슬라임 몸 가운데 높이와 교차해 가장 가까운(그린 위치) 살아 있는 슬라임 id(반경 안에 없으면 -1) |
 | `func focus_on(id: int) -> void` | 카메라를 그 개체로 옮김 |
+| `func fit_map() -> void` | (추가) 지도 전체 맞춤(처음 방위·고각)으로 되돌리고 따라가기 끔. 다시 움직이기 전까지 뷰포트 크기가 바뀌면 다시 맞춤 |
+| `func display_scale() -> float` | (추가) 지금 표시 배율(멀리서 작은 슬라임을 키운 배수, 가까이 1) |
 | `var follow_selected: bool` | 켜면 선택한 개체를 카메라가 따라감 |
 | `func get_camera() -> Camera3D` | 카메라 |
-| `func view_stats() -> Dictionary` | `{slimes, plants, stores, farms, triangles_estimate}` (성능 기록용) |
+| `func view_stats() -> Dictionary` | `{slimes, plants, stores, farms, triangles_estimate}` (성능 기록용). `plants` = 먹이가 있어 보이는 풀포기, `triangles_estimate` = 그리기에 넘기는 삼각형(배율 0 으로 숨긴 풀포기 인스턴스·슬라임 발밑 그림자 포함) |
 | 입력 | `_unhandled_input`: 왼쪽 끌기 = 이동, 휠 = 확대·축소, 오른쪽 끌기 = 회전, 왼쪽 클릭 = 고르기 |
 
 **구현 메모(3단계, MapView 담당이 덧붙임)**
 
 - 노드(이름 고정, 검사가 씀): `Camera`(궤도 카메라) · `Environment`(WorldEnvironment) · `Sun` · `Terrain`(ArrayMesh 하나) · `Farms` · `Stores` · `Plants` · `Dropped` · `Slimes` · `SlimeShadows` · `Carry`(MultiMeshInstance3D) · `SelectRing`.
-- 궤도 카메라 `scripts/view/orbit_camera.gd`(Camera3D, 전역 이름 없이 `MapView.OrbitCamera` 로 preload): `target`·`yaw`·`pitch`·`distance`, `apply()`, `fit_rect(rect, aspect)`(네 모서리를 투영해 지도 전체가 들어오게), `pan_pixels(rel, vp_h)`, `zoom_at(screen_pos, steps)`(커서 아래 땅 점 고정), `rotate_pixels(rel)`, `ground_point(screen_pos, plane_y)`, `reset_orientation()`. 수치는 `camera` 절(`pitch_min_deg`·`pitch_max_deg`·`fit_margin`·`near`·`far`·`focus_distance`·`click_threshold_px`·`gesture_pan_px` 추가).
+- 궤도 카메라 `scripts/view/orbit_camera.gd`(Camera3D, 전역 이름 없이 `MapView.OrbitCamera` 로 preload): `target`·`yaw`·`pitch`·`distance`, `apply()`, `fit_rect(rect, aspect)`(네 모서리를 투영해 지도 전체가 들어오게), `pan_pixels(rel, vp_h)`, `zoom_at(screen_pos, steps)`(커서 아래 땅 점 고정), `rotate_pixels(rel)`, `ground_point(screen_pos, plane_y)`, `reset_orientation()`, `distance_max()`. 수치는 `camera` 절(`pitch_min_deg`·`pitch_max_deg`·`fit_margin`·`near`·`far`·`focus_distance`·`click_threshold_px`·`gesture_pan_px`·`fit_zoom_out_factor`·`follow_ref_fps` 추가).
+- 최대 거리: 설정값 `camera.distance_max`(95) 로 지도 전체가 안 들어오는 큰 지도(128×96 이상, 설정 상한 1024)는 `fit_rect` 가 자르지 않고 맞춘 뒤, 실제 최대 거리 = max(설정값, 맞춘 거리 × `fit_zoom_out_factor`), 먼 자르기 면 = max(`camera.far`, 최대 거리 + 지도 대각선). `distance_max()` 는 실제 값(검사: 128×96·200×150 이 처음에 다 보임). 실시간 그림자는 꺼져 있어 `shadow_distance` 는 늘리지 않음.
 - `bind` 는 앞 세계의 저장고·밭 인스턴스를 지우고(통합 때 고침: 건물 없는 새 세계에 앞 세계 건물이 남던 문제), 카메라를 처음 방위·고각으로 돌려 지도 전체를 맞춘다. 사용자가 카메라를 움직이기 전에는 뷰포트 크기가 바뀔 때(SubViewportContainer 배치 뒤 등) 다시 맞춘다.
 - 트리에 들어가면 자기 SubViewport 의 `own_world_3d` 를 켠다(지연 호출) — 비교 모드에서 두 지도의 3D 세계가 섞이지 않게.
-- `pick_slime` 은 땅(y 0)이 아니라 **슬라임 중심 높이**(메시 높이의 절반)의 수평면과 광선을 교차하고, 마지막으로 그린(보간된) 위치 중 `ui.map.pick_radius` 칸 안의 가장 가까운 개체를 고른다. 클릭은 누른 곳에서 `click_threshold_px` 이상 움직이지 않고 뗐을 때.
-- 보간: `before_steps()` 가 (틱이 바뀌었을 때만) id·칸·방향 배열을 복사해 두고, `update_view` 는 틱이 진행한 프레임에 그 복사본을 "이전 위치"로 올린다. 두 배열이 id 오름차순이라 두 포인터로 맞춘다(새로 태어난 개체는 지금 칸에 바로 나타남). 움직인 개체는 `sin(π·alpha)` 로 뛰고 `sin(2π·alpha)` 로 늘었다 눌리며(부피 유지), 가만히 있으면 숨쉬기, 먹기·줍기·심기 중이면 끄덕임. 같은 칸의 여러 개체는 `slime.stack_offset` 둘레에 나뉜다.
+- `pick_slime` 은 땅(y 0)이 아니라 **슬라임 중심 높이**(메시 높이의 절반 × 표시 배율)의 수평면과 광선을 교차하고, 마지막으로 그린(보간된) 위치 중 `ui.map.pick_radius` × 표시 배율 칸 안의 가장 가까운 개체를 고른다. 클릭은 누른 곳에서 `click_threshold_px` 이상 움직이지 않고 뗐을 때.
+- 보간: `before_steps()` 가 (틱이 바뀌었을 때만) id·칸·방향 배열을 복사해 두고, `update_view` 는 틱이 진행한 프레임에 그 복사본을 "이전 위치"로 올린다. 두 배열이 id 오름차순이라 두 포인터로 맞춘다(새로 태어난 개체는 지금 칸에 바로 나타남). **보간은 마지막 한 틱만**: LabMain 이 `step()` 마다 `before_steps()` 를 불러 복사본이 그린 틱의 한 틱 전이고, 복사본이 두 틱 이상 낡았으면(한 번만 부르고 여러 틱) 보간하지 않고 지금 칸에 그린다(낡은 자리에서 미끄러지지 않게). 움직인 개체는 `sin(π·alpha)` 로 뛰고 `sin(2π·alpha)` 로 늘었다 눌리며(부피 유지), 가만히 있으면 숨쉬기, 먹기·줍기·심기 중이면 끄덕임.
+- 둘레 자리: 같은 칸의 여러 개체는 `slime.stack_offset` 둘레에 나뉘고, **저장고 칸**의 개체는 움집(처마 반지름 0.47) 안에 묻히지 않게 문 앞(+Z) 반지름 `map.store_slime_offset` 의 호에 `map.store_slime_arc_deg` 간격(넘치면 `store_slime_arc_max_deg` 안에)으로 선다. 둘레 자리는 틱이 바뀔 때 지금 배열과 이전 배열로 각각 계산하고(칸 안 자리 순서 = id 순서) 위치와 함께 보간한다 — 다른 개체가 들고 나도 가만히 있는 개체가 틱 경계에서 튀지 않는다(검사).
+- 땅 높이: **밭 칸**에서는 슬라임 바닥·그림자·운반 열매를 흙판 윗면(`map.farm_lift` + 흙판 두께)에 올리고(칸 사이를 뛸 때 보간), 선택 고리는 이랑 꼭대기 위에 둔다.
+- 풀포기: 슬라임이 서 있는(또는 이번 틱에 떠난) 칸의 풀포기는 `map.plant_occupied_scale` 배로 줄여 몸을 뚫고 나오지 않게 한다(틱이 바뀔 때만, 바뀐 풀포기의 변환만 다시 씀). `view_stats().plants` 는 먹이로 보이는 수 그대로.
+- 표시 배율(멀리서): 카메라 목표 거리에서 크기 1 슬라임의 화면 지름이 `map.slime_min_px` 보다 작으면 그만큼 키운다(최대 `map.slime_display_scale_max`). 몸·뜀 높이·그림자·운반 열매·고르기 반경에 곱하고, 자리(칸·둘레)는 그대로. `focus_distance` 근처에서는 1(실제 크기). 시뮬레이션과 무관.
+- 선택 고리: 실제 크기(반지름 × 크기 × `ring_scale` × 표시 배율)의 화면 지름이 `map.ring_min_px` 보다 작으면(전경) 최소 크기로 키우고 깊이 검사 없이 맨 위에 그린다(풀·밭·다른 개체에 가리지 않게). 가까이서는 실제 크기·깊이 검사.
+- 따라가기: 목표가 프레임마다 `1 − (1 − camera.follow_lerp)^(delta × camera.follow_ref_fps)` 만큼 선택 개체로 다가간다(프레임 빠르기와 무관, 60fps 에서 예전과 같음).
 - 땅 색 갱신은 위 사각형 부분의 정점 색(RGBA8)만 `ArrayMesh.surface_update_attribute_region` 으로 올린다. 식물(`plant_refresh_ticks`)과 땅 색(`terrain_refresh_ticks`)은 각자 최소 프레임 간격(`plant_min_frames`·`terrain_min_frames`)을 두고, 같은 프레임에 둘 다 하지 않는다.
 - 메시 바닥 맞춤: 각 SlimeGeo 메시의 AABB 아래면을 y 0 에 맞춰 놓는다(조각 메시는 원래 0, 기본 도형 대용품은 가운데 원점). 인스턴스 색은 메시에 정점 색이 있으면 흰색(메시 색 그대로), 없으면 `ui.map`·`ui.buildings` 의 대신 색.
 - 저장고는 Y 축으로 반 바퀴 돌려 놓는다: 메시 정면(-Z, 문)이 남쪽(+Z) = 처음 카메라 쪽을 보게. 밭은 그대로.
 - 실시간 그림자는 끔(`map.shadows`): Compatibility 렌더러에서 해 그림자를 켜면 해 빛이 한 번 더 더해져 장면이 크게 밝아진다(측정: 같은 설정에서 #3c8735 → #51c148). 대신 슬라임 발밑에 부드러운 원판 그림자(`blob_shadow_*`, 빛이 떨어지는 쪽으로 조금 밀림).
 - 밤에는 해·주변광·배경을 `night_*` 쪽 푸른 색으로 섞고, 슬라임 인스턴스 색을 `night_slime_boost` 배까지 밝혀 계통 색이 읽히게 한다. 계절마다 풀밭 색에 `season_tints` 를 조금 섞는다.
-- 검사·기록용 추가 함수: `terrain_tile_color(c) -> Color`(칸의 지금 위 사각형 색), `slime_instance_position(k) -> Vector3`(k 번째 슬라임 인스턴스 위치), `view_stats()` 의 `slime_us`·`plant_us`·`terrain_us`(마지막 갱신 시간 µs).
-- 측정(헤드리스, 이 기계 Xeon 2.3GHz): 슬라임 250마리 갱신 약 0.35ms/프레임(`update_view` 평균 약 0.45ms, 식물·땅 갱신 몫 포함), 식물 2,587포기 갱신 약 0.6ms(2틱·2프레임마다), 땅 색 3,072칸 약 0.9~1.1ms(10틱·2프레임마다). `tests/view/map_checks.gd` 가 매번 출력한다.
+- 검사·기록용 추가 함수: `terrain_tile_color(c) -> Color`(칸의 지금 위 사각형 색), `slime_instance_position(k) -> Vector3`(k 번째 슬라임 인스턴스 위치), `slime_instance_scale(k) -> Vector3`(축별 배율), `shadow_instance_position(k)`, `plant_scale_at(c) -> Vector2`(그린 세로 배율, 먹이량만의 배율), `ring_info() -> {visible, radius, on_top, position}`, `view_stats()` 의 `slime_us`·`plant_us`·`terrain_us`(마지막 갱신 시간 µs).
+- 측정(헤드리스, 이 기계 Xeon 2.3GHz, 검토 뒤): 슬라임 250마리 갱신 약 0.4ms/프레임(`update_view` 평균 약 0.45~0.58ms, 식물·땅 갱신 몫 포함, 틱이 바뀐 프레임은 둘레 자리·풀포기 점유 계산으로 약 0.9ms), 식물 2,587포기 갱신 약 0.6ms(2틱·2프레임마다), 땅 색 3,072칸 약 0.85ms(10틱·2프레임마다). `tests/view/map_checks.gd` 가 매번 출력한다.
 - 캡처: `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/map_capture.gd -- --out=폴더` → `map-overview`·`map-closeup`·`map-night`(JPG 품질 0.85).
 
 ## InfoPanel — `scripts/ui/info_panel.gd` (`class_name InfoPanel`, PanelContainer)
@@ -104,15 +113,18 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 | `signal slime_requested(id: int)` | 부모·조부모·자식 항목을 눌렀을 때 |
 | `signal follow_toggled(on: bool)` | "따라가기" 단추 |
 | `func show_slime(world: SimWorld, id: int) -> void` | 개체 정보 표시(id, 살아 있음/죽음·원인, 세대, 나이/최대 나이, 에너지 막대, 운반, 현재 행동, 크기·감지·색 견본, 부모·조부모(2대), 자식 목록 `children_of(id, ui.info.children_max)`, 두뇌 그림) |
-| `func clear() -> void` | "슬라임을 눌러 고르세요" 안내 |
+| `func clear() -> void` | "슬라임을 눌러 고르세요" 안내(`set_empty_text` 로 바꾼 문구가 있으면 그것) |
 | `func refresh() -> void` | 같은 개체의 바뀐 값 다시 표시(LabMain 이 `ui.info.refresh_frames` 마다 부름). 그사이 죽었으면 죽음 표시 |
 | `func current_id() -> int` | 표시 중인 id(-1 없음) |
-| `func set_follow(on: bool) -> void` | (추가) "따라가기" 단추 모양만 맞춤(신호 없음). LabMain 이 F 키 등으로 따라가기를 바꿨을 때 부른다 |
+| `func set_follow(on: bool) -> void` | (추가) "따라가기" 단추 모양만 맞춤(신호 없음). LabMain 이 F·Home 키 등으로 따라가기를 바꿨을 때 부른다 |
+| `func set_empty_text(text: String) -> void` | (추가) 빈 상태 안내 문구("" = 기본). LabMain 이 멸종하면 "멸종했습니다 (틱 N) — 고를 개체가 없습니다" |
+| `static func brain_width() -> float` | (추가) 두뇌 열지도가 들어갈 너비 = `lab.right_panel_width` − 테두리 − 2 × `info.padding` − `info.scrollbar_width` |
+| `func content_overflow() -> float` | (추가) 스크롤 본문이 보이는 높이를 넘는 픽셀(음수 = 여유). V07 검사용 |
 | `func summary_text() -> String` | (추가) 머리 한 줄 `"#id · N세대 · 살아 있음"` / `"… · 죽음 · 원인 · 틱 T"`, 빈 상태면 안내 문구(검사·캡처 확인용) |
 | `var children_scans: int` | (추가, 검사용) `children_of` 를 부른 횟수 |
 | `const META_ID`, `META_REL`, `REL_PARENT`·`REL_GRANDPARENT`·`REL_CHILD` | (추가) 가계 단추(Button)의 메타 `slime_id`·`relation` |
 
-동작 세부: 너비 `ui.lab.right_panel_width`. 머리(작은 슬라임 모양 색 견본 `Color.from_hsv(hue, ui.slime.saturation, ui.slime.value)`·`#id`·세대·생사/원인/사망 틱·따라가기)는 고정, 나머지(현재 상태 / 죽음 → 특성 → 가계 → 두뇌)는 세로 스크롤. 없는 id 는 안내 문구만 보이고 `current_id()` = -1. 가계 단추는 `#id` + 계통 색 점, 죽은 친척은 속 빈 점·흐린 글자(refresh 때 생사 갱신). 자식은 최대 `ui.info.children_max` 개 + 넘치면 `+K`. `refresh()` 는 `slime_info` 한 번 + 친척 수만큼 `index_of_id` 만 쓰고, `children_of` 는 (세계, id) 가 바뀌거나 자식 수가 바뀌었고 목록이 한도 미만일 때만 부른다. 지켜보던 개체가 죽으면 마지막 두뇌를 "죽기 직전의 두뇌" 로 남기고, 처음부터 죽은 개체(유전체 없음)는 두뇌 대신 안내 문구. 단추는 초점을 받지 않는다(스페이스 = 멈춤과 겹치지 않게). LabMain 연결: `slime_requested` → `select_slime(id)`, `follow_toggled` → `map_view.follow_selected`.
+동작 세부: 너비 `ui.lab.right_panel_width` — 고른 개체(큰 두뇌 포함)에 따라 바뀌지 않는다(지도 폭이 선택마다 출렁이지 않게, 검사). 테마는 공용 `UiTheme.build()` 를 바탕으로(`merge_with`, 따라가기 단추·말풍선이 실험실과 같은 모양 — `theme.button_padding_*`) 이 창에만 있는 것(작은 단추 형 변형 `InfoSmallButton`, 가계 단추, 에너지 막대, 가는 스크롤 막대, 촘촘한 구분선)만 더한다. 수치는 `info` 절(`title_font_size`·`inline_gap`·`key_gap`·`title_gap`·`separator_gap`·`energy_outline`·`relative_pad_*`·`relative_*lighten`·`dead_dot_alpha`·`dead_text_alpha`·`min_vertical_slack` 등), 색 견본의 눈 = `slime.eye_color`, 바닥 그림자 = `map.blob_shadow_alpha`. 머리(작은 슬라임 모양 색 견본 `Color.from_hsv(hue, ui.slime.saturation, ui.slime.value)`·`#id`·세대·생사/원인/사망 틱·따라가기)는 고정, 나머지(현재 상태 / 죽음 → 특성 → 가계 → 두뇌)는 세로 스크롤. 없는 id 는 안내 문구만 보이고 `current_id()` = -1. 가계 단추는 `#id` + 계통 색 점, 죽은 친척은 속 빈 점·흐린 글자(refresh 때 생사 갱신). 자식은 최대 `ui.info.children_max` 개 + 넘치면 `+K`. `refresh()` 는 `slime_info` 한 번 + 친척 수만큼 `index_of_id` 만 쓰고, `children_of` 는 (세계, id) 가 바뀌거나 자식 수가 바뀌었고 목록이 한도 미만일 때만 부른다. 지켜보던 개체가 죽으면 마지막 두뇌를 "죽기 직전의 두뇌" 로 남기고, 처음부터 죽은 개체(유전체 없음)는 두뇌 대신 안내 문구. 단추는 초점을 받지 않는다(스페이스 = 멈춤과 겹치지 않게). LabMain 연결: `slime_requested` → `select_slime(id)`, `follow_toggled` → `map_view.follow_selected`.
 
 `BrainView` — `scripts/ui/brain_view.gd` (`class_name BrainView`, Control): `func set_genome(L: Dictionary, genome: PackedFloat32Array) -> void` 가중치 열지도(입력×은닉, 은닉×출력; 양수·음수 색은 `ui.info.heatmap_*`), 입력·행동 이름은 `SimBrain.INPUT_NAMES`·`ACTION_NAMES`.
 
@@ -120,7 +132,9 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 |---|---|
 | `var weight_clamp: float` | 색 세기 정규화 상한. `set_genome` 전에 `world.cfg.brain.weight_clamp` 를 넣는다(InfoPanel 이 함) |
 | `func set_highlight_action(a: int) -> void`, `func highlight_action() -> int` | 아래 덩어리에서 현재 행동 줄 강조(-1 없음) |
-| `static func size_for(L) -> Vector2` | 최소 크기: 너비 = `heatmap_label_width` + max(n_in, n_hid)·`heatmap_cell`, 높이 = `heatmap_header_height` + n_hid·cell + `heatmap_block_gap` + cell(은닉 번호 줄) + n_out·cell + `heatmap_legend_height`. `set_genome` 이 `custom_minimum_size` 로 넣음 |
+| `var max_width: float` | (추가) 열지도 전체가 들어가야 하는 너비(INF = 제한 없음). InfoPanel 이 `brain_width()` 를 넣는다 |
+| `static func size_for(L, max_w := INF) -> Vector2` | 최소 크기: 너비 = `heatmap_label_width` + max(n_in, n_hid)·칸 너비, 높이 = `heatmap_header_height` + n_hid·cell + `heatmap_block_gap` + cell(은닉 번호 줄) + n_out·cell + `heatmap_legend_height`(행 높이 = `heatmap_cell`). `set_genome` 이 `custom_minimum_size` 로 넣음 |
+| `static func cell_width_for(L, max_w := INF) -> float` | (추가) 칸 너비 = `heatmap_cell`, 단 `max_w` 안에 들도록 `heatmap_cell_min` 까지 좁힘. 그래도 넘치면(은닉 41 이상) InfoPanel 이 열지도만 가로 스크롤(세로 휠은 바깥으로). 칸이 글자보다 좁으면 열 이름은 몇 칸마다 하나 |
 | `func cell_at(pos: Vector2) -> Dictionary` | 그 위치의 칸 `{block: "w1"/"w2"/"input", row, col, weight, text}`(밖이면 `{}`). 풍선 도움말(`_get_tooltip`)이 씀 |
 | `static func input_name(i)`, `output_name(q)` | 화면 이름(기본 다음은 `"기억 k"`) |
 | `static func weight_color(w, clamp) -> Color` | 음수 색 ← 창 색(0) → 양수 색, 세기 = (abs(w) / clamp)^`heatmap_gamma` |
@@ -142,7 +156,7 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 | `signal ticked(world: SimWorld)` | 이 프레임에 1틱 이상 진행했을 때(4단계 그래프가 씀) |
 | `signal events(list: Array)` | `drain_events()` 결과(비어 있지 않을 때) |
 
-동작: `_process` 에서 `map_view.before_steps()` → 누적 시간만큼 `world.step()`(프레임당 `ui.speed.sim_budget_ms` 넘지 않게, 빨리 감기면 `fast_forward_budget_ms` 를 다 씀) → `map_view.update_view(alpha)`. 위쪽 막대: ▶/‖, 1·2·4·8·16·32·64배, ⏩, 표시(틱·날·계절·평균 세대·개체 수·문명 단계·"목표 N배 / 실제 M배"). 사건은 위쪽 알림(`ui.lab.toast_seconds`). 키: 스페이스 = 멈춤, 1~7 = 속도, F = 따라가기, Esc = 선택 해제. 명령줄(`--` 뒤): `--seed=N`, `--preset=이름`, `--snapshot=경로`.
+동작: `_process` 에서 `map_view.before_steps()` → 누적 시간만큼 (틱마다 `before_steps()` 뒤) `world.step()`(다음 틱 비용을 미리 더해 보고 프레임당 `ui.speed.sim_budget_ms` 를 넘기 전에 멈춤, 빨리 감기면 `fast_forward_budget_ms` 를 다 씀) → `map_view.update_view(alpha, delta)`. 위쪽 막대: ▶/‖, 1·2·4·8·16·32·64배, ⏩, 표시(틱·날·계절·평균 세대·개체 수·문명 단계·"목표 N배 / 실제 M배"). 사건은 위쪽 알림(`ui.lab.toast_seconds`). 키: 스페이스 = 멈춤, 1~7 = 속도, F = 따라가기, Home·0 = 지도 전체 보기, Esc = 선택 해제. 명령줄(`--` 뒤): `--seed=N`, `--preset=이름`, `--snapshot=경로`.
 
 **구현 메모(3단계, LabMain 담당이 덧붙임)**
 
@@ -154,22 +168,24 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
   | `func apply_args(args: PackedStringArray) -> String` | 명령줄 인자로 실험 열기(`_ready` 가 `OS.get_cmdline_user_args()` 로 부름). 잘못된 값은 위험 색 알림 + 기본값, 오류 문장들(줄바꿈)을 돌려줌. 모르는 인자는 무시 |
   | `signal world_changed(world: SimWorld)` | `new_experiment`·`open_snapshot` 로 세계가 바뀌었을 때(4단계 그래프·연대기가 지난 기록을 비움) |
   | `func show_toast(text: String, kind := "info", tick := -1) -> void` | 위쪽 가운데 알림. `kind` = 사건 종류 또는 `info`·`warn`·`error`(4단계의 "저장했습니다" 등도 이것으로) |
-  | `func visible_toasts() -> Array[Dictionary]` | 보이는 알림 `{kind, text, left}` |
+  | `func visible_toasts() -> Array[Dictionary]` | 보이는 알림 `{kind, text, left, count}`(`count` = 묶인 사건 수) |
+  | `func fit_map() -> void` | 지도 전체 보기(Home 키·지도 위 "전체 보기" 단추): `map_view.fit_map()` + 정보 창 따라가기 단추 끔 |
   | `is_paused()`·`is_fast_forward()`·`target_speed()`·`selected_id()`·`speed_text()` | 지금 상태 |
   | `var last_sim_ms: float`, `var last_budget_hit: bool` | 마지막 프레임의 시뮬레이션 시간과 예산을 다 썼는지(성능 기록용) |
 
-- 프레임 순서(`advance_frame`): 알림 시간 줄이기 → `map_view.before_steps()`(**매 프레임**, 멈춰도·틱이 없어도) → 멈춤이 아니면 진행 → `map_view.update_view(alpha)` → 실제 배속 창에 기록 → 1틱 이상이면 `ticked` → `drain_events()` 가 비어 있지 않으면 `events` + 알림 → `ui.info.refresh_frames` 마다 `info_panel.refresh()` → 위쪽 막대 표시.
-  - 보통: `누적 += delta × ticks_per_second_1x × 배속`, 누적 ≥ 1 인 동안 `step()`. 2틱째부터 `sim_budget_ms` 를 넘었으면 멈추고 **밀린 몫을 버림**(누적의 소수 부분만 남김 — 밀린 틱이 쌓여 점점 느려지지 않게). `alpha` = 누적의 소수 부분(0~1).
-  - 빨리 감기: `fast_forward_budget_ms` 를 다 쓸 때까지(적어도 1틱) `step()`, 누적은 0, `alpha = 1`.
-  - `delta` 는 `ui.speed.max_frame_delta_s` 로 자름(창을 끌거나 멈칫한 프레임이 한꺼번에 몰아 돌지 않게).
+- 프레임 순서(`advance_frame`): 알림 시간 줄이기 → `map_view.before_steps()`(**매 프레임**, 멈춰도·틱이 없어도) → 멈춤이 아니면 진행(**틱마다** `before_steps()` → `step()`) → `map_view.update_view(alpha, delta)` → 실제 배속 창에 기록 → 1틱 이상이면 `ticked` → `drain_events()` 가 비어 있지 않으면 `events` + 알림 → 멸종하는 순간이면 멈춤·안내 → `ui.info.refresh_frames` 마다 `info_panel.refresh()` → 위쪽 막대 표시.
+  - 보통: `누적 += delta × ticks_per_second_1x × 배속`, 누적 ≥ 1 인 동안 `step()`. 2틱째부터 (지금까지 시간 + 한 틱 비용 추정)이 `sim_budget_ms` 를 넘으면 멈추고 **밀린 몫을 버림**(누적의 소수 부분만 남김 — 밀린 틱이 쌓여 점점 느려지지 않게). 한 틱 비용 추정 = 잰 `step()` 시간의 지수 이동 평균(`speed.step_estimate_alpha`). `alpha` = 누적의 소수 부분(0~1) = 마지막 틱의 진행률.
+  - 빨리 감기: 적어도 1틱, 그 뒤 (지금까지 시간 + 한 틱 비용 추정)이 `fast_forward_budget_ms` 안이면 계속 `step()`. 누적은 **1**(= 지금 틱의 끝), 그래서 `alpha = 1` 이고 빨리 감기 중 멈추거나 보통 속도로 돌아가도 그린 자리가 낡지 않는다(다음 보통 프레임은 바로 한 틱 진행).
+  - 진행(누적·알림 시간)은 `delta` 를 `ui.speed.max_frame_delta_s` 로 자른 값으로(창을 끌거나 멈칫한 프레임이 한꺼번에 몰아 돌지 않게). 실제 배속 측정은 **자르지 않은** `delta`(창 길이까지)로 — 4FPS 아래에서도 정직하게.
   - 사건은 진행 여부와 관계없이 매 프레임 비움(검사·캡처가 `world.step_n` 으로 직접 진행한 사건도 다음 프레임에 알림).
-- 실제 배속 = 최근 `actual_speed_window_s` 동안의 (틱 합 ÷ 프레임 시간 합) ÷ `ticks_per_second_1x`. 프레임 시간은 `advance_frame` 에 들어온 `delta`(검사에서 결정적). 창이 `WARMUP_FRACTION`(1/4) 차기 전에는 "실제 —", 표시는 `speed.label_refresh_s` 마다 갱신, 실제가 목표 × `speed.behind_ratio` 보다 낮으면 경고 색.
-- 배치(코드로 만듦, 노드 이름 고정): `Background`(ColorRect) · `Column`(VBox) = `TopBar` / `Middle`(HBox) = `LeftWrap`(PanelContainer `DockPanel`, 폭 `left_panel_width`) ⊃ `LeftDock` | `MapArea`(Control, 늘어남) ⊃ `MapContainer`(SubViewportContainer `stretch`) ⊃ `MapViewport`(`own_world_3d`, `msaa_3d = lab.map_msaa`) ⊃ `MapView` + 지도 위 표지(`MapTitle` 실험 이름·멈춤, `MapHint` 조작 도움말, `Toasts`) | `InfoPanel`(폭 `right_panel_width`) / `BottomWrap`(높이 `bottom_panel_height`) ⊃ `BottomDock`. 두 자리는 자식이 없으면 감싸개째 숨고, 자식을 넣으면(지연 호출로) 보인다. 표지·알림은 마우스를 통과시킨다.
-- 위쪽 막대: 재생/멈춤·빨리 감기는 **코드로 그린 아이콘**(`UiTheme.icon`, ⏩ 가 나눔고딕에 없음), 멈추면 ▶ 가 경고 색. 속도 단추는 `ButtonGroup`(빨리 감기 중에는 모두 꺼짐, 속도를 고르면 빨리 감기 꺼짐). 상태: 틱 · 날(`tick / day_ticks + 1`) · 계절(봄·여름·가을·겨울 / 계절 없음) · 낮/밤(`light ≥ lab.day_light_threshold`) │ 평균 세대 · 개체(0 이면 "멸종", 위험 색) · 문명(`SimWorld.STAGE_NAMES`) …… "목표 N배 / 실제 M배"·"빨리 감기 / 실제 M배"·"멈춤 · 목표 N배". 가장 긴 표시(틱 7자리 등)에서도 최소 창 폭 1280 안(검사).
-- 알림: 사건 문장 그대로 + 흐린 "틱 N". 왼쪽 띠 = 종류 색, 발견(`★ 새 발견` 머리)은 강조 색, 멸종·오류는 위험 색, 밭 잃음·경고는 경고 색 테두리. 최대 `lab.toast_max` 개(오래된 것부터 지움), `toast_seconds` 뒤 사라지며 마지막 `toast_fade_seconds` 동안 흐려짐.
+- 실제 배속 = 최근 `actual_speed_window_s` 동안의 (진행한 틱 몫의 합 ÷ 프레임 시간 합) ÷ `ticks_per_second_1x`. 틱 몫 = 이 프레임의 틱 수 + 누적의 변화(정수 틱이 아니라 소수 몫까지 — 따라가면 정확히 목표 배속, 예산에 걸려 버린 몫은 빠짐), 빨리 감기는 틱 수, 멈춤은 0. 프레임 시간은 `advance_frame` 에 들어온 `delta`(검사에서 결정적). **배속·멈춤·빨리 감기를 바꾸거나 세계를 바꾸면 창을 비운다**(앞 배속의 프레임으로 거짓 "뒤처짐" 경고가 뜨지 않게, 세계를 바꾼 직후 첫 프레임은 넣지 않음). 창이 `WARMUP_FRACTION`(1/4) 차기 전에는 "실제 —", 표시는 `speed.label_refresh_s` 마다 갱신, 창이 `speed.behind_min_fill` 이상 찼고 실제가 목표 × `speed.behind_ratio` 보다 낮으면 경고 색.
+- 배치(코드로 만듦, 노드 이름 고정): `Background`(ColorRect) · `Column`(VBox) = `TopBar` / `Middle`(HBox) = `LeftWrap`(PanelContainer `DockPanel`, 폭 `left_panel_width`) ⊃ `LeftDock` | `MapArea`(Control, 늘어남) ⊃ `MapContainer`(SubViewportContainer `stretch`) ⊃ `MapViewport`(`own_world_3d`, `msaa_3d = lab.map_msaa`) ⊃ `MapView` + 지도 위 표지(`MapTitle` 실험 이름·멈춤·`ExtinctBadge` "멸종 · 틱 N"(위험 색)·`FitButton` "전체 보기", `MapHint` 조작 도움말, `Toasts`) | `InfoPanel`(폭 `right_panel_width`) / `BottomWrap`(높이 `bottom_panel_height`) ⊃ `BottomDock`. 두 자리는 자식이 없으면 감싸개째 숨고, 자식을 넣으면(지연 호출로) 보인다. 표지·알림은 마우스를 통과시킨다("전체 보기" 단추만 받음).
+- 위쪽 막대: 재생/멈춤·빨리 감기는 **코드로 그린 아이콘**(`UiTheme.icon`, ⏩ 가 나눔고딕에 없음), 멈추면 ▶ 가 경고 색. 속도 단추는 `ButtonGroup`(빨리 감기 중에는 모두 꺼짐, 속도를 고르면 빨리 감기 꺼짐). 상태: 틱 · 날(`tick / day_ticks + 1`) · 계절(봄·여름·가을·겨울 / 계절 없음) · 낮/밤(`light ≥ lab.day_light_threshold`) — 날·계절·빛은 모두 같은 틱(SIM-API: 틱 사이의 `light`·`season` 은 지금 틱) │ 평균 세대(개체가 없으면 "—", 흐린 색) · 개체(0 이면 "멸종", 위험 색) · 문명(`SimWorld.STAGE_NAMES`) …… "목표 N배 / 실제 M배"·"빨리 감기 / 실제 M배"·"멈춤 · 목표 N배". 가장 긴 표시(틱 7자리 등)에서도 최소 창 폭 1280 안(검사).
+- 멸종: 멸종하는 순간 한 번 `lab.pause_on_extinction`(기본 켬)이면 멈추고(헤드리스 실행기의 끝 조건과 같게), 정보 창 빈 안내를 멸종 문구로(`set_empty_text`), 지도 위에 "멸종 · 틱 N" 표지를 계속 보인다. 다시 재생하면 빈 지도가 계속 진행. 멸종 때문에 저절로 멈춘 상태는 새 실험·스냅숏에서 풀리고, 이미 멸종한 스냅숏을 열면 멈추지 않는다.
+- 알림: 사건 문장 그대로 + 흐린 "틱 N". 왼쪽 띠 = 종류 색, 발견(`★ 새 발견` 머리)은 강조 색 테두리, 멸종·오류는 위험 색 테두리, 경고(`warn`)는 경고 색 테두리, 밭 잃음은 경고 색 띠만. 긴 문장은 줄을 바꿔 지도 폭 안에(폭 = min(`lab.toast_max_width`, 지도 폭 − 양쪽 `map_overlay_margin`), 빈칸 없는 경로도 끊음). `lab.toast_coalesce_kinds`(밭 잃음)의 종류는 이미 보이는 같은 종류 알림을 새 문장으로 고쳐 쓰고 "×N" 을 붙여 맨 아래로(하나만 보임). 최대 `lab.toast_max` 개 — 넘치면 강조 알림(발견·멸종·오류·경고)이 아닌 것 가운데 오래된 것부터 지우고, 모두 강조면 가장 오래된 것. `toast_seconds`(오류·경고는 `toast_error_seconds`) 뒤 사라지며 마지막 `toast_fade_seconds` 동안 흐려짐. **세계를 바꾸면(새 실험·스냅숏) 앞 세계의 알림을 지운다**(백업 경고는 바꾼 뒤에 띄움). 명령줄 오류는 알림과 함께 터미널(`printerr`)에도 전체 문장.
 - 선택: `map_view.slime_clicked(id)` → `select_slime(id)`(-1·없는 id = 해제; 죽은 개체 id 는 기록으로 표시), `info_panel.slime_requested(id)` → `select_slime(id)` + `map_view.focus_on(id)`, `info_panel.follow_toggled(on)` → `map_view.follow_selected = on`.
 - 단축키는 `_input` 에서 받아 처리하면 소비한다(초점 있는 단추가 스페이스를 먹지 않게). **`LineEdit`·`TextEdit` 에 초점이 있거나 Ctrl·Alt·Meta 가 눌렸으면 무시**. 1~7 은 숫자판 키도. F 는 `map_view.follow_selected` 를 뒤집고 알림, 정보 창의 따라가기 단추도 `info_panel.set_follow()` 로 맞춘다(통합 때 연결).
-- 날 표시에 하루 틱 수가 필요해 `world.cfg.time.day_ticks` 를 읽기만 한다(SIM-API 목록 밖 — 보고서에 기록).
+- 날 표시에 하루 틱 수가 필요해 `world.cfg.time.day_ticks` 를 읽기만 한다(SIM-API 의 읽기 전용 `cfg` 항목). InfoPanel 도 `cfg.brain.weight_clamp` 만 읽는다. `tools/test_repo_rules.py` 가 화면이 쓰는 세계 멤버가 모두 SIM-API 에 있는지 검사한다.
 - 창 최소 크기 `lab.min_width × min_height`(헤드리스에서는 건너뜀). 창 제목 = "프로젝트 이름 — 예설정 · 씨앗 N".
 
 ### UiTheme — `scripts/ui/ui_theme.gd` (`class_name UiTheme`, RefCounted, static)
@@ -200,14 +216,18 @@ func run(t) -> void:
 
 `run` 은 `await` 를 써도 됩니다(실행기가 기다림).
 
+- 모듈마다 `const MIN_CHECKS := N`(이 모듈이 적어도 하는 검사 수)을 둡니다. Godot 4.4 는 스크립트 오류가 난 함수만 멈추고 계속 돌기 때문에, 검사 수가 그보다 적으면 실행기가 그 모듈을 실패로 셉니다. CI 는 화면 검사 로그에 `SCRIPT ERROR`·`ERROR:` 가 한 줄이라도 있으면 실패로 봅니다.
+- 실행기 도움 함수: `t.node(부모, 경로)`(없으면 실패로 세고 null — 이름이 바뀐 노드를 건드려 끊기지 않게), `t.same_state(세계 A, 세계 B)`(틱·해시·개체·에너지·유전체·먹이 배열·연대기 수를 견줘 다른 것의 이름, 같으면 ""). 역사 해시는 `hash.every`(100)틱마다만 바뀌므로 "화면을 거쳐도 같음" 검사는 검사점을 지나거나 상태 배열을 직접 견줍니다.
+- `--verbose` 는 통과한 검사도 출력, 끝의 PASS/FAIL 줄에 모듈별 검사 수.
+
 ## 캡처 — `tests/ui_driver.gd` (LabMain 담당)
 
 `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd -- --out=폴더` 로 실험실 장면을 띄워 시나리오(전경·가까이·개체 선택+정보 창·밤·농사 단계)를 진행·캡처하고, 동작(클릭 → 정보 창 id, 속도 바꾸기, 화면 진행 중 역사 해시가 헤드리스와 같음)을 확인해 `RESULT: N passed, M failed (ui)` 를 출력합니다.
 
 **구현 메모(3단계)**: `--out` 기본값 `res://docs/screenshots/v0.1`, `--copy=폴더` 를 주면 그림을 그곳에도 복사. 프레임은 `advance_frame(1/60)` 으로 몬다(④만 실제 `_process`).
-① `lab-01-overview` 기본·씨앗 1 을 8배로 600프레임(480틱) → 해시 비교, 지도 클릭(실제 MapView 면 `pick_slime` 이 찾은 개체를 실제 마우스 입력으로, 뼈대면 `slime_clicked` 신호로) → 정보 창 id, 재생·속도·빨리 감기 단추 클릭, 스페이스. ② `lab-02-farm-selected` fast_civ·씨앗 1 을 농사 단계 + 밭 3칸까지(약 1,670틱) → 해가 다 뜰 때까지 진행(낮 장면) → 밭에서 2·4·6칸 안(가까운 것부터)에 있고 남은 수명이 90틱 이상인 개체 가운데 자식이 가장 많은 개체 선택·`focus_on` → 쌓인 사건 알림. ③ `lab-03-night` 밤까지 진행 → 같은 개체로 다시 `focus_on`(②와 같은 자리를 낮·밤으로 견줌) → 멈춘 모습. ④ `lab-04-speed64` 64배 단추 클릭 → 실제 시간 150프레임 → "목표 64배 / 실제 M배" 와 해시 비교. 그림은 JPG(품질 0.85, 600KB 이하 확인). 그림 폴더 `docs/screenshots/` 에는 `.gdignore`(가져오기 제외).
+① `lab-01-overview` 기본·씨앗 1 을 8배로 600프레임(480틱) → 해시 비교, 지도 클릭(화면 가운데에 그린 개체를 몸 가운데 높이로 투영 → `pick_slime` 이 바로 그 개체여야 하고, 실제 마우스 입력으로 눌러 정보 창·선택 id 확인, 지도 모서리 클릭 → 선택 해제), 재생·속도·빨리 감기 단추 클릭, 스페이스. ② `lab-02-farm-selected` fast_civ·씨앗 1 을 농사 단계 + 밭 3칸까지(약 1,670틱) → 해가 다 뜰 때까지 진행(낮 장면) → 밭에서 2·4·6칸 안(가까운 것부터)에 있고 남은 수명이 90틱 이상인 개체 가운데 자식이 가장 많은 개체 선택·`focus_on` → 쌓인 사건 알림, 정보 창이 스크롤 없이 두뇌 범례까지(V07, 1600×900 에서 여유 `info.min_vertical_slack` 이상). ③ `lab-03-night` 밤까지 진행 → 같은 개체로 다시 `focus_on`(②와 같은 자리를 낮·밤으로 견줌) → 멈춘 모습. ④ `lab-04-speed64` 64배 단추 클릭 → 실제 시간 150프레임 → "목표 64배 / 실제 M배" 와 해시 비교. 그림은 JPG(품질 0.85, 600KB 이하 확인). 그림 폴더 `docs/screenshots/` 에는 `.gdignore`(가져오기 제외).
 
 ## 성능 측정 — `tests/perf_capture.gd` (통합)
 
 - 헤드리스 미세 측정: `godot --headless --path . --script res://tests/perf_capture.gd -- --bench` — 1260×856 SubViewport 의 MapView 에 대해 프레임마다 `before_steps` + `update_view` 시간(틱 있는 프레임·없는 프레임 따로, 중앙·95%·최대)과 시뮬레이션 시간을 1·4·64배(60fps 가정)로 잰다. 세계: 기본 `population.initial = 250`(씨앗 11), fast_civ 1,760틱(씨앗 1).
-- 실험실 실측: `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/perf_capture.gd [-- --seconds=N]` — 기본·씨앗 1 을 1,500틱 넘게, 개체 200 이상이 될 때까지 진행한 뒤 1배·64배로 각 N초(기본 10) 실제 시간 진행. `LabMain.advance_frame` 을 실제 프레임 시간으로 직접 불러 FPS·프레임 시간·우리 스크립트 시간(시뮬레이션 `last_sim_ms` + 화면·UI 나머지)·그리기 호출·기본 도형 수를 출력한다. llvmpipe(CPU 소프트웨어 GL)에서는 그리기 몫이 대부분이라 실제 GPU 의 FPS 를 뜻하지 않는다.
+- 실험실 실측: `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/perf_capture.gd [-- --seconds=N --msaa=N]` — 기본·씨앗 1 을 1,500틱 넘게, 개체 200 이상이 될 때까지 진행한 뒤 1배·64배로 각 N초(기본 10) 실제 시간 진행. `LabMain.advance_frame` 을 실제 프레임 시간으로 직접 불러 FPS·프레임 시간·우리 스크립트 시간(시뮬레이션 `last_sim_ms` + 화면·UI 나머지)·그리기 호출·기본 도형 수를 출력한다. 그리기 호출은 전체(모든 뷰포트 합)와 함께 **뷰포트별**로: 지도 SubViewport(3D)의 그리기 호출·기본 도형, 뿌리 창 2D(UI)의 그리기 호출. `--msaa` 는 지도 MSAA 를 바꿔 잰다. llvmpipe(CPU 소프트웨어 GL)에서는 그리기 몫이 대부분이라 실제 GPU 의 FPS 를 뜻하지 않는다.

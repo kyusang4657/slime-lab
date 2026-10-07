@@ -9,7 +9,9 @@
 		"start_mult": 1,
 		"max_frame_delta_s": 0.25,
 		"label_refresh_s": 0.25,
-		"behind_ratio": 0.9
+		"behind_ratio": 0.9,
+		"behind_min_fill": 0.5,
+		"step_estimate_alpha": 0.2
 	},
 	"lab": {
 		"default_preset": "default",
@@ -37,7 +39,12 @@
 		"toast_stripe_width": 4,
 		"map_overlay_margin": 10,
 		"map_msaa": 2,
-		"day_light_threshold": 0.5
+		"day_light_threshold": 0.5,
+		"toast_gap": 10,
+		"toast_max_width": 640,
+		"toast_error_seconds": 10.0,
+		"toast_coalesce_kinds": ["farm_lost"],
+		"pause_on_extinction": true
 	},
 	"theme": {
 		"background": "#15181d",
@@ -64,7 +71,11 @@
 		"panel_padding": 10,
 		"button_padding_h": 8,
 		"button_padding_v": 5,
-		"separation": 6
+		"separation": 6,
+		"disabled_alpha": 0.45,
+		"focus_alpha": 0.55,
+		"selection_alpha": 0.35,
+		"placeholder_alpha": 0.6
 	},
 	"map": {
 		"tile_size": 1.0,
@@ -130,7 +141,14 @@
 		"blob_shadow_offset": 0.07,
 		"blob_shadow_lift": 0.012,
 		"blob_shadow_segments": 18,
-		"night_slime_boost": 1.35
+		"night_slime_boost": 1.35,
+		"store_slime_offset": 0.6,
+		"store_slime_arc_deg": 40.0,
+		"store_slime_arc_max_deg": 260.0,
+		"plant_occupied_scale": 0.3,
+		"ring_min_px": 24.0,
+		"slime_min_px": 15.0,
+		"slime_display_scale_max": 1.8
 	},
 	"slime": {
 		"triangles_max": 400,
@@ -172,7 +190,9 @@
 		"far": 500.0,
 		"focus_distance": 16.0,
 		"click_threshold_px": 5.0,
-		"gesture_pan_px": 12.0
+		"gesture_pan_px": 12.0,
+		"fit_zoom_out_factor": 1.2,
+		"follow_ref_fps": 60.0
 	},
 	"buildings": {
 		"store_wall": "#b08850",
@@ -203,10 +223,10 @@
 		"heatmap_font_size": 12,
 		"heatmap_label_width": 66,
 		"heatmap_header_height": 88,
-		"heatmap_block_gap": 8,
-		"heatmap_legend_height": 24,
+		"heatmap_block_gap": 6,
+		"heatmap_legend_height": 22,
 		"padding": 12,
-		"section_gap": 9,
+		"section_gap": 7,
 		"row_gap": 3,
 		"key_width": 64,
 		"swatch_size": 44,
@@ -215,8 +235,24 @@
 		"energy_danger_frac": 0.15,
 		"relative_dot": 8,
 		"relative_gap": 4,
-		"dead_alpha": 0.5,
+		"dead_dot_alpha": 0.7,
+		"dead_text_alpha": 0.75,
 		"corner_radius": 4,
-		"scrollbar_width": 6
+		"scrollbar_width": 6,
+		"heatmap_cell_min": 6,
+		"heatmap_highlight_alpha": 0.16,
+		"title_font_size": 20,
+		"inline_gap": 8,
+		"key_gap": 10,
+		"title_gap": 2,
+		"separator_gap": 1,
+		"energy_outline": 4,
+		"relative_pad_left": 5,
+		"relative_pad_right": 7,
+		"relative_pad_v": 3,
+		"relative_lighten": 0.04,
+		"relative_hover_lighten": 0.16,
+		"relative_dead_darken": 0.1,
+		"min_vertical_slack": 8
 	}
 }

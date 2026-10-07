@@ -8,6 +8,14 @@ const EPS := 0.0005
 ## 슬라임 부분 update_view 시간 상한(µs). 목표는 2ms, 느린 CI 를 감안해 넉넉히.
 const SLIME_US_LIMIT := 6000.0
 const TIMING_FRAMES := 120
+## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
+const MIN_CHECKS := 84
+## 틱 경계에서 가만히 있는 개체를 지켜볼 틱 수
+const STILL_TICKS := 60
+## 저장고 움집 처마 반지름(SlimeGeo.storehouse_mesh 의 가장 넓은 지붕 둘레)
+const STORE_EAVE := 0.47
+## 큰 지도(설정 최대 거리 95 로는 다 안 보이던 크기)
+const BIG_MAPS: Array[Vector2i] = [Vector2i(128, 96), Vector2i(200, 150)]
 
 
 func run(t) -> void:
@@ -23,13 +31,18 @@ func run(t) -> void:
 	mv.bind(w)
 	_check_build(t, mv, w)
 	await _check_motion(t, mv, w)
+	_check_tick_interp(t, mv, w)
+	_check_plants_occupied(t, mv, w)
 	_check_selection_and_pick(t, mv, w)
+	_check_overview(t, mv, w)
 	await _check_input(t, mv, sv, w)
 	_check_camera(t, mv, w)
+	_check_fit_and_follow(t, mv, w)
 	_check_light(t, mv, w)
 	_check_timing(t, mv)
 	_check_buildings(t, mv)
 	_check_determinism(t, mv)
+	_check_big_maps(t, mv)
 	_check_extinct(t, mv)
 	sv.queue_free()
 	await t.frames(1)
@@ -48,9 +61,13 @@ func _check_build(t, mv: MapView, w: SimWorld) -> void:
 			water = c
 		elif w.tiles[c] == SimGrid.TILE_ROCK and rock == -1:
 			rock = c
-	var plants: MultiMesh = (mv.get_node("Plants") as MultiMeshInstance3D).multimesh
+	var plants_mi := t.node(mv, "Plants") as MultiMeshInstance3D
+	var terrain := t.node(mv, "Terrain") as MeshInstance3D
+	var slimes_mi := t.node(mv, "Slimes") as MultiMeshInstance3D
+	if plants_mi == null or terrain == null or slimes_mi == null:
+		return
+	var plants: MultiMesh = plants_mi.multimesh
 	t.check(plants.instance_count == n_pass, "식물 인스턴스 = 통과 가능 칸 (%d, %d)" % [plants.instance_count, n_pass])
-	var terrain := mv.get_node("Terrain") as MeshInstance3D
 	var tm := terrain.mesh as ArrayMesh
 	t.check(tm != null and tm.get_surface_count() == 1, "땅은 ArrayMesh 하나·표면 하나")
 	if tm != null and tm.get_surface_count() == 1:
@@ -72,7 +89,7 @@ func _check_build(t, mv: MapView, w: SimWorld) -> void:
 			break
 	var cg := mv.terrain_tile_color(grass)
 	t.check(cg.g > cg.b, "풀밭 칸 색은 초록 계열 %s" % cg)
-	var slimes: MultiMesh = (mv.get_node("Slimes") as MultiMeshInstance3D).multimesh
+	var slimes: MultiMesh = slimes_mi.multimesh
 	t.check(slimes.instance_count == w.population(), "묶은 직후 슬라임 인스턴스 = 개체 수")
 	t.check(slimes.use_colors, "슬라임 MultiMesh 는 인스턴스 색 사용")
 	var st := mv.view_stats()
@@ -85,7 +102,10 @@ func _check_build(t, mv: MapView, w: SimWorld) -> void:
 # ── 움직임(보간) ──
 
 func _check_motion(t, mv: MapView, w: SimWorld) -> void:
-	var slimes: MultiMesh = (mv.get_node("Slimes") as MultiMeshInstance3D).multimesh
+	var slimes_mi := t.node(mv, "Slimes") as MultiMeshInstance3D
+	if slimes_mi == null:
+		return
+	var slimes: MultiMesh = slimes_mi.multimesh
 	var count_ok := true
 	var colors_before := PackedInt32Array()
 	for c in w.w * w.h:
@@ -133,7 +153,11 @@ func _check_motion(t, mv: MapView, w: SimWorld) -> void:
 		var d := Vector2(p.x - (float(w.s_x[i]) + 0.5), p.z - (float(w.s_y[i]) + 0.5)).length()
 		stack_ok = stack_ok and d > EPS and d <= MapView.STACK_MAX + EPS
 	t.check(stack_ok, "같은 칸의 개체는 작은 둘레에 나뉘어 놓임")
-	# alpha 0.5: 움직인 개체는 두 칸 사이, 위로 뜸
+	# alpha 0.5: 움직인 개체는 두 칸 사이, 위로 뜸(앞 틱·지금 틱 모두 혼자 있던 개체 — 둘레 자리도 보간하므로)
+	var pocc := {}
+	for k in px.size():
+		var pc := py[k] * w.w + px[k]
+		pocc[pc] = int(pocc.get(pc, 0)) + 1
 	mv.update_view(0.5)
 	var mid_ok := true
 	var moved := 0
@@ -145,15 +169,15 @@ func _check_motion(t, mv: MapView, w: SimWorld) -> void:
 			continue
 		if px[j] == w.s_x[i] and py[j] == w.s_y[i]:
 			continue
-		if int(occ[w.s_y[i] * w.w + w.s_x[i]]) != 1:
+		if int(occ[w.s_y[i] * w.w + w.s_x[i]]) != 1 or int(pocc[py[j] * w.w + px[j]]) != 1:
 			continue
 		moved += 1
 		var p := mv.slime_instance_position(i)
 		var ex := (float(px[j] + w.s_x[i]) * 0.5 + 0.5)
 		var ez := (float(py[j] + w.s_y[i]) * 0.5 + 0.5)
-		# alpha 0.5: 늘어남 0(sin 2π·½), 높이 = 바닥 맞춤 + 뜀 높이 × 크기
-		var base := -SlimeGeo.slime_mesh().get_aabb().position.y * w.s_size[i]
-		var hop := UiConfig.num("slime.hop_height") * w.s_size[i]
+		# alpha 0.5: 늘어남 0(sin 2π·½), 높이 = (바닥 맞춤 + 뜀 높이) × 크기 × 표시 배율(멀리서 키움, 가까이 1)
+		var base := -SlimeGeo.slime_mesh().get_aabb().position.y * w.s_size[i] * mv.display_scale()
+		var hop := UiConfig.num("slime.hop_height") * w.s_size[i] * mv.display_scale()
 		if absf(p.x - ex) > 0.01 or absf(p.z - ez) > 0.01 or absf(p.y - (base + hop)) > 0.01:
 			mid_ok = false
 	t.check(mid_ok and moved > 0, "alpha=0.5 에서 움직인 개체 %d 마리가 두 칸 가운데·공중" % moved)
@@ -164,7 +188,9 @@ func _check_motion(t, mv: MapView, w: SimWorld) -> void:
 
 func _check_selection_and_pick(t, mv: MapView, w: SimWorld) -> void:
 	mv.update_view(1.0)
-	var ring := mv.get_node("SelectRing") as MeshInstance3D
+	var ring := t.node(mv, "SelectRing") as MeshInstance3D
+	if ring == null:
+		return
 	var iso := _isolated_index(w)
 	t.check(iso != -1, "다른 개체와 떨어진 개체가 있음")
 	if iso == -1:
@@ -364,10 +390,12 @@ func _check_camera(t, mv: MapView, w: SimWorld) -> void:
 
 func _check_light(t, mv: MapView, w: SimWorld) -> void:
 	mv.update_view(1.0)
-	var sun := mv.get_node("Sun") as DirectionalLight3D
+	var sun := t.node(mv, "Sun") as DirectionalLight3D
+	var we := t.node(mv, "Environment") as WorldEnvironment
+	if sun == null or we == null:
+		return
 	var e := lerpf(UiConfig.num("map.night_light_energy"), UiConfig.num("map.day_light_energy"), w.light)
 	t.check(absf(sun.light_energy - e) < 0.001, "해 세기 = 빛 %.2f 에 따른 보간" % w.light)
-	var we := mv.get_node("Environment") as WorldEnvironment
 	var a := lerpf(UiConfig.num("map.night_ambient"), UiConfig.num("map.day_ambient"), w.light)
 	t.check(absf(we.environment.ambient_light_energy - a) < 0.001, "주변광 = 빛에 따른 보간")
 
@@ -405,8 +433,12 @@ func _check_buildings(t, mv: MapView) -> void:
 	var w: SimWorld = t.make_world({}, 1, "fast_civ")
 	w.step_n(1750)
 	mv.bind(w)
-	var stores: MultiMesh = (mv.get_node("Stores") as MultiMeshInstance3D).multimesh
-	var farms: MultiMesh = (mv.get_node("Farms") as MultiMeshInstance3D).multimesh
+	var stores_mi := t.node(mv, "Stores") as MultiMeshInstance3D
+	var farms_mi := t.node(mv, "Farms") as MultiMeshInstance3D
+	if stores_mi == null or farms_mi == null:
+		return
+	var stores: MultiMesh = stores_mi.multimesh
+	var farms: MultiMesh = farms_mi.multimesh
 	t.check(w.store_tiles.size() > 0 and stores.instance_count == w.store_tiles.size(), "저장고 인스턴스 = 저장고 수 (%d)" % w.store_tiles.size())
 	t.check(w.farms.size() > 0 and farms.instance_count == w.farms.size(), "밭 인스턴스 = 밭 수 (%d)" % w.farms.size())
 	var ok := true
@@ -418,6 +450,8 @@ func _check_buildings(t, mv: MapView) -> void:
 	t.check(ok, "진행 중 저장고·밭 수가 계속 맞음 (밭 %d)" % w.farms.size())
 	var st := mv.view_stats()
 	t.check(int(st.stores) == w.store_tiles.size() and int(st.farms) == w.farms.size(), "view_stats 저장고·밭")
+	_check_store_doorstep(t, mv, w)
+	_check_farm_ground(t, mv, w)
 	# 건물 없는 새 세계로 다시 붙이면 앞 세계의 저장고·밭이 남지 않아야 함(통합 때 찾은 버그)
 	var fresh: SimWorld = t.make_world({}, 1)
 	mv.bind(fresh)
@@ -460,8 +494,12 @@ func _check_extinct(t, mv: MapView) -> void:
 		mv.update_view(0.5)
 		guard += 1
 	mv.update_view(1.0)
-	var slimes: MultiMesh = (mv.get_node("Slimes") as MultiMeshInstance3D).multimesh
-	var plants: MultiMesh = (mv.get_node("Plants") as MultiMeshInstance3D).multimesh
+	var slimes_mi := t.node(mv, "Slimes") as MultiMeshInstance3D
+	var plants_mi := t.node(mv, "Plants") as MultiMeshInstance3D
+	if slimes_mi == null or plants_mi == null:
+		return
+	var slimes: MultiMesh = slimes_mi.multimesh
+	var plants: MultiMesh = plants_mi.multimesh
 	t.check(w.is_extinct() and slimes.instance_count == 0, "멸종한 세계: 슬라임 인스턴스 0 (t=%d)" % w.tick)
 	t.check(int(mv.view_stats().plants) == 0 and plants.instance_count > 0, "자원 없음: 풀포기는 모두 숨김")
 	t.check(mv.pick_slime(Vector2(VP_SIZE) * 0.5) == -1, "멸종한 세계에서 고르기 → -1")
@@ -469,3 +507,291 @@ func _check_extinct(t, mv: MapView) -> void:
 	mv.update_view(0.5)
 	mv.before_steps()
 	t.check(mv.pick_slime(Vector2(VP_SIZE) * 0.5) == -1 and int(mv.view_stats().slimes) == 0, "세계 없이(bind(null)) 불러도 안전")
+
+
+# ── 한 프레임 여러 틱·틱 경계(보간은 마지막 한 틱, 둘레 자리도 보간) ──
+
+## 칸 → 개체 수
+func _occupancy(xs: PackedInt32Array, ys: PackedInt32Array, width: int) -> Dictionary:
+	var occ := {}
+	for i in xs.size():
+		var c := ys[i] * width + xs[i]
+		occ[c] = int(occ.get(c, 0)) + 1
+	return occ
+
+
+func _check_tick_interp(t, mv: MapView, w: SimWorld) -> void:
+	var tl := UiConfig.num("map.tile_size")
+	# ① 틱마다 before_steps(LabMain 이 하듯) → 2틱 프레임의 alpha 0 = 한 틱 전 칸(두 틱 전이 아님)
+	mv.before_steps()
+	w.step()
+	var px := w.s_x.duplicate()
+	var py := w.s_y.duplicate()
+	var pid := w.s_id.duplicate()
+	mv.before_steps()
+	w.step()
+	mv.update_view(0.0)
+	var occ := _occupancy(w.s_x, w.s_y, w.w)
+	var pocc := _occupancy(px, py, w.w)
+	var ok := true
+	var n := 0
+	var moved := 0
+	var j := 0
+	for i in w.population():
+		while j < pid.size() and pid[j] < w.s_id[i]:
+			j += 1
+		if j >= pid.size() or pid[j] != w.s_id[i]:
+			continue
+		if int(occ[w.s_y[i] * w.w + w.s_x[i]]) != 1 or int(pocc[py[j] * w.w + px[j]]) != 1:
+			continue
+		n += 1
+		if px[j] != w.s_x[i] or py[j] != w.s_y[i]:
+			moved += 1
+		var p := mv.slime_instance_position(i)
+		if absf(p.x - (float(px[j]) + 0.5) * tl) > EPS or absf(p.z - (float(py[j]) + 0.5) * tl) > EPS:
+			ok = false
+	t.check(ok and n > 0 and moved > 0, "한 프레임 2틱: alpha 0 에서 혼자 있는 %d마리(움직인 %d)가 한 틱 전 칸 — 보간은 마지막 한 틱만" % [n, moved])
+	# ② 기억을 한 번만 하고 2틱 진행 → 낡은(두 틱 전) 출발점에서 미끄러지지 않고 지금 칸
+	mv.update_view(1.0)
+	mv.before_steps()
+	w.step()
+	w.step()
+	mv.update_view(0.0)
+	occ = _occupancy(w.s_x, w.s_y, w.w)
+	ok = true
+	n = 0
+	for i in w.population():
+		if int(occ[w.s_y[i] * w.w + w.s_x[i]]) != 1:
+			continue
+		n += 1
+		var p := mv.slime_instance_position(i)
+		if absf(p.x - (float(w.s_x[i]) + 0.5) * tl) > EPS or absf(p.z - (float(w.s_y[i]) + 0.5) * tl) > EPS:
+			ok = false
+	t.check(ok and n > 0, "기억이 두 틱 낡으면 보간하지 않고 지금 칸(%d마리)" % n)
+	# ③ 틱 경계: 칸이 그대로인 개체는 alpha 1(틱 T) → alpha 0(틱 T+1)에서 움직이지 않는다(겹침 둘레 자리도 보간)
+	var max_jump := 0.0
+	var still := 0
+	var stacked := 0
+	for k in STILL_TICKS:
+		mv.update_view(1.0)
+		var drawn := {}
+		var tile := {}
+		for i in w.population():
+			drawn[w.s_id[i]] = mv.slime_instance_position(i)
+			tile[w.s_id[i]] = w.s_y[i] * w.w + w.s_x[i]
+		var occ_t := _occupancy(w.s_x, w.s_y, w.w)
+		mv.before_steps()
+		w.step()
+		mv.update_view(0.0)
+		for i in w.population():
+			var id := w.s_id[i]
+			var c := w.s_y[i] * w.w + w.s_x[i]
+			if not tile.has(id) or int(tile[id]) != c:
+				continue
+			still += 1
+			if int(occ_t.get(c, 0)) > 1:
+				stacked += 1
+			var a: Vector3 = drawn[id]
+			var b := mv.slime_instance_position(i)
+			max_jump = maxf(max_jump, Vector2(a.x - b.x, a.z - b.z).length())
+	t.check(still > 0 and stacked > 0 and max_jump < EPS,
+			"틱 경계에서 칸이 그대로인 개체(%d개체·틱, 겹친 칸 %d)가 튀지 않음(최대 %.4f칸, 고치기 전 0.4칸)" % [still, stacked, max_jump])
+	mv.update_view(1.0)
+
+
+# ── 슬라임이 선 칸의 풀포기는 줄여 몸을 뚫지 않게 ──
+
+func _check_plants_occupied(t, mv: MapView, w: SimWorld) -> void:
+	var occ_scale := UiConfig.num("map.plant_occupied_scale")
+	var plant_h := SlimeGeo.plant_mesh().get_aabb().size.y
+	var slime_h := SlimeGeo.slime_mesh().get_aabb().size.y
+	for round_i in 2:
+		var px := w.s_x.duplicate()
+		var py := w.s_y.duplicate()
+		mv.before_steps()
+		w.step()
+		mv.update_view(1.0)
+		var occupied := _occupancy(w.s_x, w.s_y, w.w)
+		occupied.merge(_occupancy(px, py, w.w))
+		var ok := true
+		var shrunk := 0
+		var full := 0
+		for c in w.w * w.h:
+			var ps := mv.plant_scale_at(c)
+			if ps.x < 0.0:
+				continue
+			var want := ps.y * (occ_scale if occupied.has(c) else 1.0)
+			if absf(ps.x - want) > EPS:
+				ok = false
+			if occupied.has(c) and ps.y > 0.0:
+				shrunk += 1
+			elif ps.y > 0.0:
+				full += 1
+		t.check(ok and shrunk > 0 and full > 0, "점유 칸의 풀포기만 %.2f 배(줄인 %d, 그대로 %d) — 떠난 칸은 되돌림" % [occ_scale, shrunk, full])
+		# 줄인 풀포기 높이 ≤ 그 칸 슬라임 몸 높이(가장 작은 개체 기준)
+		var tall_ok := true
+		for i in w.population():
+			var ps2 := mv.plant_scale_at(w.s_y[i] * w.w + w.s_x[i])
+			if ps2.x >= 0.0 and ps2.x * plant_h > slime_h * w.s_size[i]:
+				tall_ok = false
+		t.check(tall_ok, "슬라임이 선 칸의 풀포기는 몸보다 낮음")
+
+
+# ── 전경(지도 전체)에서 작은 슬라임 키우기·선택 고리 최소 화면 크기 ──
+
+func _check_overview(t, mv: MapView, w: SimWorld) -> void:
+	mv.fit_map()
+	mv.update_view(1.0)
+	var cam := mv.get_camera()
+	var k := mv.display_scale()
+	t.check(k > 1.0 + EPS and k <= UiConfig.num("map.slime_display_scale_max") + EPS, "전경에서 작은 슬라임을 키워 그림(표시 배율 %.2f)" % k)
+	# 몸 배율 = 크기 × 표시 배율(가로² × 세로 = 배율³, 숨쉬기·늘어남은 부피 유지) — 개체 사이 크기 비는 그대로
+	var ok := true
+	for i in mini(w.population(), 40):
+		var sc := mv.slime_instance_scale(i)
+		if absf(pow(sc.x * sc.x * sc.y, 1.0 / 3.0) - w.s_size[i] * k) > 0.01:
+			ok = false
+	t.check(ok, "몸 배율 = 크기 × 표시 배율")
+	var iso := _isolated_index(w)
+	if iso == -1:
+		return
+	var id := w.s_id[iso]
+	var center_y := SlimeGeo.slime_mesh().get_aabb().size.y * 0.5 * k
+	var q := mv.slime_instance_position(iso)
+	t.check(mv.pick_slime(cam.unproject_position(Vector3(q.x, center_y, q.z))) == id, "전경에서 키운 몸 가운데를 누르면 그 개체")
+	mv.set_selected(id)
+	mv.update_view(1.0)
+	var ri := mv.ring_info()
+	var min_px := UiConfig.num("map.ring_min_px") * (1.0 - UiConfig.num("map.ring_pulse"))
+	var c3: Vector3 = ri.position
+	var right := cam.global_transform.basis.x
+	var dia := cam.unproject_position(c3 - right * float(ri.radius)).distance_to(cam.unproject_position(c3 + right * float(ri.radius)))
+	t.check(ri.visible and ri.on_top and dia >= min_px - 0.5, "전경 선택 고리: 화면 지름 %.1fpx ≥ %.0fpx, 맨 위에 그림" % [dia, min_px])
+	# 가까이(focus_distance)서는 실제 크기·배율 1·깊이 검사 있는 재질
+	mv.focus_on(id)
+	mv.update_view(1.0)
+	t.check(is_equal_approx(mv.display_scale(), 1.0), "가까이서는 표시 배율 1(%.2f)" % mv.display_scale())
+	ri = mv.ring_info()
+	var want := UiConfig.num("slime.radius") * w.s_size[iso] * UiConfig.num("map.ring_scale")
+	t.check(not ri.on_top and absf(float(ri.radius) - want) <= want * UiConfig.num("map.ring_pulse") + EPS,
+			"가까이서 고리 = 실제 크기(%.3f ≈ %.3f)" % [float(ri.radius), want])
+	mv.set_selected(-1)
+	mv.fit_map()
+	mv.update_view(1.0)
+
+
+# ── 전체 보기(fit_map)·따라가기 부드러움 ──
+
+func _check_fit_and_follow(t, mv: MapView, w: SimWorld) -> void:
+	var cam := mv.get_camera()
+	mv.fit_map()
+	var t0: Vector3 = cam.get("target")
+	var d0: float = cam.get("distance")
+	var y0: float = cam.get("yaw")
+	var p0: float = cam.get("pitch")
+	mv.focus_on(w.s_id[0])
+	cam.call("rotate_pixels", Vector2(120, 40))
+	mv.follow_selected = true
+	mv.fit_map()
+	t.check(Vector3(cam.get("target")).distance_to(t0) < EPS and absf(float(cam.get("distance")) - d0) < EPS
+			and absf(float(cam.get("yaw")) - y0) < EPS and absf(float(cam.get("pitch")) - p0) < EPS and not mv.follow_selected,
+			"fit_map: 처음 맞춤(목표·거리·방위·고각)으로 되돌리고 따라가기 끔")
+	var inside := true
+	for corner in [Vector3(0, 0, 0), Vector3(w.w, 0, 0), Vector3(w.w, 0, w.h), Vector3(0, 0, w.h)]:
+		var sp := cam.unproject_position(corner)
+		inside = inside and sp.x >= -1.0 and sp.y >= -1.0 and sp.x <= float(VP_SIZE.x) + 1.0 and sp.y <= float(VP_SIZE.y) + 1.0
+	t.check(inside, "fit_map 뒤 지도 전체가 화면에 들어옴")
+	# 따라가기: 1/30초 한 번 = 1/60초 두 번(프레임 빠르기와 무관)
+	var i := w.population() / 2
+	mv.set_selected(w.s_id[i])
+	mv.follow_selected = true
+	mv.update_view(1.0, 1.0 / 30.0)
+	var a1: Vector3 = cam.get("target")
+	cam.set("target", t0)
+	cam.call("apply")
+	mv.update_view(1.0, 1.0 / 60.0)
+	mv.update_view(1.0, 1.0 / 60.0)
+	var a2: Vector3 = cam.get("target")
+	t.check(a1.distance_to(a2) < 0.001 and a1.distance_to(t0) > 0.01, "따라가기: 1/30초 한 번 = 1/60초 두 번 (%.4f)" % a1.distance_to(a2))
+	mv.follow_selected = false
+	mv.set_selected(-1)
+	mv.fit_map()
+	mv.update_view(1.0)
+
+
+# ── 큰 지도: 처음에 다 보이고, 축소로 맞춘 거리까지 갈 수 있음(설정 최대 거리 95 를 넘어서) ──
+
+func _check_big_maps(t, mv: MapView) -> void:
+	var cam := mv.get_camera()
+	for sz in BIG_MAPS:
+		var wb: SimWorld = t.make_world({"map.width": sz.x, "map.height": sz.y}, 1)
+		mv.bind(wb)
+		var fitted: float = cam.get("distance")
+		var inside := true
+		var within_far := true
+		var inv := cam.global_transform.affine_inverse()
+		for corner in [Vector3(0, 0, 0), Vector3(wb.w, 0, 0), Vector3(wb.w, 0, wb.h), Vector3(0, 0, wb.h)]:
+			var sp := cam.unproject_position(corner)
+			inside = inside and not cam.is_position_behind(corner) and sp.x >= -1.0 and sp.y >= -1.0 \
+					and sp.x <= float(VP_SIZE.x) + 1.0 and sp.y <= float(VP_SIZE.y) + 1.0
+			within_far = within_far and -(inv * corner).z <= cam.far
+		t.check(inside and within_far, "%d×%d 지도: 처음에 네 모서리가 화면·먼 면 안(거리 %.0f)" % [sz.x, sz.y, fitted])
+		for k in 200:
+			cam.call("zoom_at", Vector2(VP_SIZE) * 0.5, -1.0)
+		t.check(float(cam.get("distance")) >= fitted - EPS and float(cam.call("distance_max")) >= fitted * UiConfig.num("camera.fit_zoom_out_factor") - EPS,
+				"%d×%d 지도: 축소로 맞춘 거리 이상까지(최대 %.0f)" % [sz.x, sz.y, float(cam.call("distance_max"))])
+
+
+# ── 저장고 칸: 움집 안에 묻히지 않게 문 앞(+Z)에 ──
+
+func _check_store_doorstep(t, mv: MapView, w: SimWorld) -> void:
+	if w.store_tiles.is_empty() or w.population() < 3:
+		t.check(false, "저장고 검사용 세계")
+		return
+	var sc := w.store_tiles[0]
+	var sx := sc % w.w
+	var sy := sc / w.w
+	# 검사용 세계에서만 개체 둘을 저장고 칸에 옮겨 놓고 다시 붙인다(화면은 세계를 바꾸지 않음)
+	for k in 2:
+		w.s_x[k] = sx
+		w.s_y[k] = sy
+	mv.bind(w)
+	var tl := UiConfig.num("map.tile_size")
+	var ok := true
+	var n := 0
+	for i in w.population():
+		if w.s_x[i] != sx or w.s_y[i] != sy:
+			continue
+		n += 1
+		var p := mv.slime_instance_position(i)
+		var dx := p.x - (float(sx) + 0.5) * tl
+		var dz := p.z - (float(sy) + 0.5) * tl
+		if Vector2(dx, dz).length() < STORE_EAVE * tl - EPS or dz <= 0.0:
+			ok = false
+	t.check(ok and n >= 2, "저장고 칸의 %d마리는 움집 처마(%.2f칸) 밖 문 앞(+Z)에 그려짐" % [n, STORE_EAVE])
+	var cam := mv.get_camera()
+	var center_y := SlimeGeo.slime_mesh().get_aabb().size.y * 0.5 * mv.display_scale()
+	var q := mv.slime_instance_position(0)
+	t.check(mv.pick_slime(cam.unproject_position(Vector3(q.x, center_y, q.z))) == w.s_id[0], "문 앞에 그린 개체를 누르면 그 개체")
+
+
+# ── 밭 칸: 슬라임·그림자·선택 고리가 흙판 위 ──
+
+func _check_farm_ground(t, mv: MapView, w: SimWorld) -> void:
+	if w.farms.is_empty() or w.population() < 3:
+		t.check(false, "밭 검사용 세계")
+		return
+	var fc := w.farms[0]
+	w.s_x[2] = fc % w.w
+	w.s_y[2] = fc / w.w
+	mv.bind(w)
+	mv.set_selected(w.s_id[2])
+	mv.update_view(1.0)
+	var top := UiConfig.num("map.farm_lift") + SlimeGeo.FARM_THICK
+	var ridge := top + SlimeGeo.FARM_RIDGE_H
+	var p := mv.slime_instance_position(2)
+	var sh := mv.shadow_instance_position(2)
+	var ri := mv.ring_info()
+	t.check(p.y >= top - EPS and sh.y > top, "밭 칸 슬라임 바닥 %.3f·그림자 %.3f 가 흙판 위(%.3f)" % [p.y, sh.y, top])
+	t.check(ri.visible and float((ri.position as Vector3).y) >= ridge, "밭 칸 선택 고리 높이 %.3f ≥ 이랑 꼭대기 %.3f" % [float((ri.position as Vector3).y), ridge])
+	mv.set_selected(-1)

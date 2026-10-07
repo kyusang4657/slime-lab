@@ -21,7 +21,10 @@ const WARMUP_FRACTION := 0.25
 const TOAST_TAGS := {discovery = "새 발견", error = "오류"}
 # 강조 알림(발견·멸종·오류·경고) 테두리의 불투명도
 const TOAST_HIGHLIGHT_ALPHA := 0.85
-const MAP_HINT := "끌기 이동 · 휠 확대 · 오른쪽 끌기 회전 · 클릭 고르기   │   스페이스 멈춤 · 1~7 속도 · F 따라가기 · Esc 선택 해제"
+# 오래 보이는 알림(오류·경고: 경로 등을 읽을 시간)
+const TOAST_LONG_KINDS: Array[String] = ["error", "warn"]
+const MAP_HINT := "끌기 이동 · 휠 확대 · 오른쪽 끌기 회전 · 클릭 고르기   │   스페이스 멈춤 · 1~7 속도 · F 따라가기 · Home 전체 보기 · Esc 선택 해제"
+const FIT_TEXT := "전체 보기"
 
 var world: SimWorld
 var map_view: MapView
@@ -39,14 +42,25 @@ var _acc := 0.0
 var _selected := -1
 var _frame := 0
 var _title := ""
-# 실제 배속 측정: 최근 프레임의 (시간, 틱 수)
+# 실제 배속 측정: 최근 프레임의 (시간, 진행한 틱 몫). 틱 몫은 정수 틱이 아니라 누적의 소수 부분까지 센 진행량
+# (따라가면 정확히 목표 배속, 예산에 걸려 버린 몫은 빠짐). 속도·멈춤·빨리 감기를 바꾸면 창을 비운다.
 var _hist_dt: Array[float] = []
-var _hist_n: Array[int] = []
+var _hist_n: Array[float] = []
 var _hist_time := 0.0
-var _hist_ticks := 0
+var _hist_ticks := 0.0
 var _speed_label_wait := 0.0
-# 알림: {panel, left(남은 초), kind, text}
+# 세계를 바꾼 직후 첫 프레임(불러오기 시간이 든 긴 프레임)은 실제 배속 창에 넣지 않는다
+var _skip_record := false
+# 한 틱 비용 추정(µs, 지수 이동 평균): 예산을 넘기 **전에** 멈추려고 다음 틱 비용을 미리 더해 본다
+var _step_us_est := 0.0
+var _est_alpha := 0.2
+var _behind_fill := 0.5
+# 멸종을 이미 보았는지(멸종하는 순간 한 번만 멈추고 알리려고), 멸종 때문에 저절로 멈췄는지(새 세계에서는 다시 재생)
+var _extinct_seen := false
+var _extinct_paused := false
+# 알림: {panel, left(남은 초), kind, text, body, count_label, when, count}
 var _toasts: Array[Dictionary] = []
+var _coalesce: Array[String] = []
 
 # 화면 수치(ui.json, _ready 에서 한 번 읽음)
 var _tps := 6.0
@@ -77,6 +91,8 @@ var _map_container: SubViewportContainer
 var _map_viewport: SubViewport
 var _map_title: Label
 var _paused_badge: Label
+var _extinct_badge: Label
+var _fit_btn: Button
 var _toast_box: VBoxContainer
 
 
@@ -86,14 +102,21 @@ func _ready() -> void:
 	_ff_budget_ms = UiConfig.num("speed.fast_forward_budget_ms")
 	_window_s = UiConfig.num("speed.actual_speed_window_s")
 	_max_delta = UiConfig.num("speed.max_frame_delta_s")
+	_est_alpha = clampf(UiConfig.num("speed.step_estimate_alpha"), 0.0, 1.0)
+	_behind_fill = clampf(UiConfig.num("speed.behind_min_fill"), 0.0, 1.0)
 	for v in UiConfig.value("speed.steps", [1]):
 		_steps.append(int(v))
+	for v in UiConfig.value("lab.toast_coalesce_kinds", []):
+		_coalesce.append(str(v))
 	_speed = UiConfig.integer("speed.start_mult")
 	theme = UiTheme.build()
 	_build_layout()
 	if DisplayServer.get_name() != "headless":
 		DisplayServer.window_set_min_size(Vector2i(UiConfig.integer("lab.min_width"), UiConfig.integer("lab.min_height")))
-	apply_args(OS.get_cmdline_user_args())
+	var errs := apply_args(OS.get_cmdline_user_args())
+	if errs != "":
+		# 알림을 놓쳐도 터미널에서 전체 문장(경로 포함)을 읽을 수 있게
+		printerr(errs)
 	_sync_controls()
 
 
@@ -131,10 +154,11 @@ func open_snapshot(path: String) -> String:
 	if w == null:
 		var e: String = r.error
 		return e if e != "" else "스냅숏을 열 수 없습니다"
-	if str(r.status) == "backup":
-		show_toast("원본이 깨져 백업에서 열었습니다: %s" % str(r.error), "warn")
 	_title = "스냅숏 %s · 씨앗 %d" % [path.get_file(), w.seed_value]
 	_adopt(w)
+	# 세계를 바꾸면 앞 세계의 알림을 지우므로 백업 경고는 바꾼 뒤에 띄운다
+	if str(r.status) == "backup":
+		show_toast("원본이 깨져 백업에서 열었습니다: %s" % str(r.error), "warn")
 	return ""
 
 
@@ -182,16 +206,22 @@ func apply_args(args: PackedStringArray) -> String:
 	return "\n".join(errors)
 
 
-## 세계를 바꿔 끼우고 선택·누적·측정을 처음으로 되돌린다.
+## 세계를 바꿔 끼우고 선택·누적·측정·알림을 처음으로 되돌린다.
 func _adopt(w: SimWorld) -> void:
+	# 앞 세계의 알림(멸종·발견 등)이 새 세계 위에 남지 않게
+	_clear_toasts()
 	world = w
 	_acc = 0.0
 	_frame = 0
-	_hist_dt.clear()
-	_hist_n.clear()
-	_hist_time = 0.0
-	_hist_ticks = 0
-	_speed_label_wait = 0.0
+	_reset_speed_window()
+	_skip_record = true
+	_step_us_est = 0.0
+	# 이미 멸종한 스냅숏을 열면 멈추지 않고 표시만(멸종하는 순간에만 멈춤). 앞 세계의 멸종으로 저절로 멈췄으면 다시 재생.
+	_extinct_seen = world.extinct_tick >= 0
+	if _extinct_paused:
+		_extinct_paused = false
+		set_paused(false)
+	info_panel.set_empty_text(_extinct_text() if _extinct_seen else "")
 	map_view.bind(world)
 	select_slime(-1)
 	_map_title.text = _title
@@ -204,21 +234,39 @@ func _adopt(w: SimWorld) -> void:
 # ════════════════════════════ 속도 ════════════════════════════
 
 ## 목표 배속(1배 = speed.ticks_per_second_1x 틱/초). 고르면 빨리 감기는 꺼진다.
+## 배속이 바뀌면 실제 배속 창을 비운다(앞 배속의 프레임으로 "뒤처짐" 경고가 잘못 뜨지 않게).
 func set_speed(mult: int) -> void:
-	_speed = maxi(1, mult)
+	var m := maxi(1, mult)
+	if m != _speed or _fast:
+		_reset_speed_window()
+	_speed = m
 	_fast = false
 	_sync_controls()
 
 
 func set_paused(p: bool) -> void:
+	if p != _paused:
+		_reset_speed_window()
 	_paused = p
+	_extinct_paused = false
 	_sync_controls()
 
 
 ## 빨리 감기: 프레임마다 speed.fast_forward_budget_ms 를 다 써서 진행한다.
 func set_fast_forward(on: bool) -> void:
+	if on != _fast:
+		_reset_speed_window()
 	_fast = on
 	_sync_controls()
+
+
+## 실제 배속 창 비우기: 다시 WARMUP_FRACTION 만큼 찰 때까지 "실제 —".
+func _reset_speed_window() -> void:
+	_hist_dt.clear()
+	_hist_n.clear()
+	_hist_time = 0.0
+	_hist_ticks = 0.0
+	_speed_label_wait = 0.0
 
 
 func is_paused() -> bool:
@@ -233,11 +281,11 @@ func target_speed() -> int:
 	return _speed
 
 
-## 최근 speed.actual_speed_window_s 동안 실제로 진행한 배속(프레임 시간 기준).
+## 최근 speed.actual_speed_window_s 동안 실제로 진행한 배속(잘리지 않은 프레임 시간 기준, 틱의 소수 몫까지 셈).
 func actual_speed() -> float:
 	if _hist_time <= 0.0 or _tps <= 0.0:
 		return 0.0
-	return float(_hist_ticks) / _hist_time / _tps
+	return _hist_ticks / _hist_time / _tps
 
 
 # ════════════════════════════ 선택 ════════════════════════════
@@ -270,44 +318,55 @@ func _on_follow_toggled(on: bool) -> void:
 
 # ════════════════════════════ 진행 ════════════════════════════
 
-## 한 프레임 진행: before_steps → 누적 시간만큼 step(예산 안) → update_view(alpha) → 신호·알림·상태 표시.
+## 한 프레임 진행: before_steps → 누적 시간만큼 step(틱마다 before_steps, 예산 안) → update_view(alpha) → 신호·알림·상태 표시.
 ## _process 가 부르고, 검사·캡처는 직접 불러 프레임을 결정적으로 몬다. 이 프레임에 돈 틱 수를 돌려준다.
 func advance_frame(delta: float) -> int:
-	delta = clampf(delta, 0.0, _max_delta)
-	_age_toasts(delta)
+	# 진행·알림은 잘린 프레임 시간(멈칫한 프레임이 한꺼번에 몰아 돌지 않게), 실제 배속 측정은 잘리지 않은 시간
+	var raw := maxf(delta, 0.0)
+	var step_dt := minf(raw, _max_delta)
+	_age_toasts(step_dt)
 	if world == null:
 		return 0
 	map_view.before_steps()
 	var n := 0
+	var progress := 0.0
 	last_budget_hit = false
 	var t0 := Time.get_ticks_usec()
 	if not _paused:
 		if _fast:
-			# 빨리 감기: 예산을 다 쓸 때까지(적어도 1틱)
+			# 빨리 감기: 다음 틱까지 해도 예산 안이면 계속(적어도 1틱)
 			var ff_us := _ff_budget_ms * USEC_PER_MS
 			while true:
-				world.step()
+				_step_once()
 				n += 1
-				if float(Time.get_ticks_usec() - t0) >= ff_us:
+				if float(Time.get_ticks_usec() - t0) + _step_us_est > ff_us:
 					break
-			_acc = 0.0
+			# 빨리 감기 프레임은 "지금 틱의 끝"(alpha 1)을 그린다. 멈추거나 보통 속도로 돌아가도 그 자리에서 이어지게 1.
+			_acc = 1.0
 			last_budget_hit = true
+			progress = float(n)
 		else:
-			_acc += delta * _tps * float(_speed)
+			var acc0 := _acc
+			_acc += step_dt * _tps * float(_speed)
 			var budget_us := _budget_ms * USEC_PER_MS
 			while _acc >= 1.0:
-				if n > 0 and float(Time.get_ticks_usec() - t0) >= budget_us:
+				# 다음 틱까지 하면 예산을 넘을 것 같으면 멈춘다(적어도 1틱은 돎)
+				if n > 0 and float(Time.get_ticks_usec() - t0) + _step_us_est > budget_us:
 					# 따라가지 못한 몫은 버린다(밀린 틱이 쌓여 점점 더 느려지지 않게). 보간용 소수 부분만 남김
 					_acc -= floorf(_acc)
 					last_budget_hit = true
 					break
-				world.step()
+				_step_once()
 				_acc -= 1.0
 				n += 1
+			progress = float(n) + _acc - acc0
 	last_sim_ms = float(Time.get_ticks_usec() - t0) / USEC_PER_MS
-	var alpha := 1.0 if (_fast and not _paused) else clampf(_acc, 0.0, 1.0)
-	map_view.update_view(alpha)
-	_record_speed(delta, n)
+	map_view.update_view(clampf(_acc, 0.0, 1.0), step_dt)
+	if _skip_record:
+		_skip_record = false
+	else:
+		# 한 번의 아주 긴 멈칫(창 끌기 등)은 창 길이만큼만 센다
+		_record_speed(minf(raw, _window_s), progress)
 	if n > 0:
 		ticked.emit(world)
 	var ev := world.drain_events()
@@ -315,21 +374,46 @@ func advance_frame(delta: float) -> int:
 		events.emit(ev)
 		for e in ev:
 			_show_event(e)
+	if world.extinct_tick >= 0 and not _extinct_seen:
+		_on_extinct()
 	_frame += 1
 	var every := maxi(1, UiConfig.integer("info.refresh_frames"))
 	if info_panel.current_id() >= 0 and _frame % every == 0:
 		info_panel.refresh()
-	_speed_label_wait -= delta
+	_speed_label_wait -= raw
 	_refresh_status(_speed_label_wait <= 0.0 or _hist_time < _window_s)
 	return n
 
 
-## 실제 배속 창에 이 프레임을 넣고 창보다 오래된 프레임을 뺀다.
-func _record_speed(delta: float, n: int) -> void:
-	_hist_dt.append(delta)
-	_hist_n.append(n)
-	_hist_time += delta
-	_hist_ticks += n
+## 틱 하나: 보간 기억(지금 틱 = 다음 그림의 한 틱 전) → step → 한 틱 비용 추정 갱신.
+func _step_once() -> void:
+	map_view.before_steps()
+	var s0 := Time.get_ticks_usec()
+	world.step()
+	var us := float(Time.get_ticks_usec() - s0)
+	_step_us_est = us if _step_us_est <= 0.0 else lerpf(_step_us_est, us, _est_alpha)
+
+
+## 멸종하는 순간 한 번: lab.pause_on_extinction 이면 멈추고(헤드리스 실행기의 끝 조건과 같게),
+## 정보 창 빈 안내를 멸종 문구로. 멸종 표지는 _refresh_status 가 계속 보인다. 다시 재생하면 빈 지도가 계속 진행한다.
+func _on_extinct() -> void:
+	_extinct_seen = true
+	info_panel.set_empty_text(_extinct_text())
+	if bool(UiConfig.value("lab.pause_on_extinction", true)) and not _paused:
+		set_paused(true)
+		_extinct_paused = true
+
+
+func _extinct_text() -> String:
+	return "멸종했습니다 (틱 %s) — 고를 개체가 없습니다" % _commas(world.extinct_tick)
+
+
+## 실제 배속 창에 이 프레임(시간, 진행한 틱 몫)을 넣고 창보다 오래된 프레임을 뺀다.
+func _record_speed(dt: float, progress: float) -> void:
+	_hist_dt.append(dt)
+	_hist_n.append(progress)
+	_hist_time += dt
+	_hist_ticks += progress
 	while _hist_dt.size() > 1 and _hist_time - _hist_dt[0] >= _window_s:
 		_hist_time -= _hist_dt.pop_front()
 		_hist_ticks -= _hist_n.pop_front()
@@ -364,6 +448,12 @@ func _dialog_open() -> bool:
 	return false
 
 
+## 지도 전체 보기(Home·0 키, 지도 위 "전체 보기" 단추): 카메라를 처음 맞춤으로, 따라가기 끔(정보 창 단추도).
+func fit_map() -> void:
+	map_view.fit_map()
+	info_panel.set_follow(false)
+
+
 func _handle_key(code: Key) -> bool:
 	match code:
 		KEY_SPACE:
@@ -380,6 +470,9 @@ func _handle_key(code: Key) -> bool:
 				map_view.focus_on(_selected)
 			show_toast("따라가기 켬" if map_view.follow_selected else "따라가기 끔", "info")
 			return true
+		KEY_HOME, KEY_0, KEY_KP_0:
+			fit_map()
+			return true
 	var idx := -1
 	if code >= KEY_1 and code <= KEY_9:
 		idx = code - KEY_1
@@ -393,9 +486,34 @@ func _handle_key(code: Key) -> bool:
 
 # ════════════════════════════ 알림 ════════════════════════════
 
-## 위쪽 가운데 알림(ui.lab.toast_seconds 뒤 사라짐). kind: 사건 종류(discovery·extinction 등) 또는 info·warn·error.
-## 왼쪽 띠는 종류 색, 발견은 강조 색·멸종과 오류는 위험 색 테두리. tick >= 0 이면 끝에 흐리게 틱을 붙인다.
+## 위쪽 가운데 알림(ui.lab.toast_seconds 뒤 사라짐, 오류·경고는 toast_error_seconds). kind: 사건 종류(discovery·extinction 등)
+## 또는 info·warn·error. 왼쪽 띠는 종류 색, 발견은 강조 색·멸종과 오류는 위험 색·경고는 경고 색 테두리
+## (밭 잃음은 경고 색 띠만). tick >= 0 이면 끝에 흐리게 틱을 붙인다. 긴 문장은 지도 폭 안에서 줄을 바꾼다.
+## lab.toast_coalesce_kinds 의 종류(밭 잃음 등)는 이미 보이는 같은 종류 알림을 새 문장으로 고쳐 쓰고 "×N" 을 붙인다.
+## 최대 lab.toast_max 개: 넘치면 강조 알림이 아닌 것 가운데 오래된 것부터 지운다(모두 강조면 가장 오래된 것).
 func show_toast(text: String, kind: String = "info", tick: int = -1) -> void:
+	if kind in _coalesce:
+		for idx in range(_toasts.size() - 1, -1, -1):
+			var old: Dictionary = _toasts[idx]
+			if old.kind != kind:
+				continue
+			old.count = int(old.count) + 1
+			old.text = text
+			(old.body as Label).text = text
+			var cl := old.count_label as Label
+			cl.text = "×%d" % int(old.count)
+			cl.visible = true
+			var wl := old.when as Label
+			wl.text = "틱 " + _commas(tick)
+			wl.visible = tick >= 0
+			old.left = _toast_life(kind)
+			(old.panel as Control).modulate.a = 1.0
+			_fit_toast(old)
+			# 가장 새 알림 자리(맨 아래)로
+			_toasts.remove_at(idx)
+			_toasts.append(old)
+			_toast_box.move_child(old.panel, -1)
+			return
 	var col := _kind_color(kind)
 	var p := PanelContainer.new()
 	p.theme_type_variation = UiTheme.TOAST
@@ -406,7 +524,7 @@ func show_toast(text: String, kind: String = "info", tick: int = -1) -> void:
 		p.add_theme_stylebox_override("panel", sb)
 	var row := HBoxContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_theme_constant_override("separation", 10)
+	row.add_theme_constant_override("separation", UiConfig.integer("lab.toast_gap"))
 	p.add_child(row)
 	var stripe := ColorRect.new()
 	stripe.color = col
@@ -421,30 +539,82 @@ func show_toast(text: String, kind: String = "info", tick: int = -1) -> void:
 		t.text = tag
 		t.theme_type_variation = UiTheme.VALUE
 		t.add_theme_color_override("font_color", col)
+		t.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 		row.add_child(t)
 	var body := Label.new()
 	body.text = text
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _is_highlight(kind):
 		body.theme_type_variation = UiTheme.VALUE
 	row.add_child(body)
-	if tick >= 0:
-		var when := Label.new()
-		when.text = "틱 " + _commas(tick)
-		when.theme_type_variation = UiTheme.DIM
-		row.add_child(when)
+	var count := Label.new()
+	count.theme_type_variation = UiTheme.DIM
+	count.visible = false
+	count.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	row.add_child(count)
+	var when := Label.new()
+	when.text = "틱 " + _commas(tick)
+	when.theme_type_variation = UiTheme.DIM
+	when.visible = tick >= 0
+	when.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	row.add_child(when)
 	_toast_box.add_child(p)
-	_toasts.append({panel = p, left = UiConfig.num("lab.toast_seconds"), kind = kind, text = text})
+	var entry := {panel = p, left = _toast_life(kind), kind = kind, text = text, body = body, count_label = count, when = when, count = 1}
+	_toasts.append(entry)
+	_fit_toast(entry)
 	var cap := maxi(1, UiConfig.integer("lab.toast_max"))
 	while _toasts.size() > cap:
-		var old: Dictionary = _toasts.pop_front()
-		(old.panel as Node).queue_free()
+		var drop := 0
+		for k in _toasts.size():
+			if not _is_highlight(str(_toasts[k].kind)):
+				drop = k
+				break
+		var gone: Dictionary = _toasts[drop]
+		_toasts.remove_at(drop)
+		(gone.panel as Node).queue_free()
 
 
-## 지금 보이는 알림 [{kind, text, left}] (검사·캡처용).
+## 알림이 보이는 시간(오류·경고는 lab.toast_error_seconds).
+static func _toast_life(kind: String) -> float:
+	return UiConfig.num("lab.toast_error_seconds" if kind in TOAST_LONG_KINDS else "lab.toast_seconds")
+
+
+## 알림 본문 폭: 한 줄 폭과 (lab.toast_max_width 와 지도 폭 − 양쪽 여백 중 작은 것 − 띠·머리·틱 몫) 중 작은 것.
+## 넘치면 줄을 바꾼다(AUTOWRAP_WORD_SMART — 빈칸 없는 긴 경로도 끊음). 지도 크기가 바뀌면 다시 맞춘다.
+func _fit_toast(entry: Dictionary) -> void:
+	var body := entry.body as Label
+	var p := entry.panel as Control
+	if not body.is_inside_tree():
+		return
+	var font := body.get_theme_font("font")
+	var fs := body.get_theme_font_size("font_size")
+	var natural := ceilf(font.get_string_size(body.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x) + 1.0
+	body.custom_minimum_size.x = 0.0
+	var chrome := p.get_combined_minimum_size().x - body.get_combined_minimum_size().x
+	var room := UiConfig.num("lab.toast_max_width")
+	if _map_area != null and _map_area.size.x > 0.0:
+		room = minf(room, _map_area.size.x - 2.0 * UiConfig.num("lab.map_overlay_margin"))
+	body.custom_minimum_size.x = maxf(1.0, minf(natural, room - chrome))
+
+
+func _refit_toasts() -> void:
+	for t in _toasts:
+		_fit_toast(t)
+
+
+## 알림을 모두 지운다(세계가 바뀔 때).
+func _clear_toasts() -> void:
+	for t in _toasts:
+		(t.panel as Node).queue_free()
+	_toasts.clear()
+
+
+## 지금 보이는 알림 [{kind, text, left, count}] (검사·캡처용).
 func visible_toasts() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for t in _toasts:
-		out.append({kind = t.kind, text = t.text, left = t.left})
+		out.append({kind = t.kind, text = t.text, left = t.left, count = t.count})
 	return out
 
 
@@ -493,8 +663,10 @@ func _refresh_status(with_speed: bool) -> void:
 	var is_day := world.light >= UiConfig.num("lab.day_light_threshold")
 	_lbl_daynight.text = "낮" if is_day else "밤"
 	_tint(_lbl_daynight, UiTheme.color("day" if is_day else "night"))
-	_lbl_gen.text = "%.1f" % world.mean_generation()
 	var pop := world.population()
+	# 개체가 없으면 평균 세대는 뜻이 없다(0.0 은 처음으로 되돌아간 것처럼 보임)
+	_lbl_gen.text = "%.1f" % world.mean_generation() if pop > 0 else "—"
+	_tint(_lbl_gen, UiTheme.color("text" if pop > 0 else "text_dim"))
 	_lbl_pop.text = _commas(pop) if pop > 0 else "멸종"
 	_tint(_lbl_pop, UiTheme.color("text" if pop > 0 else "danger"))
 	var st := clampi(world.stage, 0, SimWorld.STAGE_NAMES.size() - 1)
@@ -503,10 +675,13 @@ func _refresh_status(with_speed: bool) -> void:
 	if with_speed:
 		_speed_label_wait = UiConfig.num("speed.label_refresh_s")
 		_lbl_speed.text = speed_text()
-		var behind := not _paused and not _fast and _hist_time >= _window_s * 0.5 \
+		var behind := not _paused and not _fast and _hist_time >= _window_s * _behind_fill \
 				and actual_speed() < float(_speed) * UiConfig.num("speed.behind_ratio")
 		_tint(_lbl_speed, UiTheme.color("warn" if behind else "text"))
 	_paused_badge.visible = _paused
+	_extinct_badge.visible = world.extinct_tick >= 0
+	if _extinct_badge.visible:
+		_extinct_badge.text = "멸종 · 틱 %s" % _commas(world.extinct_tick)
 
 
 ## 글자 색을 바뀔 때만 덮어쓴다(같은 색을 매 프레임 다시 넣으면 테마 변경 알림이 돈다).
@@ -528,7 +703,8 @@ func speed_text() -> String:
 	return "목표 %d배 / 실제 %s" % [_speed, actual]
 
 
-## 하루 틱 수(날 표시용). SIM-API 의 질의에 없어 실험 설정(world.cfg)을 읽기만 한다.
+## 하루 틱 수(날 표시용). SIM-API 의 읽기 전용 cfg(time.day_ticks)를 읽기만 한다.
+## 날·계절·빛은 모두 지금 틱(world.tick)을 뜻한다(SimWorld 가 step 끝에 다시 계산).
 func _day_ticks() -> int:
 	var t: Variant = world.cfg.get("time")
 	if typeof(t) == TYPE_DICTIONARY:
@@ -731,6 +907,21 @@ func _build_map_overlay() -> void:
 	_paused_badge.add_theme_color_override("font_color", UiTheme.color("warn"))
 	_paused_badge.visible = false
 	hrow.add_child(_paused_badge)
+	_extinct_badge = Label.new()
+	_extinct_badge.name = "ExtinctBadge"
+	_extinct_badge.theme_type_variation = UiTheme.VALUE
+	_extinct_badge.add_theme_color_override("font_color", UiTheme.color("danger"))
+	_extinct_badge.visible = false
+	hrow.add_child(_extinct_badge)
+	_fit_btn = Button.new()
+	_fit_btn.name = "FitButton"
+	_fit_btn.text = FIT_TEXT
+	_fit_btn.focus_mode = Control.FOCUS_NONE
+	_fit_btn.mouse_filter = Control.MOUSE_FILTER_STOP
+	_fit_btn.tooltip_text = "지도 전체가 보이게 카메라를 되돌림 (Home)"
+	_fit_btn.add_theme_font_size_override("font_size", UiConfig.integer("lab.font_size_small"))
+	_fit_btn.pressed.connect(fit_map)
+	hrow.add_child(_fit_btn)
 
 	var hint := PanelContainer.new()
 	hint.name = "MapHint"
@@ -757,6 +948,7 @@ func _build_map_overlay() -> void:
 	_toast_box.offset_bottom = _toast_box.offset_top
 	_toast_box.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_map_area.add_child(_toast_box)
+	_map_area.resized.connect(_refit_toasts)
 
 
 ## 단추 아이콘 색(보통·초점; 올림은 테마대로 흰색).

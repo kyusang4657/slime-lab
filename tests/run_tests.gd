@@ -37,6 +37,7 @@ func _init() -> void:
 		"test_discovery_forage", "test_discovery_store", "test_storehouse_rules", "test_farm_rules",
 		"test_determinism", "test_snapshot_roundtrip", "test_snapshot_files", "test_runner",
 		"test_extinction_no_resources", "test_memory_units", "test_performance", "test_farm_reachable",
+		"test_time_after_step", "test_event_copies",
 	]
 	for t in tests:
 		if not _only.is_empty() and not _only.has(t):
@@ -420,7 +421,8 @@ func test_energy_ledger() -> void:
 		if k % 50 == 0:
 			worst = maxf(worst, absf(wd.total_energy() - wd.ledger_expected()))
 	worst = maxf(worst, absf(wd.total_energy() - wd.ledger_expected()))
-	check(worst < 1e-6, "에너지 장부 오차 %.3e (없는 데서 에너지가 생기지 않음)" % worst)
+	# GDScript 의 % 형식에는 지수 표기(%e)가 없다 → String.num_scientific
+	check(worst < 1e-6, "에너지 장부 오차 %s (없는 데서 에너지가 생기지 않음)" % String.num_scientific(worst))
 	check(wd.total_births > 0 and wd.total_deaths > 0, "600틱 동안 출생·사망이 있음")
 
 
@@ -759,6 +761,7 @@ func test_runner() -> void:
 	check(lg[0] == ",".join(SimRecorder.LINEAGE_COLUMNS) and lg.size() > 200, "계통 CSV")
 	var sm = JSON.parse_string(FileAccess.get_file_as_string(dir.path_join("summary.json")))
 	check(sm.end_reason == "generations" and sm.mean_generation >= 3.0 and sm.config.mutation.rate == 0.07, "요약: 끝난 이유·세대·실제 설정")
+	check(int(sm.get("max_ticks", -1)) == int(sm.config.run.max_ticks), "요약: 실제로 쓴 틱 상한(max_ticks %s)" % str(sm.get("max_ticks")))
 	var bad_cfg: Dictionary = runner.parse_args(PackedStringArray(["--out=" + dir, "--set=없는.키=1", "--quiet"]))
 	bad_cfg.silent = true
 	check(runner.run(bad_cfg) == 2, "설정 오류 코드 2")
@@ -818,3 +821,50 @@ func test_farm_reachable() -> void:
 			break
 	print("  농사 도달 시도: " + "; ".join(tried))
 	check(found != "", "평균 %d세대 안에 농사에 도달하는 예설정이 있음: %s" % [int(FARM_GENERATIONS), found])
+
+
+## 틱 사이(step 뒤·처음·스냅숏을 연 뒤)의 빛·계절은 언제나 지금 tick 을 뜻한다
+## (화면의 "날 9 · 봄" 과 기록 CSV 의 season·light 가 경계 틱에서 어긋나지 않게).
+func test_time_after_step() -> void:
+	var wd := world({"population.initial": 20})
+	var day := int(wd.cfg.time.day_ticks)
+	var sd := int(wd.cfg.time.season_days)
+	var year := day * sd * SimWorld.SEASON_COUNT
+	var probe := empty_world()
+	var ok := true
+	var rows_ok := true
+	var bad := ""
+	for k in year + 2:
+		wd.step()
+		probe.tick = wd.tick
+		probe._compute_time()
+		if wd.season != (wd.tick / day / sd) % SimWorld.SEASON_COUNT or wd.light != probe.light:
+			ok = false
+			bad = "틱 %d: 계절 %d 빛 %.2f" % [wd.tick, wd.season, wd.light]
+		var row := wd.sample()
+		if int(row.season) != (int(row.day) / sd) % SimWorld.SEASON_COUNT:
+			rows_ok = false
+	check(ok, "step 뒤 빛·계절 = 지금 틱의 값(한 해 %d틱) %s" % [year + 2, bad])
+	check(rows_ok, "기록 줄(sample)의 계절이 날 열과 맞음")
+	var w2 := world({"population.initial": 20})
+	w2.step_n(year)
+	check(w2.season == 0 and w2.tick == year, "한 해가 지난 경계 틱 %d 은 봄(계절 %d)" % [year, w2.season])
+	var r := SimSnapshot.from_text(SimSnapshot.to_text(w2))
+	var w3: SimWorld = r.world
+	check(w3 != null and w3.season == w2.season and w3.light == w2.light, "스냅숏을 연 세계도 같은 빛·계절")
+
+
+## drain_events() 가 돌려주는 사건은 연대기와 따로인 사본(받는 쪽이 고쳐 써도 연대기·기록이 그대로)
+func test_event_copies() -> void:
+	var wd := world({}, 1, "fast_civ")
+	var guard := 0
+	while wd.chronicle.is_empty() and guard < 5000:
+		wd.step()
+		guard += 1
+	var ev := wd.drain_events()
+	check(not ev.is_empty(), "사건이 생김(%d틱)" % wd.tick)
+	if ev.is_empty():
+		return
+	var before := str(wd.chronicle[0].text)
+	ev[0]["text"] = "바뀜"
+	check(str(wd.chronicle[0].text) == before, "꺼낸 사건을 고쳐도 연대기는 그대로")

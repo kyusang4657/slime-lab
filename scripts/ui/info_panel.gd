@@ -3,8 +3,10 @@ extends PanelContainer
 ## 개체 정보 창(실험실 오른쪽). 고른 슬라임의 상태·특성·두뇌 가중치·가계(부모·조부모·자식)를 보여 준다.
 ## 계약: docs/VIEW-API.md "InfoPanel".
 ##
-## 시뮬레이션은 SIM-API 의 읽기 질의(slime_info·children_of·index_of_id·lin_hue·L, cfg.brain.weight_clamp)만 쓴다.
+## 시뮬레이션은 SIM-API 의 읽기 질의(slime_info·children_of·index_of_id·lin_hue·L)와 읽기 전용 cfg(brain.weight_clamp)만 쓴다.
 ## 노드는 모두 코드로 만든다(.tscn 없음). 머리(색 견본·#id·세대·생사·따라가기)는 위에 고정, 나머지는 세로 스크롤.
+## 테마는 실험실 공용 UiTheme 을 바탕으로(단추·말풍선이 실험실과 같은 모양), 이 창에만 있는 것(작은 단추 글자·가계 단추·
+## 에너지 막대·가는 스크롤 막대·촘촘한 구분선)만 더한다. 수치는 ui.json 의 info·theme 절.
 ## refresh() 는 자주 불리므로(ui.info.refresh_frames) 바뀐 값만 다시 쓰고, 자식 목록은 자식 수가 바뀔 때만 다시 훑는다.
 
 signal slime_requested(id: int)
@@ -27,8 +29,21 @@ const ENERGY_WARN := 1
 const ENERGY_DANGER := 2
 ## 머리 견본의 세로/가로 비
 const SWATCH_ASPECT := 0.72
-## 가계 단추 위아래 안쪽 여백(가계 줄 열쇠 글자도 같은 높이에 맞춤)
-const REL_PAD_Y := 3.0
+## 정보 창 작은 단추(따라가기·가계)의 형 변형: 공용 Button 모양 + 굵은 작은 글자
+const SMALL_BUTTON := "InfoSmallButton"
+## 창 왼쪽 테두리 두께(픽셀)
+const PANEL_BORDER := 1
+## 머리·본문 여백 비(info.padding 에 곱함: 위쪽은 조금 좁게)
+const PAD_TIGHT := 0.8
+const PAD_HALF := 0.5
+## 에너지 막대·가는 스크롤 막대 색 변형(어둡게·밝게)
+const FILL_DARKEN := 0.12
+const GRAB_LIGHTEN := 0.08
+const GRAB_HOVER_LIGHTEN := 0.25
+const GRAB_PRESS_DARKEN := 0.2
+const BAR_RADIUS_K := 0.75
+## 마우스 휠 한 칸에 바깥 스크롤을 움직이는 몫(ScrollContainer 기본과 같은 page/8)
+const WHEEL_PAGE := 0.125
 
 ## 자식 목록을 다시 훑은 횟수(검사용: 자식 수가 그대로면 refresh 가 훑지 않는다)
 var children_scans := 0
@@ -46,6 +61,8 @@ var _kids_for := -1
 var _kids_count := -1
 var _fixed_buttons: Array[RelativeButton] = []
 var _kid_buttons: Array[RelativeButton] = []
+# 빈 상태 안내를 바꿔 쓰는 문구(멸종 등, "" = 기본 EMPTY_TEXT)
+var _empty_text := ""
 
 # ── 노드 ──
 var _empty: VBoxContainer
@@ -89,6 +106,7 @@ var _fs := 15
 var _fs_small := 13
 var _fs_title := 18
 var _pad := 14.0
+var _rel_pad_y := 3.0
 var _row_gap := 6
 var _key_w := 64.0
 var _children_max := 24
@@ -104,11 +122,13 @@ var _c_dim := Color.GRAY
 var _c_accent := Color.AQUAMARINE
 var _c_warn := Color.ORANGE
 var _c_danger := Color.RED
+var _c_eye := Color.BLACK
 var _bold: Font
 var _fill_styles: Array[StyleBoxFlat] = []
 var _energy_state := -1
 var _rel_alive_style: Dictionary = {}
 var _rel_dead_style: Dictionary = {}
+var _brain_scroll: ScrollContainer
 
 
 func _init() -> void:
@@ -124,8 +144,9 @@ func _init() -> void:
 func _read_config() -> void:
 	_fs = UiConfig.integer("lab.font_size")
 	_fs_small = UiConfig.integer("lab.font_size_small")
-	_fs_title = UiConfig.integer("lab.font_size_title")
+	_fs_title = UiConfig.integer("info.title_font_size")
 	_pad = UiConfig.num("info.padding")
+	_rel_pad_y = UiConfig.num("info.relative_pad_v")
 	_row_gap = UiConfig.integer("info.row_gap")
 	_key_w = UiConfig.num("info.key_width")
 	_children_max = UiConfig.integer("info.children_max")
@@ -141,6 +162,7 @@ func _read_config() -> void:
 	_c_accent = UiConfig.color("theme.accent")
 	_c_warn = UiConfig.color("theme.warn")
 	_c_danger = UiConfig.color("theme.danger")
+	_c_eye = UiConfig.color("slime.eye_color")
 	_bold = load(BOLD_FONT)
 
 
@@ -169,13 +191,13 @@ func show_slime(world: SimWorld, id: int) -> void:
 		_scroll.scroll_vertical = 0
 
 
-## "슬라임을 눌러 고르세요" 안내. 따라가기 상태는 그대로 둔다(LabMain 이 관리).
+## "슬라임을 눌러 고르세요" 안내(set_empty_text 로 바꾼 문구가 있으면 그것). 따라가기 상태는 그대로 둔다(LabMain 이 관리).
 func clear() -> void:
 	_id = -1
 	_world = null
 	_main.hide()
 	_empty.show()
-	_empty_label.text = EMPTY_TEXT
+	_empty_label.text = _empty_text if _empty_text != "" else EMPTY_TEXT
 	_clear_flow(_parents_flow)
 	_clear_flow(_gp_flow)
 	_clear_flow(_kids_flow)
@@ -203,9 +225,29 @@ func current_id() -> int:
 	return _id
 
 
+## (추가) 빈 상태 안내 문구를 바꾼다("" = 기본 "슬라임을 눌러 고르세요"). LabMain 이 멸종하면 멸종 문구로.
+## 지금 빈 상태면 바로 바뀌고, 개체를 보이는 중이면 다음 clear() 부터.
+func set_empty_text(text: String) -> void:
+	_empty_text = text
+	if _id < 0:
+		_empty_label.text = _empty_text if _empty_text != "" else EMPTY_TEXT
+
+
 ## (추가) 따라가기 단추 상태만 맞춘다(신호 없음). LabMain 이 F 키로 바꿨을 때 쓴다.
 func set_follow(on: bool) -> void:
 	_follow.set_pressed_no_signal(on)
+
+
+## (추가) 두뇌 열지도가 들어갈 너비(픽셀): 창 폭 − 테두리 − 양쪽 여백 − 세로 스크롤 막대. 넘치는 열지도는 가로 스크롤.
+static func brain_width() -> float:
+	return UiConfig.num("lab.right_panel_width") - float(PANEL_BORDER) - 2.0 * UiConfig.num("info.padding") - UiConfig.num("info.scrollbar_width")
+
+
+## (추가) 스크롤 본문이 보이는 높이를 넘는 픽셀(음수 = 남는 여유). 1600×900 에서 보통 개체는 스크롤 없이(검사 V07).
+func content_overflow() -> float:
+	if _scroll == null or _scroll.get_child_count() == 0:
+		return 0.0
+	return (_scroll.get_child(0) as Control).get_combined_minimum_size().y - _scroll.size.y
 
 
 ## (추가) 머리 한 줄 요약 "#id · N세대 · 살아 있음"(빈 상태면 안내 문구). 검사·캡처 확인용.
@@ -221,6 +263,8 @@ func summary_text() -> String:
 func _fill_static(d: Dictionary) -> void:
 	var hue := float(d.hue)
 	_swatch.color = _hue_color(hue)
+	_swatch.eye_color = _c_eye
+	_swatch.shadow_alpha = UiConfig.num("map.blob_shadow_alpha")
 	_swatch.tooltip_text = "계통 색 (색상 %.3f)" % hue
 	_title.text = "#%d" % _id
 	_gen.text = "%d세대" % int(d.gen)
@@ -232,12 +276,14 @@ func _fill_static(d: Dictionary) -> void:
 	_v_birth.text = "틱 " + _fmt_int(int(d.birth))
 	if d.has("genome"):
 		_brain.weight_clamp = float(_world.cfg["brain"]["weight_clamp"])
+		_brain.max_width = brain_width()
 		_brain.set_genome(_world.L, d.genome)
-		_brain.show()
+		_brain_scroll.scroll_horizontal = 0
+		_brain_scroll.show()
 		_brain_note.hide()
 		_has_brain = true
 	else:
-		_brain.hide()
+		_brain_scroll.hide()
 		_brain_note.text = "죽은 개체의 유전체는 세계에 남지 않아 두뇌를 그릴 수 없습니다."
 		_brain_note.show()
 		_has_brain = false
@@ -383,8 +429,9 @@ func _relative_button(rid: int, rel: String) -> RelativeButton:
 	b.slime_id = rid
 	b.text = "#%d" % rid
 	b.dot = UiConfig.num("info.relative_dot")
-	b.dot_left = _pad * 0.5
-	b.dead_alpha = UiConfig.num("info.dead_alpha")
+	b.dot_left = _pad * PAD_HALF
+	b.dead_alpha = UiConfig.num("info.dead_dot_alpha")
+	b.theme_type_variation = SMALL_BUTTON
 	b.dot_color = _hue_color(float(_world.lin_hue[rid])) if rid >= 0 and rid < _world.lin_hue.size() else _c_dim
 	b.focus_mode = Control.FOCUS_NONE
 	# 휠은 바깥 스크롤 창으로 넘긴다(누르기는 단추가 받음)
@@ -405,7 +452,7 @@ func _style_relative(b: RelativeButton, alive: bool) -> void:
 	var styles: Dictionary = _rel_alive_style if alive else _rel_dead_style
 	for k in styles:
 		b.add_theme_stylebox_override(k, styles[k])
-	var fc := _c_text if alive else Color(_c_dim, UiConfig.num("info.dead_alpha") + 0.25)
+	var fc := _c_text if alive else Color(_c_dim, UiConfig.num("info.dead_text_alpha"))
 	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 		b.add_theme_color_override(k, fc)
 	b.tooltip_text = _relative_tip(b.slime_id)
@@ -462,7 +509,7 @@ func _build() -> void:
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_main.add_child(_scroll)
-	var m := _margin(_pad, _pad * 0.8, _pad, _pad)
+	var m := _margin(_pad, _pad * PAD_TIGHT, _pad, _pad)
 	m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scroll.add_child(m)
 	_body = VBoxContainer.new()
@@ -476,10 +523,10 @@ func _build() -> void:
 
 
 func _build_header() -> void:
-	var m := _margin(_pad, _pad, _pad, _pad * 0.8)
+	var m := _margin(_pad, _pad, _pad, _pad * PAD_TIGHT)
 	_main.add_child(m)
 	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", int(_pad * 0.8))
+	head.add_theme_constant_override("separation", int(_pad * PAD_TIGHT))
 	m.add_child(head)
 	var sw := UiConfig.num("info.swatch_size")
 	_swatch = SlimeSwatch.new()
@@ -490,23 +537,24 @@ func _build_header() -> void:
 	var tb := VBoxContainer.new()
 	tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	tb.add_theme_constant_override("separation", 2)
+	tb.add_theme_constant_override("separation", UiConfig.integer("info.title_gap"))
 	head.add_child(tb)
 	var trow := HBoxContainer.new()
 	tb.add_child(trow)
-	_title = _label("", _fs_title + 2, _c_text, true)
+	_title = _label("", _fs_title, _c_text, true)
 	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	trow.add_child(_title)
 	_follow = Button.new()
 	_follow.text = "따라가기"
 	_follow.toggle_mode = true
+	_follow.theme_type_variation = SMALL_BUTTON
 	_follow.focus_mode = Control.FOCUS_NONE
 	_follow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_follow.tooltip_text = "카메라가 이 개체를 따라갑니다 (F)"
 	_follow.toggled.connect(_on_follow_toggled)
 	trow.add_child(_follow)
 	var srow := HBoxContainer.new()
-	srow.add_theme_constant_override("separation", 8)
+	srow.add_theme_constant_override("separation", UiConfig.integer("info.inline_gap"))
 	tb.add_child(srow)
 	_gen = _label("", _fs_small, _c_dim, true)
 	srow.add_child(_gen)
@@ -533,7 +581,7 @@ func _build_state() -> void:
 	_energy_label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_energy_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_energy_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_energy_label.add_theme_constant_override("outline_size", 4)
+	_energy_label.add_theme_constant_override("outline_size", UiConfig.integer("info.energy_outline"))
 	_energy_label.add_theme_color_override("font_outline_color", _c_bg)
 	_energy_bar.add_child(_energy_label)
 	_v_carry = _row(g, "운반")
@@ -558,7 +606,7 @@ func _build_traits() -> void:
 	_v_sense = _row(g, "감지")
 	_key(g, "색")
 	var hb := HBoxContainer.new()
-	hb.add_theme_constant_override("separation", 8)
+	hb.add_theme_constant_override("separation", UiConfig.integer("info.inline_gap"))
 	g.add_child(hb)
 	_hue_dot = ColorDot.new()
 	_hue_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -579,9 +627,33 @@ func _build_brain() -> void:
 	_brain_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_brain_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sec.add_child(_brain_note)
+	# 열지도는 창 폭에 맞추고(BrainView.max_width), 그래도 넘치는 큰 두뇌(은닉 64 등)는 이 안에서만 가로 스크롤 —
+	# 정보 창 폭(= 지도 폭)이 고른 개체에 따라 바뀌지 않게. 세로 휠은 바깥 스크롤로 넘긴다.
+	_brain_scroll = ScrollContainer.new()
+	_brain_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_brain_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_brain_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_brain_scroll.gui_input.connect(_on_brain_wheel)
+	sec.add_child(_brain_scroll)
+	var center := CenterContainer.new()
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.mouse_filter = Control.MOUSE_FILTER_PASS
+	_brain_scroll.add_child(center)
 	_brain = BrainView.new()
-	_brain.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	sec.add_child(_brain)
+	center.add_child(_brain)
+
+
+## 두뇌 열지도 위의 세로 휠은 바깥(창 본문) 스크롤로(가로 스크롤 상자가 휠을 가로로 먹지 않게). Shift+휠은 가로.
+func _on_brain_wheel(event: InputEvent) -> void:
+	var mb := event as InputEventMouseButton
+	if mb == null or not mb.pressed or mb.shift_pressed:
+		return
+	if mb.button_index != MOUSE_BUTTON_WHEEL_UP and mb.button_index != MOUSE_BUTTON_WHEEL_DOWN:
+		return
+	var page := _scroll.get_v_scroll_bar().page
+	var sign := -1.0 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0
+	_scroll.scroll_vertical += int(sign * page * WHEEL_PAGE * maxf(mb.factor, 1.0))
+	_brain_scroll.accept_event()
 
 
 func _build_family() -> void:
@@ -629,9 +701,9 @@ func _margin(l: float, t: float, r: float, b: float) -> MarginContainer:
 ## 절: 작은 굵은 제목 + 오른쪽으로 이어지는 가는 선.
 func _section(title: String) -> VBoxContainer:
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", _row_gap + 2)
+	box.add_theme_constant_override("separation", _row_gap + UiConfig.integer("info.title_gap"))
 	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 8)
+	head.add_theme_constant_override("separation", UiConfig.integer("info.inline_gap"))
 	box.add_child(head)
 	head.add_child(_label(title, _fs_small, _c_accent, true))
 	var line := HSeparator.new()
@@ -645,7 +717,7 @@ func _section(title: String) -> VBoxContainer:
 func _grid(parent: Control) -> GridContainer:
 	var g := GridContainer.new()
 	g.columns = 2
-	g.add_theme_constant_override("h_separation", 10)
+	g.add_theme_constant_override("h_separation", UiConfig.integer("info.key_gap"))
 	g.add_theme_constant_override("v_separation", _row_gap)
 	parent.add_child(g)
 	return g
@@ -673,11 +745,11 @@ func _row(g: GridContainer, key: String) -> Label:
 ## 가계 한 줄: 열쇠 글자 + 줄바꿈 단추 흐름.
 func _family_row(sec: VBoxContainer, key: String) -> HFlowContainer:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
+	row.add_theme_constant_override("separation", UiConfig.integer("info.key_gap"))
 	sec.add_child(row)
 	var k := _label(key, _fs_small, _c_dim)
 	# 첫 줄 단추와 글자 높이를 맞춘다(단추 = 굵은 글꼴 높이 + 위아래 여백)
-	k.custom_minimum_size = Vector2(_key_w, _bold.get_height(_fs_small) + REL_PAD_Y * 2.0)
+	k.custom_minimum_size = Vector2(_key_w, _bold.get_height(_fs_small) + _rel_pad_y * 2.0)
 	k.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	k.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	row.add_child(k)
@@ -712,23 +784,15 @@ static func _fmt_int(n: int) -> String:
 	return ("-" if n < 0 else "") + s + out
 
 
-# ── 테마(색·글자 크기는 ui.json theme·lab·info) ──
+# ── 테마(공용 UiTheme + 이 창에만 있는 것. 수치는 ui.json theme·lab·info) ──
 
-func _flat(bg: Color, radius: float, pad_x: float, pad_y: float) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = bg
-	s.set_corner_radius_all(int(radius))
-	s.content_margin_left = pad_x
-	s.content_margin_right = pad_x
-	s.content_margin_top = pad_y
-	s.content_margin_bottom = pad_y
-	s.anti_aliasing = true
-	return s
+func _box(bg: Color, radius: float, pad_x: float, pad_y: float) -> StyleBoxFlat:
+	return UiTheme.box(bg, Color(0, 0, 0, 0), 0, int(radius), pad_x, pad_y)
 
 
 func _panel_style() -> StyleBoxFlat:
-	var s := _flat(_c_panel, 0.0, 0.0, 0.0)
-	s.border_width_left = 1
+	var s := _box(_c_panel, 0.0, 0.0, 0.0)
+	s.border_width_left = PANEL_BORDER
 	s.border_color = _c_border
 	s.anti_aliasing = false
 	return s
@@ -736,62 +800,46 @@ func _panel_style() -> StyleBoxFlat:
 
 func _make_theme() -> Theme:
 	var th := Theme.new()
+	# 공용 테마를 바탕으로: 단추(따라가기)·말풍선·차림표는 실험실 전체와 같은 모양(theme.button_padding_* 등)
+	th.merge_with(UiTheme.build())
 	th.default_font_size = _fs
 	var r := UiConfig.num("info.corner_radius")
-	th.set_color("font_color", "Label", _c_text)
-	# 일반 단추(따라가기): 눌림 = 강조색
-	th.set_stylebox("normal", "Button", _flat(_c_border, r, 10.0, 4.0))
-	th.set_stylebox("hover", "Button", _flat(_c_border.lightened(0.12), r, 10.0, 4.0))
-	th.set_stylebox("pressed", "Button", _flat(_c_accent.darkened(0.08), r, 10.0, 4.0))
-	th.set_stylebox("hover_pressed", "Button", _flat(_c_accent, r, 10.0, 4.0))
-	th.set_stylebox("disabled", "Button", _flat(Color(_c_border, 0.45), r, 10.0, 4.0))
-	th.set_stylebox("focus", "Button", StyleBoxEmpty.new())
-	th.set_color("font_color", "Button", _c_text)
-	th.set_color("font_hover_color", "Button", _c_text)
-	th.set_color("font_focus_color", "Button", _c_text)
-	th.set_color("font_pressed_color", "Button", _c_bg)
-	th.set_color("font_hover_pressed_color", "Button", _c_bg)
-	th.set_color("font_disabled_color", "Button", Color(_c_dim, 0.55))
-	th.set_font_size("font_size", "Button", _fs_small)
-	th.set_font("font", "Button", _bold)
+	# 작은 단추(따라가기·가계): 공용 단추 모양 + 굵은 작은 글자
+	th.set_type_variation(SMALL_BUTTON, "Button")
+	th.set_font("font", SMALL_BUTTON, _bold)
+	th.set_font_size("font_size", SMALL_BUTTON, _fs_small)
 	# 에너지 막대
-	var br := r * 0.75
-	th.set_stylebox("background", "ProgressBar", _flat(_c_bg, br, 0.0, 0.0))
+	var br := r * BAR_RADIUS_K
+	th.set_stylebox("background", "ProgressBar", _box(_c_bg, br, 0.0, 0.0))
 	for c in [_c_accent, _c_warn, _c_danger]:
-		_fill_styles.append(_flat(Color(c).darkened(0.12), br, 0.0, 0.0))
+		_fill_styles.append(_box(Color(c).darkened(FILL_DARKEN), br, 0.0, 0.0))
 	th.set_stylebox("fill", "ProgressBar", _fill_styles[ENERGY_OK])
-	# 구분선
+	# 촘촘한 구분선(머리 아래·절 제목 옆, 높이 info.separator_gap)
 	var line := StyleBoxLine.new()
 	line.color = _c_border
-	line.thickness = 1
+	line.thickness = PANEL_BORDER
 	th.set_stylebox("separator", "HSeparator", line)
-	th.set_constant("separation", "HSeparator", 1)
+	th.set_constant("separation", "HSeparator", UiConfig.integer("info.separator_gap"))
 	# 가는 스크롤 막대
 	var sbw := UiConfig.num("info.scrollbar_width")
-	var track := _flat(Color(_c_bg, 0.0), sbw * 0.5, sbw * 0.5, 0.0)
+	var half := sbw * PAD_HALF
+	var track := _box(Color(_c_bg, 0.0), half, half, 0.0)
 	th.set_stylebox("scroll", "VScrollBar", track)
 	th.set_stylebox("scroll_focus", "VScrollBar", track)
-	th.set_stylebox("grabber", "VScrollBar", _flat(_c_border.lightened(0.08), sbw * 0.5, sbw * 0.5, 0.0))
-	th.set_stylebox("grabber_highlight", "VScrollBar", _flat(_c_border.lightened(0.25), sbw * 0.5, sbw * 0.5, 0.0))
-	th.set_stylebox("grabber_pressed", "VScrollBar", _flat(_c_accent.darkened(0.2), sbw * 0.5, sbw * 0.5, 0.0))
-	# 풍선 도움말
-	var tip := _flat(_c_bg, r, 8.0, 6.0)
-	tip.set_border_width_all(1)
-	tip.border_color = _c_border
-	th.set_stylebox("panel", "TooltipPanel", tip)
-	th.set_color("font_color", "TooltipLabel", _c_text)
-	th.set_font_size("font_size", "TooltipLabel", _fs_small)
-	# 가계 단추 모양(살아 있음 / 죽음)
-	var lp := UiConfig.num("info.relative_dot") + _pad * 0.5 + 5.0
+	th.set_stylebox("grabber", "VScrollBar", _box(_c_border.lightened(GRAB_LIGHTEN), half, half, 0.0))
+	th.set_stylebox("grabber_highlight", "VScrollBar", _box(_c_border.lightened(GRAB_HOVER_LIGHTEN), half, half, 0.0))
+	th.set_stylebox("grabber_pressed", "VScrollBar", _box(_c_accent.darkened(GRAB_PRESS_DARKEN), half, half, 0.0))
+	# 가계 단추 모양(살아 있음 / 죽음): 왼쪽은 계통 색 점 자리
+	var lp := UiConfig.num("info.relative_dot") + _pad * PAD_HALF + UiConfig.num("info.relative_pad_left")
+	var rp := UiConfig.num("info.relative_pad_right")
 	for k in ["normal", "hover", "pressed", "hover_pressed"]:
-		var a := _flat(_c_border.lightened(0.04 if k == "normal" else 0.16), r, 6.0, REL_PAD_Y)
+		var lift := UiConfig.num("info.relative_lighten" if k == "normal" else "info.relative_hover_lighten")
+		var a := _box(_c_border.lightened(lift), r, rp, _rel_pad_y)
 		a.content_margin_left = lp
-		a.content_margin_right = 7.0
 		_rel_alive_style[k] = a
-		var dstyle := _flat(Color(_c_panel, 1.0) if k == "normal" else _c_border.darkened(0.1), r, 6.0, REL_PAD_Y)
+		var dstyle := _box(Color(_c_panel, 1.0) if k == "normal" else _c_border.darkened(UiConfig.num("info.relative_dead_darken")), r, rp, _rel_pad_y)
 		dstyle.content_margin_left = lp
-		dstyle.content_margin_right = 7.0
-		dstyle.set_border_width_all(1)
+		dstyle.set_border_width_all(PANEL_BORDER)
 		dstyle.border_color = _c_border
 		_rel_dead_style[k] = dstyle
 	return th
@@ -815,7 +863,24 @@ class SlimeSwatch:
 	const GLINT_R := 0.05
 	## 바닥 그림자 납작함
 	const SHADOW_FLAT := 0.22
+	## 몸 둘레 여백(픽셀)·바닥 높이
+	const INSET := 1.5
+	const TOP_INSET := 3.0
+	const BASE_INSET := 2.0
+	## 윗부분 반사광 자리·크기·불투명도, 윤곽선 어둡게·두께, 죽은 몸 어둡게, 반사점 위치, × 선 두께
+	const SHINE_X := 0.42
+	const SHINE_Y := 0.7
+	const SHINE_R := 0.13
+	const SHINE_ALPHA := 0.4
+	const OUTLINE_DARKEN := 0.55
+	const OUTLINE_W := 1.5
+	const DEAD_DARKEN := 0.3
+	const GLINT_OFF := 0.35
+	const CROSS_W := 2.0
 
+	## 눈 색(ui.slime.eye_color)·바닥 그림자 불투명도(ui.map.blob_shadow_alpha) — InfoPanel 이 넣음
+	var eye_color := Color.BLACK
+	var shadow_alpha := 0.4
 	var color := Color.WHITE:
 		set(v):
 			color = v
@@ -826,12 +891,12 @@ class SlimeSwatch:
 			queue_redraw()
 
 	func _draw() -> void:
-		var rx := size.x * 0.5 / (1.0 + SPREAD) - 1.5
-		var ry := size.y - 3.0
-		var base := Vector2(size.x * 0.5, size.y - 2.0)
+		var rx := size.x * 0.5 / (1.0 + SPREAD) - INSET
+		var ry := size.y - TOP_INSET
+		var base := Vector2(size.x * 0.5, size.y - BASE_INSET)
 		# 바닥 그림자(납작한 타원)
 		draw_set_transform(base, 0.0, Vector2(1.0, SHADOW_FLAT))
-		draw_circle(Vector2.ZERO, rx * (1.0 + SPREAD), Color(0, 0, 0, 0.35), true, -1.0, true)
+		draw_circle(Vector2.ZERO, rx * (1.0 + SPREAD), Color(0, 0, 0, shadow_alpha), true, -1.0, true)
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 		var pts := PackedVector2Array()
 		for k in SEGMENTS + 1:
@@ -841,23 +906,23 @@ class SlimeSwatch:
 			var cx := signf(c) * pow(absf(c), ROUNDNESS)
 			# 위는 둥글게, 바닥 가까이(s 작음)는 조금 퍼지게
 			pts.append(base + Vector2(cx * rx * (1.0 + SPREAD * (1.0 - s)), -s * ry))
-		var body := color.darkened(0.3) if dead else color
+		var body := color.darkened(DEAD_DARKEN) if dead else color
 		draw_colored_polygon(pts, body)
 		var outline := pts.duplicate()
 		outline.append(pts[0])
-		draw_polyline(outline, body.darkened(0.55), 1.5, true)
+		draw_polyline(outline, body.darkened(OUTLINE_DARKEN), OUTLINE_W, true)
 		# 윗부분 반사광
-		draw_circle(base + Vector2(-rx * 0.42, -ry * 0.7), rx * 0.13, Color(1, 1, 1, 0.4), true, -1.0, true)
-		var eye := Color(0.08, 0.08, 0.1)
+		draw_circle(base + Vector2(-rx * SHINE_X, -ry * SHINE_Y), rx * SHINE_R, Color(1, 1, 1, SHINE_ALPHA), true, -1.0, true)
+		var eye := eye_color
 		for sx in [-1.0, 1.0]:
 			var e := base + Vector2(rx * EYE_DX * sx, -ry * EYE_Y)
 			var er := rx * EYE_R
 			if dead:
-				draw_line(e + Vector2(-er, -er), e + Vector2(er, er), eye, 2.0, true)
-				draw_line(e + Vector2(-er, er), e + Vector2(er, -er), eye, 2.0, true)
+				draw_line(e + Vector2(-er, -er), e + Vector2(er, er), eye, CROSS_W, true)
+				draw_line(e + Vector2(-er, er), e + Vector2(er, -er), eye, CROSS_W, true)
 			else:
 				draw_circle(e, er, eye, true, -1.0, true)
-				draw_circle(e + Vector2(-er * 0.35, -er * 0.35), rx * GLINT_R, Color.WHITE, true, -1.0, true)
+				draw_circle(e + Vector2(-er * GLINT_OFF, -er * GLINT_OFF), rx * GLINT_R, Color.WHITE, true, -1.0, true)
 
 
 ## 색 점(테두리 있는 원).
@@ -882,7 +947,10 @@ class RelativeButton:
 	var alive := true
 	var dot := 8.0
 	var dot_left := 7.0
-	var dead_alpha := 0.5
+	## 죽은 친척의 속 빈 점 불투명도(ui.info.dead_dot_alpha), 점 테두리 두께
+	var dead_alpha := 0.7
+	const RING_W := 1.5
+	const RING_SEGS := 20
 
 	func _draw() -> void:
 		var r := dot * 0.5
@@ -890,4 +958,4 @@ class RelativeButton:
 		if alive:
 			draw_circle(c, r, dot_color, true, -1.0, true)
 		else:
-			draw_arc(c, r - 0.75, 0.0, TAU, 20, Color(dot_color, dead_alpha + 0.2), 1.5, true)
+			draw_arc(c, r - RING_W * 0.5, 0.0, TAU, RING_SEGS, Color(dot_color, dead_alpha), RING_W, true)

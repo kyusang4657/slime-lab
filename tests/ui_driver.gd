@@ -4,7 +4,7 @@ extends SceneTree
 ## scenes/lab.tscn 을 뿌리 창(1600×900)에 띄우고 프레임은 LabMain.advance_frame 으로 직접 몬다.
 ## 시나리오: ① 전경(기본·씨앗 1, 8배로 약 10초) ② fast_civ 농사 단계 낮, 밭 가까이 자식 있는 개체 선택·카메라 맞춤
 ## ③ 같은 자리의 밤(멈춤) ④ 64배와 실제 배속 표시.
-## 동작: 지도 클릭 → 정보 창 id(실제 MapView 면 실제 입력, 뼈대면 신호), 속도·멈춤 단추 클릭, 단축키,
+## 동작: 지도 클릭(실제 마우스 입력) → pick_slime → 정보 창 id, 빈 곳 클릭 → 선택 해제, 속도·멈춤 단추 클릭, 단축키,
 ## 화면으로 진행해도 역사 해시가 헤드리스와 같음. 그림은 lab-*.jpg(품질 0.85, 600KB 이하 확인). 끝에 RESULT 줄.
 ## 이전 프로젝트(little-monster-village, 같은 저자·MIT)의 tests/integration_driver.gd 입력 흉내(_click)를 가져와 고침.
 
@@ -139,6 +139,10 @@ func _farm() -> void:
 	check(w.light >= UiConfig.num("lab.day_light_threshold") and lab._lbl_daynight.text == "낮", "농사 장면은 낮(빛 %.2f)" % w.light)
 	check(int(got.n) > 0 and not lab.visible_toasts().is_empty(), "쌓인 사건 %d건 → 알림" % int(got.n))
 	check(lab.info_panel.current_id() == best, "정보 창 = 고른 개체 #%d" % best)
+	# V07: 정보 창이 스크롤 없이 두뇌 범례까지(여유 info.min_vertical_slack 이상, 1600×900)
+	if root.size.y >= 900:
+		var over := lab.info_panel.content_overflow()
+		check(over <= -UiConfig.num("info.min_vertical_slack"), "V07 정보 창 스크롤 없음(여유 %.0fpx)" % -over)
 	check(lab._lbl_stage.text == SimWorld.STAGE_NAMES[SimWorld.STAGE_FARM], "문명 단계 표시: " + lab._lbl_stage.text)
 	await _shot("lab-02-farm-selected")
 
@@ -194,21 +198,24 @@ func _speed64() -> void:
 
 # ── 동작 확인 ──
 
-## 화면 가운데에 가까운 살아 있는 개체를 찾아 누른다. 실제 MapView(pick_slime 이 개체를 찾음)면 실제 마우스 입력,
-## 뼈대 MapView 면 slime_clicked 신호로 연결만 확인한다.
+## 화면 가운데에 가까운 살아 있는 개체를 찾아 실제 마우스 입력으로 누른다(그린 위치를 몸 가운데 높이로 투영 —
+## pick_slime 이 쓰는 면과 같음). pick_slime 이 그 개체를 찾아야 하고(못 찾으면 실패), 정보 창·선택이 그 id.
+## 이어서 지도 모서리(빈 곳)를 누르면 선택 해제.
 func _click_slime() -> void:
 	var w := lab.world
-	var cam := lab.map_view.get_camera()
-	var sv := lab.map_view.get_viewport() as SubViewport
+	var mv := lab.map_view
+	var cam := mv.get_camera()
+	var sv := mv.get_viewport() as SubViewport
 	var svc := sv.get_parent() as SubViewportContainer
-	var tile := UiConfig.num("map.tile_size")
 	var mid := Vector2(sv.size) * 0.5
+	var center_y := SlimeGeo.slime_mesh().get_aabb().size.y * 0.5 * mv.display_scale()
 	var best_i := -1
 	var best_d := INF
 	var best_pos := Vector2.ZERO
 	for i in w.population():
-		var wp := Vector3((float(w.s_x[i]) + 0.5) * tile, 0.0, (float(w.s_y[i]) + 0.5) * tile)
-		if cam == null or cam.is_position_behind(wp):
+		var q := mv.slime_instance_position(i)
+		var wp := Vector3(q.x, center_y, q.z)
+		if cam.is_position_behind(wp):
 			continue
 		var sp := cam.unproject_position(wp)
 		var d := sp.distance_to(mid)
@@ -219,17 +226,16 @@ func _click_slime() -> void:
 	check(best_i >= 0, "화면 안의 개체를 찾음")
 	if best_i < 0:
 		return
-	var picked := lab.map_view.pick_slime(best_pos)
-	if picked >= 0:
-		var scale := svc.size / Vector2(sv.size)
-		await _click(svc.get_global_rect().position + best_pos * scale)
-		check(lab.info_panel.current_id() == picked and lab.selected_id() == picked, "지도 클릭(실제 입력) → 정보 창 #%d (지금 %d)" % [picked, lab.info_panel.current_id()])
-		await _click(Vector2(svc.get_global_rect().position) + Vector2(4, 4))
-		print("  빈 곳(모서리) 클릭 뒤 선택 %d" % lab.selected_id())
-	else:
-		var id := w.s_id[best_i]
-		lab.map_view.slime_clicked.emit(id)
-		check(lab.info_panel.current_id() == id, "지도 클릭(신호, 뼈대 MapView) → 정보 창 #%d" % id)
+	var want := w.s_id[best_i]
+	var picked := mv.pick_slime(best_pos)
+	check(picked == want, "화면 가운데 개체를 고를 수 있음(pick_slime #%d, 그린 개체 #%d)" % [picked, want])
+	if picked < 0:
+		return
+	var scale := svc.size / Vector2(sv.size)
+	await _click(svc.get_global_rect().position + best_pos * scale)
+	check(lab.info_panel.current_id() == want and lab.selected_id() == want, "지도 클릭(실제 입력) → 정보 창 #%d (지금 %d)" % [want, lab.info_panel.current_id()])
+	await _click(Vector2(svc.get_global_rect().position) + Vector2(4, 4))
+	check(lab.selected_id() == -1 and lab.info_panel.current_id() == -1, "빈 곳(지도 모서리) 클릭 → 선택 해제(%d)" % lab.selected_id())
 
 
 func _click_buttons() -> void:

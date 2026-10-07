@@ -20,7 +20,7 @@
 |---|---|---|
 | `w`, `h` | int | 지도 크기(칸) |
 | `tick`, `seed_value` | int | 현재 틱, 씨앗 |
-| `light`, `season`, `season_growth` | float, int, float | 빛 0~1, 계절 0~3(-1 = 계절 없음), 계절 성장 배수 |
+| `light`, `season`, `season_growth` | float, int, float | 빛 0~1, 계절 0~3(-1 = 계절 없음), 계절 성장 배수. 틱 사이(`setup`·`step()` 뒤·스냅숏을 연 뒤)에는 언제나 **지금 `tick`** 의 값(날 = `tick / cfg.time.day_ticks + 1` 과 같은 틱) |
 | `tiles[c]` | PackedByteArray | 칸 종류 `SimGrid.TILE_*`(풀밭·물·바위·밭), `c = y * w + x` |
 | `fert[c]`, `food[c]`, `food_cap[c]`, `dropped[c]` | PackedFloat64Array | 비옥도, 식물 먹이, 먹이 상한, 바닥 먹이 |
 | `stage`, `discovery_tick[stage]` | int, Array[int] | 문명 단계 `SimWorld.STAGE_*`, 단계별 발견 틱(-1 = 아직) |
@@ -37,11 +37,27 @@
 | `mean_generation()`, `mean_of(arr)`, `sum_of(arr)`, `mean_sense()`, `mean_age()` | float | 통계 |
 | `sample() -> Dictionary` | | 시계열 한 줄(`SimRecorder.TIMESERIES_COLUMNS` 키). **호출하면 기간 출생·사망 수를 0 으로** 되돌리므로 기록기만 부른다 |
 | `chronicle` | Array[Dictionary] | 연대기 `{tick, kind, actor, text, mean_gen, …}` |
-| `drain_events() -> Array` | | 지난 호출 이후 새 사건(알림·소리용) |
+| `drain_events() -> Array` | | 지난 호출 이후 새 사건(알림·소리용). 사건 사전은 `chronicle` 항목의 **사본**이라 받는 쪽이 고쳐 써도 연대기·기록이 바뀌지 않음 |
 | `history_hash` | String | 역사 해시(같은 씨앗·설정이면 같음) |
 | `is_extinct()`, `extinct_tick`, `peak_population` | | 멸종·최고 인구 |
+| `cfg` | Dictionary | 이 세계의 실험 설정(`SimConfig.build` 결과). **읽기 전용 — 화면은 절대 쓰지 않음**(시뮬레이션이 매 틱 읽는 살아 있는 사전). 화면이 읽는 키: `cfg.time.day_ticks`(날 표시, LabMain), `cfg.brain.weight_clamp`(두뇌 열지도 색 상한, InfoPanel), `cfg.hash.every`(검사만) |
 
 사건 `kind`: `discovery`(+`stage`), `store_built`(+`tile`), `first_farm`, `farm_lost`, `milestone`, `extinction`.
+
+## 상수·정적 도움 함수
+
+다른 구현(C#/GDExtension)도 같은 이름·값으로 내놓아야 하는 것. 화면은 아래만 씁니다.
+
+| 이름 | 뜻 |
+|---|---|
+| `SimGrid.TILE_GRASS`·`TILE_WATER`·`TILE_ROCK`·`TILE_FARM` | 칸 종류(`tiles[c]` 값) |
+| `SimGrid.DX`, `SimGrid.DY`, `SimGrid.DIR_COUNT` | 방향(0 북 1 동 2 남 3 서)의 x·y 변화, 방향 수(4) |
+| `SimGrid.passable(tile) -> bool` | 슬라임이 설 수 있는 칸(풀밭·밭) |
+| `SimBrain.ACT_*`(`ACT_EAT`·`ACT_GATHER`·`ACT_PLANT` 등) | 행동 번호(`s_last_action` 값) |
+| `SimBrain.BASE_INPUTS`, `SimBrain.BASE_OUTPUTS` | 기억 뉴런을 빼 기본 입력(12)·출력(8) 수 |
+| `SimWorld.STAGE_*`, `SimWorld.NO_PARENT`, `SimWorld.SEASON_COUNT` | 문명 단계 번호, 부모 없음(-1), 계절 수 |
+
+`tools/test_repo_rules.py` 가 `scripts/view`·`scripts/ui` 에서 `world.<이름>`·`_world.<이름>` 으로 쓰는 멤버가 모두 이 문서에 있는지 검사합니다.
 
 ## 두뇌·유전체
 

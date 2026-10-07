@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import analyze  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
+## config/sim-defaults.json 의 run.max_ticks 흉내(실행기가 summary.json 의 config 에 남기는 값)
+CONFIG_MAX_TICKS = 2000000
 
 
 # ── 가짜 실행 결과 ──
@@ -35,8 +37,9 @@ REPO = Path(__file__).resolve().parent.parent
 def write_fake_run(run_dir: Path, seed: int, disc: dict, *, civ: int, end_reason: str = "generations",
                    extinct_tick: int = -1, ticks: int = 400, final_gen: float = 8.0, preset: str = "default",
                    overrides: dict | None = None, odd_text: bool = False,
-                   generations_target: float | None = None) -> None:
-    """실행기 결과 폴더 흉내. disc = {"채집": (틱, 세대), ...} — 없는 단계는 발견 못 함."""
+                   generations_target: float | None = None, max_ticks: int | None = None) -> None:
+    """실행기 결과 폴더 흉내. disc = {"채집": (틱, 세대), ...} — 없는 단계는 발견 못 함.
+    max_ticks 를 주면 실행기처럼 실제로 쓴 틱 상한과 설정의 run.max_ticks(기본 CONFIG_MAX_TICKS)를 남긴다."""
     run_dir.mkdir(parents=True, exist_ok=True)
     names = analyze.STAGE_NAMES_KO
     summary = {
@@ -50,6 +53,9 @@ def write_fake_run(run_dir: Path, seed: int, disc: dict, *, civ: int, end_reason
         "generations_target": final_gen if generations_target is None else generations_target,
         "preset": preset, "overrides": overrides or {}, "resumed_from": "",
     }
+    if max_ticks is not None:
+        summary["max_ticks"] = max_ticks
+        summary["config"]["run"] = {"max_ticks": float(CONFIG_MAX_TICKS)}
     (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent="\t"), encoding="utf-8")
     # 연대기: 발견 사건 + 쉼표가 든 저장고 사건(따옴표 처리 확인)
     lines = [",".join(analyze.CHRONICLE_COLUMNS)]
@@ -125,6 +131,15 @@ class TestArgs(unittest.TestCase):
         self.assertEqual(analyze.parse_param("mutation.rate=0.02,0.1,0.02"), ("mutation.rate", ["0.02", "0.1"]))
         with self.assertRaises(ValueError):
             analyze.parse_param("a=1,,2")
+        # 배열 값: 괄호 안 쉼표는 나누지 않음
+        self.assertEqual(analyze.parse_param("seasons.growth=[1,1,0.5,0],[1,1,1,1]"),
+                         ("seasons.growth", ["[1,1,0.5,0]", "[1,1,1,1]"]))
+        self.assertEqual(analyze.parse_param("a=[1,2]"), ("a", ["[1,2]"]))
+        for bad in ("a=[1,2", "a=1,2]", "a=[1,2},[3]", "a=[1,x]"):
+            with self.assertRaises(ValueError, msg=bad):
+                analyze.parse_param(bad)
+        grid = analyze.build_grid([analyze.parse_param("seasons.growth=[1,1,0.5,0],[1,1,1,1]")])
+        self.assertEqual(len({c for c, _ in grid}), 2)  # 칸 폴더 이름이 겹치지 않음
 
     def test_grid(self) -> None:
         grid = analyze.build_grid([("mutation.rate", ["0.02", "0.1"]), ("resources.scale", ["1", "1.6"])])
@@ -159,6 +174,12 @@ class TestArgs(unittest.TestCase):
         cells = ["rate=0.1", "rate=0.02", "rate=1.5", "rate=0.05"]
         self.assertEqual(sorted(cells, key=analyze.natural_key), ["rate=0.02", "rate=0.05", "rate=0.1", "rate=1.5"])
         self.assertEqual(sorted(["seed10", "seed2", "seed1"], key=analyze.natural_key), ["seed1", "seed2", "seed10"])
+        # '-' 는 구분자: 하이픈 번호·날짜 폴더가 거꾸로 서지 않음
+        self.assertEqual(sorted(["trial-10", "trial-2", "trial-1"], key=analyze.natural_key), ["trial-1", "trial-2", "trial-10"])
+        self.assertEqual(sorted(["2026-10-07", "2026-09-30"], key=analyze.natural_key), ["2026-09-30", "2026-10-07"])
+        # '=' 바로 뒤·맨 앞의 '-' 는 음수 부호
+        self.assertEqual(sorted(["x=0.1", "x=-0.5", "x=-1", "x=2"], key=analyze.natural_key), ["x=-1", "x=-0.5", "x=0.1", "x=2"])
+        self.assertEqual(sorted(["3", "-1", "-5"], key=analyze.natural_key), ["-5", "-1", "3"])
 
 
 # ── 보고서 ──
@@ -195,6 +216,8 @@ class TestReport(TempDirCase):
         # 끝 특성 = 살아 있던 마지막 줄(멸종 뒤 0 줄은 빼고)
         self.assertEqual(rows[0]["final_mean_size"], "0.98")
         self.assertEqual(rows[3]["final_mean_sense"], "3")
+        # 멸종한 실행의 끝 평균 세대 = 멸종 직전 값(summary.json 의 0 이 아님): 시계열 80틱 줄 = 8.0 × 80/100
+        self.assertEqual(rows[3]["mean_generation"], "6.4")
 
     def test_aggregation(self) -> None:
         self.run_report(self.out, plots=False)
@@ -219,6 +242,18 @@ class TestReport(TempDirCase):
         self.assertEqual(a2["disc_gen_store_n"], "0")
         self.assertTrue(math.isnan(f(a2["disc_gen_store_median"])))
         self.assertAlmostEqual(f(a1["run_seconds_total"]), 1.25 + 2.5)
+        # 멸종한 실행(0)이 끝 평균 세대 중앙값을 끌어내리지 않음: [8.0, 6.4] → 7.2 (고치기 전 [8.0, 0.0] → 4.0)
+        self.assertAlmostEqual(f(a2["mean_generation_median"]), 7.2)
+
+    def test_gdignore(self) -> None:
+        """보고서 폴더(그리고 run·sweep 결과 폴더)에 .gdignore — 저장소 안이어도 Godot 이 CSV·PNG 를 가져오지 않게."""
+        self.assertEqual(self.run_report(self.out, plots=False), 0)
+        self.assertTrue((self.out / ".gdignore").is_file())
+        for cmd in (["run", "--seeds", "1"], ["sweep", "--param", "a=1,2", "--seeds", "1"]):
+            out = self.tmp / cmd[0]
+            with mock.patch.object(analyze.subprocess, "run", FakeRunner()), quiet():
+                analyze.main(cmd + ["--out", str(out), "--godot", "g", "--no-plots"])
+            self.assertTrue((out / ".gdignore").is_file(), cmd[0])
 
     def test_report_md_and_plots(self) -> None:
         self.assertEqual(self.run_report(self.out), 0)
@@ -336,8 +371,9 @@ class FakeRunner:
                     sets[k] = json.loads(v)
                 except ValueError:
                     sets[k] = v
+        cap = int(args["max-ticks"]) if "max-ticks" in args else CONFIG_MAX_TICKS
         write_fake_run(Path(args["out"]), seed, {"채집": (100, 1.0 + seed)}, civ=1, preset=args["preset"],
-                       overrides=sets, generations_target=float(args["generations"]))
+                       overrides=sets, generations_target=float(args["generations"]), max_ticks=cap)
         res = f"RESULT: seed={seed} generations=8.0 ticks=400 pop=120 civ=1(채집) hash=0123 time=0.1s reason=generations"
         return subprocess.CompletedProcess(cmd, 0, "Godot Engine v4.4.1\n" + res + "\n", "")
 
@@ -364,6 +400,8 @@ class TestRunCommands(TempDirCase):
         for _, kw in fake.calls:
             self.assertEqual(kw.get("timeout"), 77.0)
             self.assertEqual(kw.get("cwd"), str(REPO))
+            # 실행기 출력은 OS 의 코드 페이지가 아니라 UTF-8 로 읽는다(Windows cp949·cp1252 에서 "농사" 가 깨지지 않게)
+            self.assertEqual((kw.get("encoding"), kw.get("errors")), ("utf-8", "replace"))
         runs = read_csv_rows(out / "runs.csv")
         self.assertEqual([(r["seed"], r["status"]) for r in runs], [("1", "ok"), ("2", "existing"), ("3", "ok")])
         self.assertTrue(runs[0]["result"].startswith("RESULT: seed=1 "))
@@ -399,6 +437,40 @@ class TestRunCommands(TempDirCase):
         self.assertIn("mutation.rate 없음 ≠ 0.1", runs["1"]["result"])
         self.assertIn("설정이 다른 결과", buf.getvalue())
         self.assertIn("mismatch", (out / "report.md").read_text(encoding="utf-8"))
+
+    def test_resume_with_other_max_ticks_is_flagged(self) -> None:
+        """--max-ticks 로 잘린 결과를 상한 없는 요청이 그대로 쓰지 않음(그 반대도), 같은 상한이면 건너뜀."""
+        out = self.tmp / "cap"
+        with mock.patch.object(analyze.subprocess, "run", FakeRunner()), quiet():
+            analyze.main(["run", "--seeds", "1", "--generations", "5", "--max-ticks", "100", "--out", str(out),
+                          "--godot", "g", "--no-plots"])
+        with mock.patch.object(analyze.subprocess, "run", FakeRunner()), quiet():
+            code = analyze.main(["run", "--seeds", "1", "--generations", "5", "--out", str(out), "--godot", "g", "--no-plots"])
+        runs = read_csv_rows(out / "runs.csv")
+        self.assertEqual((code, runs[0]["status"]), (1, "mismatch"))
+        self.assertIn(f"max_ticks 100 ≠ {CONFIG_MAX_TICKS}", runs[0]["result"])
+        # 반대: 상한 없이 돌린 결과에 --max-ticks 요청
+        out2 = self.tmp / "cap2"
+        with mock.patch.object(analyze.subprocess, "run", FakeRunner()), quiet():
+            analyze.main(["run", "--seeds", "1", "--generations", "5", "--out", str(out2), "--godot", "g", "--no-plots"])
+        with mock.patch.object(analyze.subprocess, "run", FakeRunner()), quiet():
+            code = analyze.main(["run", "--seeds", "1", "--generations", "5", "--max-ticks", "300", "--out", str(out2),
+                                 "--godot", "g", "--no-plots"])
+        self.assertEqual((code, read_csv_rows(out2 / "runs.csv")[0]["status"]), (1, "mismatch"))
+        # 같은 상한이면 그대로 건너뜀
+        fake = FakeRunner()
+        with mock.patch.object(analyze.subprocess, "run", fake), quiet():
+            code = analyze.main(["run", "--seeds", "1", "--generations", "5", "--max-ticks", "100", "--out", str(out),
+                                 "--godot", "g", "--no-plots"])
+        self.assertEqual((code, fake.calls, read_csv_rows(out / "runs.csv")[0]["status"]), (0, [], "existing"))
+
+    def test_utf8_output_from_real_child(self) -> None:
+        """실제 자식 프로세스가 UTF-8 로 쓴 RESULT 줄(한글)을 그대로 읽는다(지역 코드 페이지와 무관)."""
+        out = self.tmp / "u"
+        job = analyze.Job("x", 1, out, [sys.executable, "-c",
+                                        "import sys; sys.stdout.buffer.write('RESULT: civ=3(농사)\\n'.encode('utf-8'))"])
+        row = analyze.execute_job(job, self.tmp, 60)
+        self.assertEqual(row["result"], "RESULT: civ=3(농사)")
 
     def test_same_value(self) -> None:
         self.assertTrue(analyze._same_value("0.10", 0.1))

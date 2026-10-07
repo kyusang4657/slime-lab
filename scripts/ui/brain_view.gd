@@ -8,6 +8,9 @@ extends Control
 ## 세기 = (|w| / weight_clamp) ^ heatmap_gamma — 초기 가중치(±1)가 상한(±4)보다 훨씬 작아 감마로 밝게 편다.
 ## 입력 이름은 열 위에 한글 세로쓰기(글자는 바로 선 채 위→아래)로 쓰고, 칸 위에 마우스를 올리면
 ## "입력 → 은닉: 가중치" 풍선 도움말. 아래 덩어리에서는 현재 행동 줄을 강조한다(set_highlight_action).
+## 칸 높이는 언제나 ui.info.heatmap_cell(줄 이름이 겹치지 않게), 칸 너비는 max_width(정보 창 폭) 안에 들도록
+## heatmap_cell_min 까지 좁힌다(설정이 허용하는 큰 두뇌 — 은닉 64·기억 16 — 에서도 창을 밀어내지 않게).
+## 칸이 글자보다 좁으면 열 이름은 몇 칸마다 하나씩만 쓴다(풍선 도움말에는 모두 있음).
 
 ## cell_at() 이 돌려주는 덩어리 종류
 const BLOCK_W1 := "w1"
@@ -23,15 +26,21 @@ const MARK_WIDTH := 3.0
 const LEGEND_BAR := 8.0
 ## 세로쓰기 글자 간격 = 글자 크기 + 이 값
 const CHAR_STEP_PAD := 1.0
+## 기억 출력 줄 이름을 강조색보다 이만큼 어둡게
+const MEM_LABEL_DARKEN := 0.15
 
 ## 색 세기 정규화 상한(세계 설정 brain.weight_clamp). set_genome 전에 넣는다.
 var weight_clamp := 4.0
+## 열지도 전체가 들어가야 하는 너비(픽셀, INF = 제한 없음). set_genome 전에 넣는다(InfoPanel 이 창 폭에서 계산).
+var max_width := INF
 
 var _L: Dictionary = {}
 var _genome := PackedFloat32Array()
 var _highlight := -1
 var _font: Font
 # 설정에서 읽은 값
+## 칸 너비(열, max_width 에 맞춤)·높이(행, heatmap_cell)
+var _cw := 14.0
 var _cell := 14.0
 var _gap := 1.0
 var _gamma := 1.0
@@ -47,6 +56,7 @@ var _c_grid := Color.DIM_GRAY
 var _c_text := Color.WHITE
 var _c_dim := Color.GRAY
 var _c_accent := Color.AQUAMARINE
+var _hl_alpha := 0.16
 
 
 func _init() -> void:
@@ -65,6 +75,8 @@ func _init() -> void:
 	_c_text = UiConfig.color("theme.text")
 	_c_dim = UiConfig.color("theme.text_dim")
 	_c_accent = UiConfig.color("theme.accent")
+	_hl_alpha = UiConfig.num("info.heatmap_highlight_alpha")
+	_cw = _cell
 	# 스크롤 휠은 바깥 스크롤 창으로 넘기되 풍선 도움말은 받는다
 	mouse_filter = Control.MOUSE_FILTER_PASS
 
@@ -73,7 +85,8 @@ func _init() -> void:
 func set_genome(L: Dictionary, genome: PackedFloat32Array) -> void:
 	_L = L
 	_genome = genome
-	custom_minimum_size = size_for(L)
+	_cw = cell_width_for(L, max_width)
+	custom_minimum_size = size_for(L, max_width)
 	queue_redraw()
 
 
@@ -93,19 +106,30 @@ func has_genome() -> bool:
 	return not _L.is_empty() and _genome.size() >= int(_L.get("trait_offset", 0)) and not _genome.is_empty()
 
 
-## 구조 L 일 때 열지도 전체 크기. 너비 = 줄 이름 칸 + max(n_in, n_hid) 칸,
-## 높이 = 세운 입력 이름 + w1 행 + 덩어리 틈 + 은닉 번호 줄 + w2 행 + 범례.
-static func size_for(L: Dictionary) -> Vector2:
+## 구조 L 일 때 열지도 전체 크기. 너비 = 줄 이름 칸 + max(n_in, n_hid) × 칸 너비(cell_width_for),
+## 높이 = 세운 입력 이름 + w1 행 + 덩어리 틈 + 은닉 번호 줄 + w2 행 + 범례(행 높이 = heatmap_cell).
+static func size_for(L: Dictionary, max_w: float = INF) -> Vector2:
 	if L.is_empty():
 		return Vector2.ZERO
 	var cell := UiConfig.num("info.heatmap_cell")
+	var cw := cell_width_for(L, max_w)
 	var n_in := int(L.n_in)
 	var n_hid := int(L.n_hid)
 	var n_out := int(L.n_out)
-	var wd := UiConfig.num("info.heatmap_label_width") + float(maxi(n_in, n_hid)) * cell
+	var wd := UiConfig.num("info.heatmap_label_width") + float(maxi(n_in, n_hid)) * cw
 	var ht := UiConfig.num("info.heatmap_header_height") + float(n_hid) * cell + UiConfig.num("info.heatmap_block_gap") \
 			+ cell + float(n_out) * cell + UiConfig.num("info.heatmap_legend_height")
 	return Vector2(wd, ht)
+
+
+## 칸 너비: heatmap_cell, 단 max_w 안에 들도록 heatmap_cell_min 까지 좁힌다(정수 픽셀). 그래도 넘치면 바깥이 가로 스크롤.
+static func cell_width_for(L: Dictionary, max_w: float = INF) -> float:
+	var cell := UiConfig.num("info.heatmap_cell")
+	if L.is_empty() or is_inf(max_w):
+		return cell
+	var cols := maxi(1, maxi(int(L.n_in), int(L.n_hid)))
+	var fit := floorf((max_w - UiConfig.num("info.heatmap_label_width")) / float(cols))
+	return clampf(fit, UiConfig.num("info.heatmap_cell_min"), cell)
 
 
 ## 입력 i 의 화면 이름(기본 12개 다음은 기억 입력).
@@ -163,7 +187,7 @@ func cell_at(pos: Vector2) -> Dictionary:
 	var n_in := int(_L.n_in)
 	var n_hid := int(_L.n_hid)
 	var n_out := int(_L.n_out)
-	var col := int(floorf((pos.x - _label_w) / _cell))
+	var col := int(floorf((pos.x - _label_w) / _cw))
 	if pos.x < _label_w:
 		return {}
 	# 세운 입력 이름 위
@@ -199,59 +223,69 @@ func _draw() -> void:
 	var n_out := int(_L.n_out)
 	var w2o := int(_L.w2_offset)
 	var x0 := _label_w
+	var cw := _cw
 	var asc := _font.get_ascent(_fs)
 	var desc := _font.get_descent(_fs)
+	# 칸이 글자보다 좁으면 열 이름은 몇 칸마다 하나씩(겹치지 않게)
+	var glyph_w := _font.get_string_size("가", HORIZONTAL_ALIGNMENT_LEFT, -1, _fs).x
+	var in_stride := maxi(1, ceili(glyph_w / cw))
+	var num_w := _font.get_string_size(str(n_hid), HORIZONTAL_ALIGNMENT_LEFT, -1, _fs).x + _gap
+	var num_stride := maxi(1, ceili(num_w / cw))
 	# ① 입력 이름: 글자를 바로 세워 위에서 아래로 쌓고(한글 세로쓰기), 마지막 글자가 칸 바로 위에 오게 한다
 	var step := float(_fs) + CHAR_STEP_PAD
 	for i in n_in:
-		var cx := x0 + float(i) * _cell + (_cell - _gap) * 0.5
+		if i % in_stride != 0:
+			continue
+		var cx := x0 + float(i) * cw + (cw - _gap) * 0.5
 		var chars := input_name(i).replace(" ", "")
 		var col := _c_text if i < SimBrain.BASE_INPUTS else _c_accent
 		for k in chars.length():
 			var ch := chars.substr(k, 1)
-			var cw := _font.get_string_size(ch, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs).x
+			var chw := _font.get_string_size(ch, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs).x
 			var by := _y_w1() - LABEL_PAD - desc - float(chars.length() - 1 - k) * step
-			draw_string(_font, Vector2(cx - cw * 0.5, by), ch, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, col)
+			draw_string(_font, Vector2(cx - chw * 0.5, by), ch, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, col)
 	_label_right("입력 →", _y_w1() - LABEL_PAD - desc, _c_dim)
 	# ② w1: 은닉 j(행) × 입력 i(열)
 	var y1 := _y_w1()
-	draw_rect(Rect2(x0 - _gap, y1 - _gap, float(n_in) * _cell + _gap, float(n_hid) * _cell + _gap), _c_grid)
+	draw_rect(Rect2(x0 - _gap, y1 - _gap, float(n_in) * cw + _gap, float(n_hid) * _cell + _gap), _c_grid)
 	for j in n_hid:
 		for i in n_in:
-			var r := Rect2(x0 + float(i) * _cell, y1 + float(j) * _cell, _cell - _gap, _cell - _gap)
+			var r := Rect2(x0 + float(i) * cw, y1 + float(j) * _cell, cw - _gap, _cell - _gap)
 			draw_rect(r, _wcolor(float(_genome[j * n_in + i])))
 		_label_right("은닉 %d" % (j + 1), y1 + float(j) * _cell + (_cell + asc - desc) * 0.5 - _gap * 0.5, _c_dim)
 	if n_in > SimBrain.BASE_INPUTS:
-		var mx := x0 + float(SimBrain.BASE_INPUTS) * _cell - _gap * 0.5
+		var mx := x0 + float(SimBrain.BASE_INPUTS) * cw - _gap * 0.5
 		draw_line(Vector2(mx, y1 - _gap), Vector2(mx, y1 + float(n_hid) * _cell), _c_accent, 1.0)
 	# ③ 은닉 번호 줄
 	var yh := _y_w2_head()
 	for j in n_hid:
+		if j % num_stride != 0:
+			continue
 		var num := str(j + 1)
 		var nw := _font.get_string_size(num, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs).x
-		draw_string(_font, Vector2(x0 + float(j) * _cell + (_cell - _gap - nw) * 0.5, yh + (_cell + asc - desc) * 0.5),
+		draw_string(_font, Vector2(x0 + float(j) * cw + (cw - _gap - nw) * 0.5, yh + (_cell + asc - desc) * 0.5),
 				num, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, _c_dim)
 	_label_right("은닉 →", yh + (_cell + asc - desc) * 0.5, _c_dim)
 	# ④ w2: 출력 q(행) × 은닉 j(열)
 	var y2 := _y_w2()
-	draw_rect(Rect2(x0 - _gap, y2 - _gap, float(n_hid) * _cell + _gap, float(n_out) * _cell + _gap), _c_grid)
+	draw_rect(Rect2(x0 - _gap, y2 - _gap, float(n_hid) * cw + _gap, float(n_out) * _cell + _gap), _c_grid)
 	for q in n_out:
 		var ry := y2 + float(q) * _cell
 		var hl := q == _highlight
 		if hl:
-			draw_rect(Rect2(0.0, ry - _gap, x0 - _gap, _cell), Color(_c_accent, 0.16))
+			draw_rect(Rect2(0.0, ry - _gap, x0 - _gap, _cell), Color(_c_accent, _hl_alpha))
 			draw_rect(Rect2(0.0, ry - _gap, MARK_WIDTH, _cell), _c_accent)
 		for j in n_hid:
-			var r2 := Rect2(x0 + float(j) * _cell, ry, _cell - _gap, _cell - _gap)
+			var r2 := Rect2(x0 + float(j) * cw, ry, cw - _gap, _cell - _gap)
 			draw_rect(r2, _wcolor(float(_genome[w2o + q * n_hid + j])))
-		var col := _c_accent if hl else (_c_text if q < SimBrain.BASE_OUTPUTS else _c_accent.darkened(0.15))
+		var col := _c_accent if hl else (_c_text if q < SimBrain.BASE_OUTPUTS else _c_accent.darkened(MEM_LABEL_DARKEN))
 		_label_right(output_name(q), ry + (_cell + asc - desc) * 0.5 - _gap * 0.5, col)
 	if n_out > SimBrain.BASE_OUTPUTS:
 		var my := y2 + float(SimBrain.BASE_OUTPUTS) * _cell - _gap * 0.5
-		draw_line(Vector2(x0 - _gap, my), Vector2(x0 + float(n_hid) * _cell, my), _c_accent, 1.0)
+		draw_line(Vector2(x0 - _gap, my), Vector2(x0 + float(n_hid) * cw, my), _c_accent, 1.0)
 	# ⑤ 범례: −상한 [음수 … 0 … 양수] +상한
 	var yl := _y_legend() + (_legend_h - LEGEND_BAR) * 0.5
-	var bw := float(n_hid) * _cell - _gap
+	var bw := float(n_hid) * cw - _gap
 	for k in LEGEND_STEPS:
 		var f0 := float(k) / float(LEGEND_STEPS)
 		var wv := (f0 * 2.0 - 1.0 + 1.0 / float(LEGEND_STEPS)) * weight_clamp

@@ -1,5 +1,5 @@
 cell,seed,preset,overrides,generations_target,end_reason,ticks,mean_generation,population,peak_population,births,deaths,civ_stage,civ_stage_name,extinct_tick,storehouses,farms,disc_tick_forage,disc_gen_forage,disc_tick_store,disc_gen_store,disc_tick_farm,disc_gen_farm,final_mean_size,final_mean_sense,run_seconds,history_hash,path
-fast_civ,1,fast_civ,,40,generations,2793,40.00490196,204,250,1553,1549,3,농사,-1,4,184,422,4.35,635,8.1,1636,21.71,1.004891,3,5.839,e10377e6fbb8cfbcb9bdc8f82da879ab8173b12f6bbc928e66c2699f748333ad,seed1
-fast_civ,2,fast_civ,,40,generations,3243,40.016,250,250,3739,3689,3,농사,-1,4,110,100,0.22,126,0.25,276,2,0.989936,3.02,12.197,f558c1f34205a461b1f97cc1cc43b7cf1668079d7f2d1f1024e1b2809f0fbeab,seed2
-fast_civ,3,fast_civ,,40,generations,2727,40.004,250,250,2067,2017,3,농사,-1,4,0,162,0.49,196,0.99,786,10.17,0.966019,3,7.409,5d3696124a2ac4922ee648c82e22286821e640ecdbff9884f0fc8916765a1b2f,seed3
-fast_civ,4,fast_civ,,40,generations,2726,40.008,250,250,2543,2493,3,농사,-1,4,75,117,0.21,136,0.26,267,1.95,1.001801,3,8.667,a0a4eae64847ed75864d718bf88a6e7ceb1a69684c2d6ee9436e391b6eb9dfb5,seed4
+fast_civ,1,fast_civ,,40,generations,2793,40.00490196,204,250,1553,1549,3,농사,-1,4,184,422,4.35,635,8.1,1636,21.71,1.004891,3,5.715,e10377e6fbb8cfbcb9bdc8f82da879ab8173b12f6bbc928e66c2699f748333ad,seed1
+fast_civ,2,fast_civ,,40,generations,3243,40.016,250,250,3739,3689,3,농사,-1,4,110,100,0.22,126,0.25,276,2,0.989936,3.02,11.967,f558c1f34205a461b1f97cc1cc43b7cf1668079d7f2d1f1024e1b2809f0fbeab,seed2
+fast_civ,3,fast_civ,,40,generations,2727,40.004,250,250,2067,2017,3,농사,-1,4,0,162,0.49,196,0.99,786,10.17,0.966019,3,6.86,5d3696124a2ac4922ee648c82e22286821e640ecdbff9884f0fc8916765a1b2f,seed3
+fast_civ,4,fast_civ,,40,generations,2726,40.008,250,250,2543,2493,3,농사,-1,4,75,117,0.21,136,0.26,267,1.95,1.001801,3,8.569,a0a4eae64847ed75864d718bf88a6e7ceb1a69684c2d6ee9436e391b6eb9dfb5,seed4

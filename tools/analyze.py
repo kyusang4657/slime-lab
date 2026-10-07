@@ -163,14 +163,45 @@ def parse_set(text: str) -> tuple[str, str]:
     return key, value
 
 
+def split_top_level(value: str) -> list[str]:
+    """쉼표로 나누되 괄호([]·{}) 안의 쉼표는 나누지 않는다: "[1,1,0.5,0],[1,1,1,1]" → ["[1,1,0.5,0]", "[1,1,1,1]"].
+    괄호가 맞지 않으면 ValueError."""
+    parts: list[str] = []
+    cur: list[str] = []
+    pairs = {"]": "[", "}": "{"}
+    stack: list[str] = []
+    for ch in value:
+        if ch in "[{":
+            stack.append(ch)
+        elif ch in "]}":
+            if not stack or stack[-1] != pairs[ch]:
+                raise ValueError(f"괄호가 맞지 않습니다: {value}")
+            stack.pop()
+        if ch == "," and not stack:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    if stack:
+        raise ValueError(f"괄호가 닫히지 않았습니다: {value}")
+    parts.append("".join(cur))
+    return parts
+
+
 def parse_param(text: str) -> tuple[str, list[str]]:
-    """--param 키=값1,값2 → (키, [값...]). 같은 값 반복은 한 번만(순서 유지)."""
+    """--param 키=값1,값2 → (키, [값...]). 같은 값 반복은 한 번만(순서 유지).
+    배열 값도 된다: seasons.growth=[1,1,0.5,0],[1,1,1,1] (괄호 안 쉼표는 나누지 않음, 배열·사전은 JSON 이어야 함)."""
     key, value = parse_set(text)
     values: list[str] = []
-    for v in value.split(","):
+    for v in split_top_level(value):
         v = v.strip()
         if v == "":
             raise ValueError(f"빈 값이 있습니다: {text}")
+        if v[:1] in "[{":
+            try:
+                json.loads(v)
+            except ValueError:
+                raise ValueError(f"배열·사전 값은 JSON 이어야 합니다: {v}")
         if v not in values:
             values.append(v)
     return key, values
@@ -218,8 +249,9 @@ def _arg_type(fn):
 
 
 def natural_key(s: str) -> tuple:
-    """사람이 기대하는 순서: "rate=0.02" < "rate=0.1" < "rate=1.5" (숫자 덩어리는 수로 비교)."""
-    parts = re.split(r"(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)", str(s))
+    """사람이 기대하는 순서: "rate=0.02" < "rate=0.1" < "rate=1.5" (숫자 덩어리는 수로 비교).
+    '-' 는 글자 맨 앞이나 '=' 바로 뒤에서만 음수 부호로 본다("rate=-0.5" < "rate=0.1", 그러나 "trial-2" < "trial-10")."""
+    parts = re.split(r"((?:(?<![^=])-)?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)", str(s))
     key = []
     for p in parts:
         if p == "":
@@ -243,6 +275,7 @@ class Job:
     preset: str = ""
     generations: str = ""
     sets: list[tuple[str, str]] = field(default_factory=list)
+    max_ticks: int | None = None
 
 
 def _same_value(text: str, v) -> bool:
@@ -272,6 +305,13 @@ def existing_mismatch(job: Job) -> str:
     for k in sorted(set(want) | set(have)):
         if k not in want or k not in have or not _same_value(want[k], have[k]):
             diffs.append(f"{k} {_json_scalar(have[k]) if k in have else '없음'} ≠ {want.get(k, '없음')}")
+    # 틱 상한: 실행기가 summary.json 에 실제로 쓴 상한(max_ticks)과 이번 요청(--max-ticks, 없으면 설정의 run.max_ticks).
+    # 예전 결과(max_ticks 기록 없음)는 설정값으로 본다. 다르면 잘린 실행이 섞이므로 mismatch.
+    cfg_cap = ((s.get("config", {}) or {}).get("run", {}) or {}).get("max_ticks")
+    have_cap = s.get("max_ticks", cfg_cap)
+    want_cap = job.max_ticks if job.max_ticks is not None and job.max_ticks > 0 else cfg_cap
+    if have_cap is not None and want_cap is not None and float(have_cap) != float(want_cap):
+        diffs.append(f"max_ticks {_json_scalar(have_cap)} ≠ {_json_scalar(want_cap)}")
     return ", ".join(diffs)
 
 
@@ -311,7 +351,9 @@ def execute_job(job: Job, repo: Path, timeout: float | None) -> dict:
            "result": "", "out_dir": "", "command": shlex.join(job.cmd)}
     log = ""
     try:
-        cp = subprocess.run(job.cmd, cwd=str(repo), capture_output=True, text=True, timeout=timeout)
+        # Godot 은 어느 OS 에서나 UTF-8 로 쓴다(RESULT 줄의 "농사" 등). 지역 코드 페이지(cp949·cp1252)로 읽지 않게.
+        cp = subprocess.run(job.cmd, cwd=str(repo), capture_output=True, encoding="utf-8", errors="replace",
+                            timeout=timeout)
         row["exit_code"] = cp.returncode
         row["result"] = result_line(cp.stdout)
         ok = cp.returncode == 0 and (job.out_dir / "summary.json").is_file()
@@ -418,6 +460,16 @@ def run_jobs(jobs: list[Job], out_root: Path, repo: Path, n_jobs: int, timeout: 
     return failed
 
 
+def ensure_gdignore(d: Path) -> None:
+    """결과 폴더에 빈 .gdignore 를 둔다(저장소 안이면 Godot 이 CSV 를 번역 표로, PNG 를 텍스처로 가져오지 않게).
+    Godot 은 .gdignore 가 있는 폴더의 하위 폴더도 모두 건너뛴다. 저장소 밖에 두어도 해가 없다."""
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / ".gdignore").touch(exist_ok=True)
+    except OSError:
+        pass
+
+
 def _rel(p: Path, root: Path) -> str:
     try:
         return Path(os.path.relpath(p, root)).as_posix()
@@ -442,12 +494,13 @@ def cmd_run(args) -> int:
         return 2
     out_root = Path(args.out).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
+    ensure_gdignore(out_root)
     jobs = []
     for seed in args.seeds:
         out_dir = out_root / f"seed{seed}"
         cmd = build_command(args.godot, repo, seed, args.generations, out_dir, args.preset, args.set,
                             args.lineage, args.max_ticks)
-        jobs.append(Job(ROOT_CELL, seed, out_dir, cmd, args.preset, args.generations, list(args.set)))
+        jobs.append(Job(ROOT_CELL, seed, out_dir, cmd, args.preset, args.generations, list(args.set), args.max_ticks))
     failed = run_jobs(jobs, out_root, repo, args.jobs, args.timeout)
     if not args.no_report:
         report(out_root, out_root, plots=not args.no_plots, lang=args.lang)
@@ -468,6 +521,7 @@ def cmd_sweep(args) -> int:
         return 2
     out_root = Path(args.out).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
+    ensure_gdignore(out_root)
     print(f"격자 {len(grid)}칸 × 씨앗 {len(args.seeds)}개")
     jobs = []
     for cell, pairs in grid:
@@ -477,7 +531,7 @@ def cmd_sweep(args) -> int:
             sets = list(args.set) + pairs
             cmd = build_command(args.godot, repo, seed, args.generations, out_dir, args.preset, sets,
                                 args.lineage, args.max_ticks)
-            jobs.append(Job(cell, seed, out_dir, cmd, args.preset, args.generations, sets))
+            jobs.append(Job(cell, seed, out_dir, cmd, args.preset, args.generations, sets, args.max_ticks))
     failed = run_jobs(jobs, out_root, repo, args.jobs, args.timeout)
     if not args.no_report:
         report(out_root, out_root, plots=not args.no_plots, lang=args.lang)
@@ -598,11 +652,17 @@ def summary_row(run_dir: Path, root: Path) -> tuple[dict, pd.DataFrame | None]:
     }
     for _, key, _ in STAGES:
         row[f"disc_tick_{key}"], row[f"disc_gen_{key}"] = disc[key]
+    extinct = s.get("end_reason") == "extinction" or s.get("population") == 0 or _int_or(s.get("extinct_tick")) >= 0
+    if extinct:
+        # 멸종한 실행의 끝 평균 세대는 0(빈 개체의 평균)이 아니라 멸종 직전 값 — 아래 시계열에서. 없으면 NaN(중앙값에서 빠짐).
+        row["mean_generation"] = float("nan")
     if ts is not None:
         alive = ts[ts["population"] > 0]
         if len(alive):
             row["final_mean_size"] = float(alive["mean_size"].iloc[-1])
             row["final_mean_sense"] = float(alive["mean_sense"].iloc[-1])
+            if extinct:
+                row["mean_generation"] = float(alive["mean_gen"].iloc[-1])
     return row, ts
 
 
@@ -1130,6 +1190,8 @@ def write_report_md(path: Path, root: Path, df: pd.DataFrame, cells: pd.DataFram
         "- **발견 세대** = 그 실행의 `chronicle.csv` 에서 `kind = discovery` 인 사건 줄의 `mean_gen`"
         "(발견이 일어난 틱에 살아 있던 개체들의 평균 세대, 0.01 단위). 단계는 문장 머리(`채집 발견 — …`)로 가립니다.",
         "- **도달 비율** = 끝날 때 문명 단계(`civ_stage`)가 그 단계 이상인 실행의 비율. **멸종 비율** = 끝난 이유가 멸종인 실행의 비율.",
+        "- **끝 평균 세대**: 멸종한 실행은 멸종 직전(살아 있던 마지막 시계열 줄, 최대 기록 간격 20틱 전)의 평균 세대입니다"
+        "(빈 개체의 평균 0 을 쓰면 중앙값이 내려가 진화가 느린 것처럼 보이므로).",
         "- 사분위는 numpy 기본(선형 보간) 백분위수입니다. 실행이 적으면(씨앗 4개 등) 사분위 범위는 거칠게 읽어야 합니다.",
         "- 실행이 목표 세대에서 멈추므로, 목표보다 늦게 올 발견은 \"도달 못 함\"으로 보입니다(오른쪽 중도 절단).",
         "- 같은 씨앗·같은 설정이면 역사 해시가 같습니다(결정성). 해시가 다르면 설정이나 코드가 다릅니다.",
@@ -1150,6 +1212,7 @@ def report(root: Path, out_dir: Path | None = None, plots: bool = True, lang: st
         print(f"오류: {root} 아래에 실행 결과(summary.json)가 없습니다", file=sys.stderr)
         return 1
     out_dir.mkdir(parents=True, exist_ok=True)
+    ensure_gdignore(out_dir)
     cells = aggregate(df)
     write_csv(df, out_dir / "summary.csv")
     write_csv(cells, out_dir / "cells.csv")

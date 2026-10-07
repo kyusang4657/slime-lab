@@ -6,6 +6,14 @@ const SEED := 3
 const WARMUP := 400
 ## 죽을 때까지 기다리는 최대 틱(최대 나이 + 흔들림보다 넉넉히)
 const DEATH_GUARD := 1000
+## 지켜볼 개체의 남은 수명 하한(틱): refresh 와 자식 단추 늘어남을 여러 번 겪도록
+const MIN_LIFE_LEFT := 60
+## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
+const MIN_CHECKS := 55
+## 1600×900 실험실에서 정보 창 높이(창 높이 − 위쪽 막대 최소 높이) — V07
+const LAB_HEIGHT_1600 := 900.0
+## V07 을 재 볼 개체 수 한도
+const V07_SAMPLES := 60
 
 
 func run(t) -> void:
@@ -87,6 +95,9 @@ func run(t) -> void:
 	var every := UiConfig.integer("info.refresh_frames")
 	var guard := 0
 	var kids_ok := true
+	var evals := 0
+	var kids0 := int(world.slime_info(id).children)
+	var grew := 0
 	while world.index_of_id(id) != -1 and guard < DEATH_GUARD:
 		world.step()
 		ref.step()
@@ -94,8 +105,14 @@ func run(t) -> void:
 		if guard % every == 0:
 			panel.refresh()
 			var want := mini(int(world.slime_info(id).children), UiConfig.integer("info.children_max"))
-			if world.index_of_id(id) != -1 and _ids(panel, InfoPanel.REL_CHILD).size() != want:
-				kids_ok = false
+			if world.index_of_id(id) != -1:
+				evals += 1
+				if _ids(panel, InfoPanel.REL_CHILD).size() != want:
+					kids_ok = false
+				if int(world.slime_info(id).children) > kids0:
+					grew = int(world.slime_info(id).children) - kids0
+	# 검사가 정말 돌았는지(지켜본 개체가 2틱 만에 죽어 한 번도 견주지 않던 문제)
+	t.check(evals >= 3 and grew > 0, "지켜보는 동안 자식 단추를 %d번 견주었고 자식이 %d 늘어남(%d틱 생존)" % [evals, grew, guard])
 	t.check(kids_ok, "살아 있는 동안 새 자식이 생기면 자식 단추가 따라 늘어남")
 	t.check(world.index_of_id(id) == -1, "개체가 %d틱 안에 죽음" % DEATH_GUARD)
 	panel.refresh()
@@ -134,8 +151,10 @@ func run(t) -> void:
 	t.check(panel.current_id() == -1 and panel.summary_text().contains("슬라임을 눌러 고르세요") and _buttons(panel).is_empty(),
 			"clear() → 빈 안내, 가계 단추 없음")
 
-	# ── 화면은 세계를 바꾸지 않는다: 여러 개체를 보이고 refresh 를 많이 불러도 해시·카운터 그대로 ──
-	var h0 := world.history_hash
+	# ── 화면은 세계를 바꾸지 않는다: 여러 개체를 보이고 refresh 를 많이 불러도 상태·카운터 그대로 ──
+	# (역사 해시는 진행 없이는 바뀌지 않으므로 상태 배열을 직접 견준다)
+	var snap0: SimWorld = t.make_world({}, SEED)
+	snap0.step_n(world.tick)
 	var e0 := world.total_energy()
 	var b0 := world.period_births
 	for i in mini(world.population(), 40):
@@ -145,14 +164,22 @@ func run(t) -> void:
 	for k in mini(world.lin_pa.size(), 40):
 		panel.show_slime(world, k)
 		panel.refresh()
-	t.check(world.history_hash == h0 and world.total_energy() == e0 and world.period_births == b0,
-			"보이기·refresh 를 여러 번 해도 세계 값이 그대로")
+	var diff0: String = t.same_state(world, snap0)
+	t.check(diff0 == "" and world.total_energy() == e0 and world.period_births == b0,
+			"보이기·refresh 를 여러 번 해도 세계 상태가 그대로 %s" % diff0)
 	panel.show_slime(world, world.s_id[0])
-	for k in 60:
+	# 해시 검사점(hash.every)을 하나 이상 지날 때까지 정보 창을 거쳐 진행
+	var he := int(world.cfg.hash.every)
+	var start_tick := world.tick
+	var target := (start_tick / he + 1) * he
+	while world.tick <= target:
 		world.step()
 		ref.step()
 		panel.refresh()
-	t.check(world.history_hash == ref.history_hash and world.tick == ref.tick, "정보 창을 거쳐 진행해도 역사 해시가 같음")
+	t.check(world.tick / he > start_tick / he and world.history_hash == ref.history_hash and world.tick == ref.tick,
+			"정보 창을 거쳐 진행해도 역사 해시가 같음(틱 %d → %d, 검사점 %d 지남)" % [start_tick, world.tick, target])
+	var diff: String = t.same_state(world, ref)
+	t.check(diff == "", "정보 창을 거쳐 진행한 끝 상태(개체·에너지·유전체·먹이)가 같음 %s" % diff)
 	t.check(world.period_births == ref.period_births and world.drain_events().size() == ref.drain_events().size(),
 			"정보 창이 sample()·drain_events() 를 부르지 않음")
 
@@ -223,12 +250,74 @@ func run(t) -> void:
 		t.check(_ids(p2, InfoPanel.REL_CHILD) == Array(world.children_of(many, 2)) and more == "+%d" % (n - 2),
 				"자식 %d 중 한도 2 → 단추 2개 + \"%s\"" % [n, more])
 		p2.queue_free()
+	# ── 큰 두뇌(설정 범위 끝: 기억 16, 은닉 32·64)도 창 너비를 밀어내지 않음(열지도는 좁히거나 가로 스크롤) ──
+	for sets in [{"brain.memory_units": 16}, {"brain.hidden": 32}, {"brain.hidden": 64}, {"brain.hidden": 64, "brain.memory_units": 16}]:
+		var wb: SimWorld = t.make_world(sets, SEED)
+		panel.show_slime(wb, wb.s_id[0])
+		await t.frames(1)
+		t.check(panel.get_combined_minimum_size().x <= pw + 0.5, "%s: 정보 창 최소 폭 %.0f ≤ %.0f" % [sets, panel.get_combined_minimum_size().x, pw])
+		# 칸을 좁혀 들어가는 크기(열 40 까지)는 가로 스크롤 없이 창 안에 맞춤
+		var cols := maxi(int(wb.L.n_in), int(wb.L.n_hid))
+		if cols <= 40:
+			var bwid: float = panel._brain.custom_minimum_size.x
+			t.check(bwid <= InfoPanel.brain_width() + 0.5, "%s: 열지도 너비 %.0f ≤ %.0f(칸을 좁혀 맞춤, 가로 스크롤 없음)" % [sets, bwid, InfoPanel.brain_width()])
+	t.check(BrainView.size_for(world.L, InfoPanel.brain_width()).x <= InfoPanel.brain_width() + 0.5
+			and BrainView.cell_width_for(world.L, InfoPanel.brain_width()) == UiConfig.num("info.heatmap_cell"),
+			"보통 두뇌(12-8-8)는 칸을 좁히지 않고 창 안")
+	# ── 공용 테마를 이어받음: 따라가기 단추 여백 = theme.button_padding_*, 말풍선 = 공용 모양 ──
+	var fsb := _follow_button(panel).get_theme_stylebox("normal") as StyleBoxFlat
+	t.check(fsb != null and is_equal_approx(fsb.content_margin_left, UiConfig.num("theme.button_padding_h"))
+			and is_equal_approx(fsb.content_margin_top, UiConfig.num("theme.button_padding_v")),
+			"따라가기 단추 여백 = theme.button_padding_h/v")
+	var tip := panel.get_theme_stylebox("panel", "TooltipPanel") as StyleBoxFlat
+	t.check(tip != null and tip.bg_color.is_equal_approx(UiConfig.color("theme.topbar")), "정보 창 말풍선 = 공용 말풍선 모양")
+	# ── V07: 1600×900 실험실 높이에서 보통 개체(자식 두 줄 이하)는 스크롤 없이 두뇌 범례까지(여유 info.min_vertical_slack) ──
+	await _v07(t, panel, world)
 	panel.queue_free()
 	await t.frames(1)
 
 
-## 부모·조부모·자식이 모두 있는 살아 있는 개체(없으면 자식이 있는 아무 개체).
+func _v07(t, panel: InfoPanel, world: SimWorld) -> void:
+	var h := LAB_HEIGHT_1600 - UiConfig.num("lab.top_bar_min_height")
+	panel.size = Vector2(UiConfig.num("lab.right_panel_width"), h)
+	var slack := UiConfig.num("info.min_vertical_slack")
+	var worst := -INF
+	var worst_id := -1
+	var n := 0
+	for i in world.population():
+		if n >= V07_SAMPLES:
+			break
+		var id := world.s_id[i]
+		var d := world.slime_info(id)
+		if int(d.parent_a) == SimWorld.NO_PARENT:
+			continue
+		panel.show_slime(world, id)
+		await t.frames(1)
+		# 자식 두 줄 이하만(V07 의 범위)
+		var rows := _flow_rows(panel)
+		if rows > 2:
+			continue
+		n += 1
+		var o := panel.content_overflow()
+		if o > worst:
+			worst = o
+			worst_id = id
+	t.check(n > 0 and worst <= -slack, "V07: 정보 창 %.0fpx 높이에서 개체 %d마리 모두 스크롤 없음(가장 빠듯한 #%d 여유 %.0fpx ≥ %.0f)" % [h, n, worst_id, -worst, slack])
+
+
+## 자식 단추 흐름의 줄 수
+func _flow_rows(panel: InfoPanel) -> int:
+	var ys := {}
+	for b in _buttons(panel):
+		if str(b.get_meta(InfoPanel.META_REL)) == InfoPanel.REL_CHILD:
+			ys[int(b.position.y)] = true
+	return maxi(1, ys.size())
+
+
+## 부모·조부모·자식이 모두 있고 남은 수명이 MIN_LIFE_LEFT 틱 이상인 살아 있는 개체 가운데, 같은 씨앗의 세계를 미리
+## 돌려 보아 지켜보는 동안 자식이 늘어나는 개체(자식 단추가 늘어나는 경로를 실제로 겪게). 없으면 조건에 맞는 첫 개체.
 func _pick(world: SimWorld) -> int:
+	var cands: Array[int] = []
 	var fallback := -1
 	for i in world.population():
 		var id := world.s_id[i]
@@ -237,12 +326,25 @@ func _pick(world: SimWorld) -> int:
 			continue
 		if fallback < 0:
 			fallback = id
-		if int(d.parent_a) == SimWorld.NO_PARENT:
+		if int(d.max_age) - int(d.age) < MIN_LIFE_LEFT or int(d.parent_a) == SimWorld.NO_PARENT:
 			continue
 		var pd := world.slime_info(int(d.parent_a))
 		if int(pd.parent_a) != SimWorld.NO_PARENT:
-			return id
-	return fallback
+			cands.append(id)
+	if cands.is_empty():
+		return fallback
+	var ahead := SimWorld.new()
+	ahead.setup(world.cfg, world.seed_value)
+	ahead.step_n(world.tick)
+	var base := {}
+	for id in cands:
+		base[id] = int(ahead.slime_info(id).children)
+	for k in MIN_LIFE_LEFT:
+		ahead.step()
+		for id in cands:
+			if ahead.index_of_id(id) != -1 and int(ahead.slime_info(id).children) > int(base[id]):
+				return id
+	return cands[0]
 
 
 func _buttons(panel: InfoPanel) -> Array[Button]:

@@ -336,6 +336,8 @@ func step() -> void:
 	_spoil_dropped()
 	_check_civ()
 	tick += 1
+	# 빛·계절을 새 틱으로 다시 계산: 틱 사이(화면·기록·스냅숏)에서 light·season 이 언제나 지금 tick 을 뜻하게
+	_compute_time()
 	_after_tick()
 
 
@@ -998,7 +1000,8 @@ func _event(kind: String, actor: int, text: String, extra: Dictionary = {}) -> v
 	var e := {tick = tick, kind = kind, actor = actor, text = text, mean_gen = snappedf(mean_generation(), EVENT_GEN_STEP)}
 	e.merge(extra)
 	chronicle.append(e)
-	_pending_events.append(e)
+	# 알림용 사본(화면·4단계 청취자가 고쳐 써도 연대기가 바뀌지 않게)
+	_pending_events.append(e.duplicate())
 
 
 func _after_tick() -> void:

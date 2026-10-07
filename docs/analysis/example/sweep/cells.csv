@@ -1,4 +1,4 @@
 cell,runs,extinct,extinction_rate,reached_forage,reach_rate_forage,reached_store,reach_rate_store,reached_farm,reach_rate_farm,disc_gen_forage_n,disc_gen_forage_median,disc_gen_forage_q1,disc_gen_forage_q3,disc_gen_forage_iqr,disc_gen_store_n,disc_gen_store_median,disc_gen_store_q1,disc_gen_store_q3,disc_gen_store_iqr,disc_gen_farm_n,disc_gen_farm_median,disc_gen_farm_q1,disc_gen_farm_q3,disc_gen_farm_iqr,mean_generation_median,ticks_median,population_median,peak_population_median,final_mean_size_median,final_mean_sense_median,run_seconds_median,run_seconds_total
-mutation.rate=0.02,4,0,0,4,1,4,1,4,1,4,0.245,0.2225,4.0075,3.785,4,0.42,0.2675,4.98,4.7125,4,4.765,3.975,10.9775,7.0025,30.003125,2261.5,205,250,1.00226,3,6.4025,24.069
-mutation.rate=0.05,4,0,0,4,1,4,1,4,1,4,0.355,0.2175,1.455,1.2375,4,0.625,0.2575,2.7675,2.51,4,6.085,1.9875,13.055,11.0675,30,2154,114.5,250,0.994692,3,5.4125,23.254
-mutation.rate=0.1,4,1,0.25,4,1,4,1,4,1,4,0.32,0.215,0.485,0.27,4,0.515,0.25,0.875,0.625,4,3.785,3.1125,4.07,0.9575,30.004,2019.5,96.5,250,0.989671,3.017647,3.9515,18.325
+mutation.rate=0.02,4,0,0,4,1,4,1,4,1,4,0.245,0.2225,4.0075,3.785,4,0.42,0.2675,4.98,4.7125,4,4.765,3.975,10.9775,7.0025,30.003125,2261.5,205,250,1.00226,3,6.354,23.743
+mutation.rate=0.05,4,0,0,4,1,4,1,4,1,4,0.355,0.2175,1.455,1.2375,4,0.625,0.2575,2.7675,2.51,4,6.085,1.9875,13.055,11.0675,30,2154,114.5,250,0.994692,3,5.3595,22.8
+mutation.rate=0.1,4,1,0.25,4,1,4,1,4,1,4,0.32,0.215,0.485,0.27,4,0.515,0.25,0.875,0.625,4,3.785,3.1125,4.07,0.9575,30.004,2019.5,96.5,250,0.989671,3.017647,3.8315,17.923

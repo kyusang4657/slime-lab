@@ -21,7 +21,12 @@ var distance := 60.0
 var bounds := Rect2()
 
 var _d_min := 5.0
+## 설정의 최대 거리(camera.distance_max)와 실제로 쓰는 최대 거리. 지도 전체를 맞추는 데 더 멀어야 하면(큰 지도)
+## fit_rect 가 맞춘 거리 × camera.fit_zoom_out_factor 까지 늘린다(사용자가 언제든 전체를 볼 수 있게).
+var _d_max_cfg := 95.0
 var _d_max := 95.0
+var _far_cfg := 500.0
+var _zoom_out_k := 1.2
 var _p_min := 0.4
 var _p_max := 1.5
 var _zoom_step := 1.12
@@ -32,7 +37,9 @@ var _fit_margin := 1.05
 
 func _init() -> void:
 	_d_min = UiConfig.num("camera.distance_min")
-	_d_max = UiConfig.num("camera.distance_max")
+	_d_max_cfg = UiConfig.num("camera.distance_max")
+	_d_max = _d_max_cfg
+	_zoom_out_k = maxf(1.0, UiConfig.num("camera.fit_zoom_out_factor"))
 	_p_min = deg_to_rad(UiConfig.num("camera.pitch_min_deg"))
 	_p_max = deg_to_rad(UiConfig.num("camera.pitch_max_deg"))
 	_zoom_step = UiConfig.num("camera.zoom_step")
@@ -41,7 +48,8 @@ func _init() -> void:
 	_fit_margin = UiConfig.num("camera.fit_margin")
 	fov = UiConfig.num("camera.fov_deg")
 	near = UiConfig.num("camera.near")
-	far = UiConfig.num("camera.far")
+	_far_cfg = UiConfig.num("camera.far")
+	far = _far_cfg
 	reset_orientation()
 	distance = clampf(UiConfig.num("camera.distance_start"), _d_min, _d_max)
 
@@ -56,6 +64,7 @@ func distance_min() -> float:
 	return _d_min
 
 
+## 실제로 쓰는 최대 거리(설정값, 또는 큰 지도를 맞추느라 늘린 값).
 func distance_max() -> float:
 	return _d_max
 
@@ -76,8 +85,11 @@ func apply() -> void:
 
 ## 땅 사각형(x, z)이 화면에 다 들어오게 맞춘다. aspect = 화면 너비/높이.
 ## 네 모서리를 투영해 화면 가운데로 옮기고(목표점 이동) 넘치거나 남는 만큼 거리를 고치기를 몇 번 되풀이한다.
+## 맞추는 동안은 최대 거리로 자르지 않고, 끝나면 최대 거리를 max(설정값, 맞춘 거리 × fit_zoom_out_factor)로,
+## 먼 자르기 면을 그 거리 + 지도 대각선 이상으로 늘린다(설정 최대 거리보다 큰 지도도 처음에 다 보이게).
 func fit_rect(rect: Rect2, aspect: float) -> void:
 	bounds = rect
+	_d_max = INF
 	target = Vector3(rect.get_center().x, 0.0, rect.get_center().y)
 	var tv := tan(deg_to_rad(fov) * HALF)
 	var th := tv * maxf(aspect, 0.1)
@@ -103,6 +115,8 @@ func fit_rect(rect: Rect2, aspect: float) -> void:
 		# 화면 가운데로: 화면 위(+y)는 땅 앞쪽, 오른쪽(+x)은 땅 오른쪽
 		target += right * mid.x * distance * th + fwd * mid.y * distance * tv / maxf(sin(pitch), 0.2)
 		distance *= ext * _fit_margin
+	_d_max = maxf(_d_max_cfg, distance * _zoom_out_k)
+	far = maxf(_far_cfg, _d_max + rect.size.length())
 	apply()
 
 

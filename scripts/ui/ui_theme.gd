@@ -28,6 +28,35 @@ const ICON_PLAY_INSET := 0.14
 const ICON_PAUSE_BAR := 0.22
 const ICON_PAUSE_GAP := 0.16
 const ICON_FAST_W := 0.42
+# 삼각형을 오른쪽으로 미는 양(눈으로 본 무게 중심 맞춤), 멈춤 막대 위 끝(아래 끝 = 1 − 이 값), 빨리 감기 삼각형 위 끝
+const ICON_TRI_SHIFT := 0.06
+const ICON_BAR_TOP := 0.12
+const ICON_FAST_TOP := 0.2
+const ICON_FAST_SHIFT := 0.04
+
+# 여백 비(theme.panel_padding·button_padding_* 에 곱함): 카드·지도 위 표지·알림·목록 단추·입력 칸
+const CARD_PAD_H := 0.8
+const CARD_PAD_V := 0.6
+const OVERLAY_PAD_V := 0.4
+const TOAST_PAD_H := 1.4
+const TOAST_PAD_V := 0.7
+const FLAT_PAD := 0.6
+const FIELD_PAD_H := 0.8
+const LIST_PAD := 0.5
+const MENU_PAD := 0.4
+# 작은 고정 여백(픽셀): 스크롤 막대·슬라이더 안쪽, 목록 항목 가로·세로
+const BAR_INSET := 3.0
+const ITEM_PAD_H := 4.0
+const ITEM_PAD_V := 2.0
+# 색 변형: 올림 테두리 어둡게, 강조색 밝게(눌림 올림), 강조 단추 어둡게(보통·올림·눌림), 막대 채움·스크롤 손잡이 어둡게
+const HOVER_BORDER_DARKEN := 0.35
+const ACCENT_LIGHTEN := 0.3
+const ACCENT_BTN_DARKEN := 0.25
+const ACCENT_BTN_HOVER_DARKEN := 0.1
+const ACCENT_BTN_PRESS_DARKEN := 0.4
+const FILL_DARKEN := 0.15
+const GRAB_DARKEN := 0.3
+const SLIDER_DARKEN := 0.2
 
 # 같은 테마를 한 번만 만든다(색이 바뀌면 reset())
 static var _theme: Theme
@@ -91,15 +120,17 @@ static func icon(shape: String, px: int) -> Texture2D:
 	match shape:
 		ICON_PLAY:
 			var a := ICON_PLAY_INSET
-			polys.append(PackedVector2Array([Vector2(a + 0.06, a), Vector2(1.0 - a + 0.06, 0.5), Vector2(a + 0.06, 1.0 - a)]))
+			polys.append(PackedVector2Array([Vector2(a + ICON_TRI_SHIFT, a), Vector2(1.0 - a + ICON_TRI_SHIFT, 0.5), Vector2(a + ICON_TRI_SHIFT, 1.0 - a)]))
 		ICON_PAUSE:
 			var x0 := 0.5 - ICON_PAUSE_GAP * 0.5 - ICON_PAUSE_BAR
 			var x1 := 0.5 + ICON_PAUSE_GAP * 0.5
 			for x in [x0, x1]:
-				polys.append(PackedVector2Array([Vector2(x, 0.12), Vector2(x + ICON_PAUSE_BAR, 0.12), Vector2(x + ICON_PAUSE_BAR, 0.88), Vector2(x, 0.88)]))
+				polys.append(PackedVector2Array([Vector2(x, ICON_BAR_TOP), Vector2(x + ICON_PAUSE_BAR, ICON_BAR_TOP),
+						Vector2(x + ICON_PAUSE_BAR, 1.0 - ICON_BAR_TOP), Vector2(x, 1.0 - ICON_BAR_TOP)]))
 		ICON_FAST:
 			for x in [0.5 - ICON_FAST_W, 0.5]:
-				polys.append(PackedVector2Array([Vector2(x + 0.04, 0.2), Vector2(x + ICON_FAST_W + 0.04, 0.5), Vector2(x + 0.04, 0.8)]))
+				polys.append(PackedVector2Array([Vector2(x + ICON_FAST_SHIFT, ICON_FAST_TOP), Vector2(x + ICON_FAST_W + ICON_FAST_SHIFT, 0.5),
+						Vector2(x + ICON_FAST_SHIFT, 1.0 - ICON_FAST_TOP)]))
 	var img := Image.create(px, px, false, Image.FORMAT_RGBA8)
 	for y in px:
 		for x in px:
@@ -159,6 +190,10 @@ static func _make() -> Theme:
 	var panel := color("panel")
 	var border := color("panel_border")
 	var field := color("field")
+	var a_disabled := UiConfig.num("theme.disabled_alpha")
+	var a_focus := UiConfig.num("theme.focus_alpha")
+	var a_select := UiConfig.num("theme.selection_alpha")
+	var a_placeholder := UiConfig.num("theme.placeholder_alpha")
 
 	th.default_font = regular_font()
 	th.default_font_size = fs
@@ -191,11 +226,11 @@ static func _make() -> Theme:
 	top.border_width_bottom = bw
 	th.set_stylebox("panel", TOP_BAR, top)
 	th.set_type_variation(CARD, "PanelContainer")
-	th.set_stylebox("panel", CARD, box(color("background"), border, bw, rad, pad * 0.8, pad * 0.6))
+	th.set_stylebox("panel", CARD, box(color("background"), border, bw, rad, pad * CARD_PAD_H, pad * CARD_PAD_V))
 	th.set_type_variation(OVERLAY, "PanelContainer")
-	th.set_stylebox("panel", OVERLAY, box(color("overlay"), Color(0, 0, 0, 0), 0, rad, pad * 0.8, pad * 0.4))
+	th.set_stylebox("panel", OVERLAY, box(color("overlay"), Color(0, 0, 0, 0), 0, rad, pad * CARD_PAD_H, pad * OVERLAY_PAD_V))
 	th.set_type_variation(TOAST, "PanelContainer")
-	th.set_stylebox("panel", TOAST, box(color("toast"), border, bw, rad, pad * 1.4, pad * 0.7))
+	th.set_stylebox("panel", TOAST, box(color("toast"), border, bw, rad, pad * TOAST_PAD_H, pad * TOAST_PAD_V))
 	th.set_constant("separation", "HBoxContainer", sep)
 	th.set_constant("separation", "VBoxContainer", sep)
 	th.set_constant("h_separation", "GridContainer", sep)
@@ -214,10 +249,10 @@ static func _make() -> Theme:
 
 	# ── 단추: 보통·올림·눌림(켜짐)·못 씀·초점 ──
 	var b_normal := box(color("button"), color("button_border"), bw, rad, bph, bpv)
-	var b_hover := box(color("button_hover"), dim.darkened(0.35), bw, rad, bph, bpv)
+	var b_hover := box(color("button_hover"), dim.darkened(HOVER_BORDER_DARKEN), bw, rad, bph, bpv)
 	var b_pressed := box(color("button_pressed"), accent, bw, rad, bph, bpv)
 	var b_disabled := box(color("button_disabled"), color("button_disabled"), bw, rad, bph, bpv)
-	var b_focus := box(Color(0, 0, 0, 0), Color(accent, 0.55), bw, rad, bph, bpv)
+	var b_focus := box(Color(0, 0, 0, 0), Color(accent, a_focus), bw, rad, bph, bpv)
 	b_focus.draw_center = false
 	for t in ["Button", "OptionButton", "MenuButton"]:
 		th.set_stylebox("normal", t, b_normal)
@@ -229,28 +264,28 @@ static func _make() -> Theme:
 		th.set_color("font_hover_color", t, Color.WHITE)
 		th.set_color("font_focus_color", t, text)
 		th.set_color("font_pressed_color", t, accent)
-		th.set_color("font_hover_pressed_color", t, accent.lightened(0.3))
-		th.set_color("font_disabled_color", t, Color(dim, 0.45))
+		th.set_color("font_hover_pressed_color", t, accent.lightened(ACCENT_LIGHTEN))
+		th.set_color("font_disabled_color", t, Color(dim, a_disabled))
 		th.set_color("icon_normal_color", t, text)
 		th.set_color("icon_hover_color", t, Color.WHITE)
 		th.set_color("icon_focus_color", t, text)
 		th.set_color("icon_pressed_color", t, accent)
-		th.set_color("icon_hover_pressed_color", t, accent.lightened(0.3))
-		th.set_color("icon_disabled_color", t, Color(dim, 0.45))
+		th.set_color("icon_hover_pressed_color", t, accent.lightened(ACCENT_LIGHTEN))
+		th.set_color("icon_disabled_color", t, Color(dim, a_disabled))
 	for k in ["normal_mirrored", "hover_mirrored", "pressed_mirrored", "disabled_mirrored"]:
 		th.set_stylebox(k, "OptionButton", th.get_stylebox(k.trim_suffix("_mirrored"), "OptionButton"))
 	th.set_type_variation(ACCENT_BUTTON, "Button")
-	th.set_stylebox("normal", ACCENT_BUTTON, box(accent.darkened(0.25), accent, bw, rad, bph, bpv))
-	th.set_stylebox("hover", ACCENT_BUTTON, box(accent.darkened(0.1), accent.lightened(0.3), bw, rad, bph, bpv))
-	th.set_stylebox("pressed", ACCENT_BUTTON, box(accent.darkened(0.4), accent, bw, rad, bph, bpv))
+	th.set_stylebox("normal", ACCENT_BUTTON, box(accent.darkened(ACCENT_BTN_DARKEN), accent, bw, rad, bph, bpv))
+	th.set_stylebox("hover", ACCENT_BUTTON, box(accent.darkened(ACCENT_BTN_HOVER_DARKEN), accent.lightened(ACCENT_LIGHTEN), bw, rad, bph, bpv))
+	th.set_stylebox("pressed", ACCENT_BUTTON, box(accent.darkened(ACCENT_BTN_PRESS_DARKEN), accent, bw, rad, bph, bpv))
 	th.set_font("font", ACCENT_BUTTON, bold_font())
 	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 		th.set_color(k, ACCENT_BUTTON, color("background"))
 	th.set_type_variation(FLAT_BUTTON, "Button")
-	var flat := box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, rad, bph * 0.6, bpv * 0.6)
+	var flat := box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, rad, bph * FLAT_PAD, bpv * FLAT_PAD)
 	th.set_stylebox("normal", FLAT_BUTTON, flat)
-	th.set_stylebox("hover", FLAT_BUTTON, box(color("button_hover"), Color(0, 0, 0, 0), 0, rad, bph * 0.6, bpv * 0.6))
-	th.set_stylebox("pressed", FLAT_BUTTON, box(color("button_pressed"), Color(0, 0, 0, 0), 0, rad, bph * 0.6, bpv * 0.6))
+	th.set_stylebox("hover", FLAT_BUTTON, box(color("button_hover"), Color(0, 0, 0, 0), 0, rad, bph * FLAT_PAD, bpv * FLAT_PAD))
+	th.set_stylebox("pressed", FLAT_BUTTON, box(color("button_pressed"), Color(0, 0, 0, 0), 0, rad, bph * FLAT_PAD, bpv * FLAT_PAD))
 	th.set_stylebox("focus", FLAT_BUTTON, StyleBoxEmpty.new())
 	for t in ["CheckBox", "CheckButton"]:
 		th.set_color("font_color", t, text)
@@ -258,51 +293,51 @@ static func _make() -> Theme:
 		th.set_color("font_pressed_color", t, text)
 		th.set_color("font_hover_pressed_color", t, Color.WHITE)
 		th.set_color("font_focus_color", t, text)
-		th.set_color("font_disabled_color", t, Color(dim, 0.45))
+		th.set_color("font_disabled_color", t, Color(dim, a_disabled))
 		th.set_stylebox("focus", t, StyleBoxEmpty.new())
 
 	# ── 막대·입력 ──
 	th.set_stylebox("background", "ProgressBar", box(field, border, bw, rad, 0.0, 0.0))
-	th.set_stylebox("fill", "ProgressBar", box(accent.darkened(0.15), Color(0, 0, 0, 0), 0, rad, 0.0, 0.0))
+	th.set_stylebox("fill", "ProgressBar", box(accent.darkened(FILL_DARKEN), Color(0, 0, 0, 0), 0, rad, 0.0, 0.0))
 	th.set_color("font_color", "ProgressBar", text)
 	th.set_font_size("font_size", "ProgressBar", fs_small)
-	th.set_stylebox("normal", "LineEdit", box(field, border, bw, rad, bph * 0.8, bpv))
-	var le_focus := box(Color(0, 0, 0, 0), accent, bw, rad, bph * 0.8, bpv)
+	th.set_stylebox("normal", "LineEdit", box(field, border, bw, rad, bph * FIELD_PAD_H, bpv))
+	var le_focus := box(Color(0, 0, 0, 0), accent, bw, rad, bph * FIELD_PAD_H, bpv)
 	le_focus.draw_center = false
 	th.set_stylebox("focus", "LineEdit", le_focus)
-	th.set_stylebox("read_only", "LineEdit", box(color("button_disabled"), border, bw, rad, bph * 0.8, bpv))
+	th.set_stylebox("read_only", "LineEdit", box(color("button_disabled"), border, bw, rad, bph * FIELD_PAD_H, bpv))
 	th.set_color("font_color", "LineEdit", text)
 	th.set_color("font_uneditable_color", "LineEdit", dim)
-	th.set_color("font_placeholder_color", "LineEdit", Color(dim, 0.6))
+	th.set_color("font_placeholder_color", "LineEdit", Color(dim, a_placeholder))
 	th.set_color("caret_color", "LineEdit", accent)
-	th.set_color("selection_color", "LineEdit", Color(accent, 0.35))
-	var slider := box(field, border, bw, rad, 0.0, 3.0)
+	th.set_color("selection_color", "LineEdit", Color(accent, a_select))
+	var slider := box(field, border, bw, rad, 0.0, BAR_INSET)
 	th.set_stylebox("slider", "HSlider", slider)
-	th.set_stylebox("grabber_area", "HSlider", box(accent.darkened(0.2), Color(0, 0, 0, 0), 0, rad, 0.0, 3.0))
-	th.set_stylebox("grabber_area_highlight", "HSlider", box(accent, Color(0, 0, 0, 0), 0, rad, 0.0, 3.0))
+	th.set_stylebox("grabber_area", "HSlider", box(accent.darkened(SLIDER_DARKEN), Color(0, 0, 0, 0), 0, rad, 0.0, BAR_INSET))
+	th.set_stylebox("grabber_area_highlight", "HSlider", box(accent, Color(0, 0, 0, 0), 0, rad, 0.0, BAR_INSET))
 	for t in ["VScrollBar", "HScrollBar"]:
-		th.set_stylebox("scroll", t, box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, rad, 3.0, 3.0))
-		th.set_stylebox("grabber", t, box(color("button_border"), Color(0, 0, 0, 0), 0, rad, 3.0, 3.0))
-		th.set_stylebox("grabber_highlight", t, box(dim.darkened(0.3), Color(0, 0, 0, 0), 0, rad, 3.0, 3.0))
-		th.set_stylebox("grabber_pressed", t, box(accent.darkened(0.3), Color(0, 0, 0, 0), 0, rad, 3.0, 3.0))
+		th.set_stylebox("scroll", t, box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, rad, BAR_INSET, BAR_INSET))
+		th.set_stylebox("grabber", t, box(color("button_border"), Color(0, 0, 0, 0), 0, rad, BAR_INSET, BAR_INSET))
+		th.set_stylebox("grabber_highlight", t, box(dim.darkened(GRAB_DARKEN), Color(0, 0, 0, 0), 0, rad, BAR_INSET, BAR_INSET))
+		th.set_stylebox("grabber_pressed", t, box(accent.darkened(GRAB_DARKEN), Color(0, 0, 0, 0), 0, rad, BAR_INSET, BAR_INSET))
 
 	# ── 목록·말풍선·차림표 ──
-	th.set_stylebox("panel", "ItemList", box(field, border, bw, rad, pad * 0.5, pad * 0.5))
+	th.set_stylebox("panel", "ItemList", box(field, border, bw, rad, pad * LIST_PAD, pad * LIST_PAD))
 	th.set_stylebox("focus", "ItemList", StyleBoxEmpty.new())
-	th.set_stylebox("hovered", "ItemList", box(color("button_hover"), Color(0, 0, 0, 0), 0, rad, 4.0, 2.0))
-	th.set_stylebox("selected", "ItemList", box(color("button_pressed"), Color(0, 0, 0, 0), 0, rad, 4.0, 2.0))
-	th.set_stylebox("selected_focus", "ItemList", box(color("button_pressed"), accent, bw, rad, 4.0, 2.0))
+	th.set_stylebox("hovered", "ItemList", box(color("button_hover"), Color(0, 0, 0, 0), 0, rad, ITEM_PAD_H, ITEM_PAD_V))
+	th.set_stylebox("selected", "ItemList", box(color("button_pressed"), Color(0, 0, 0, 0), 0, rad, ITEM_PAD_H, ITEM_PAD_V))
+	th.set_stylebox("selected_focus", "ItemList", box(color("button_pressed"), accent, bw, rad, ITEM_PAD_H, ITEM_PAD_V))
 	th.set_color("font_color", "ItemList", text)
 	th.set_color("font_selected_color", "ItemList", accent)
 	th.set_color("font_hovered_color", "ItemList", Color.WHITE)
-	th.set_stylebox("panel", "TooltipPanel", box(color("topbar"), border, bw, rad, pad * 0.8, pad * 0.5))
+	th.set_stylebox("panel", "TooltipPanel", box(color("topbar"), border, bw, rad, pad * CARD_PAD_H, pad * LIST_PAD))
 	th.set_color("font_color", "TooltipLabel", text)
 	th.set_font_size("font_size", "TooltipLabel", fs_small)
-	th.set_stylebox("panel", "PopupMenu", box(color("topbar"), border, bw, rad, pad * 0.4, pad * 0.4))
-	th.set_stylebox("hover", "PopupMenu", box(color("button_hover"), Color(0, 0, 0, 0), 0, rad, 4.0, 2.0))
+	th.set_stylebox("panel", "PopupMenu", box(color("topbar"), border, bw, rad, pad * MENU_PAD, pad * MENU_PAD))
+	th.set_stylebox("hover", "PopupMenu", box(color("button_hover"), Color(0, 0, 0, 0), 0, rad, ITEM_PAD_H, ITEM_PAD_V))
 	th.set_color("font_color", "PopupMenu", text)
 	th.set_color("font_hover_color", "PopupMenu", Color.WHITE)
-	th.set_color("font_disabled_color", "PopupMenu", Color(dim, 0.45))
+	th.set_color("font_disabled_color", "PopupMenu", Color(dim, a_disabled))
 	th.set_stylebox("panel", "TabContainer", box(panel, border, bw, 0, pad, pad))
 	var tab_sel := box(panel, accent, 0, rad, bph, bpv)
 	tab_sel.border_width_top = maxi(2, bw * 2)
