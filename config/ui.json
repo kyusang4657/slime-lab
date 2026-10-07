@@ -5,7 +5,11 @@
 		"steps": [1, 2, 4, 8, 16, 32, 64],
 		"sim_budget_ms": 10.0,
 		"fast_forward_budget_ms": 14.0,
-		"actual_speed_window_s": 1.0
+		"actual_speed_window_s": 1.0,
+		"start_mult": 1,
+		"max_frame_delta_s": 0.25,
+		"label_refresh_s": 0.25,
+		"behind_ratio": 0.9
 	},
 	"lab": {
 		"default_preset": "default",
@@ -18,7 +22,22 @@
 		"toast_seconds": 4.0,
 		"font_size": 15,
 		"font_size_small": 13,
-		"font_size_title": 18
+		"font_size_title": 18,
+		"top_bar_min_height": 44,
+		"top_bar_gap": 6,
+		"speed_button_gap": 2,
+		"chip_gap": 12,
+		"chip_inner_gap": 4,
+		"speed_button_min_width": 40,
+		"play_button_min_width": 40,
+		"icon_size": 16,
+		"toast_max": 4,
+		"toast_fade_seconds": 0.8,
+		"toast_margin_top": 14,
+		"toast_stripe_width": 4,
+		"map_overlay_margin": 10,
+		"map_msaa": 2,
+		"day_light_threshold": 0.5
 	},
 	"theme": {
 		"background": "#15181d",
@@ -28,7 +47,24 @@
 		"text_dim": "#9aa3ad",
 		"accent": "#7fd1b9",
 		"warn": "#e8a05a",
-		"danger": "#e06464"
+		"danger": "#e06464",
+		"topbar": "#191c22",
+		"button": "#262b33",
+		"button_hover": "#303743",
+		"button_border": "#383f4b",
+		"button_pressed": "#24463f",
+		"button_disabled": "#1b1e24",
+		"field": "#121418",
+		"overlay": "#121418d0",
+		"toast": "#1b1f26f0",
+		"day": "#f0c674",
+		"night": "#9db4e0",
+		"corner_radius": 6,
+		"border_width": 1,
+		"panel_padding": 10,
+		"button_padding_h": 8,
+		"button_padding_v": 5,
+		"separation": 6
 	},
 	"map": {
 		"tile_size": 1.0,
