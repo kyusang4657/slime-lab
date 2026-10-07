@@ -1,0 +1,139 @@
+{
+	"_comment": "시뮬레이션 수치의 단일 기준. 코드는 읽기만 한다. 각 키의 뜻은 docs/DESIGN-v0.1.md 와 docs/CONFIG.md 참고.",
+	"map": {
+		"width": 64,
+		"height": 48,
+		"noise_cell": 8,
+		"noise_detail_cell": 3,
+		"noise_detail_weight": 0.3,
+		"water_level": 0.24,
+		"rock_noise_cell": 5,
+		"rock_level": 0.8,
+		"fertility_floor": 0.2
+	},
+	"time": {
+		"day_ticks": 60,
+		"daylight_fraction": 0.6,
+		"twilight_ticks": 6,
+		"season_days": 2
+	},
+	"seasons": {
+		"growth": [
+			1.0,
+			1.2,
+			0.8,
+			0.3
+		]
+	},
+	"plants": {
+		"max_food": 10.0,
+		"regrow": 0.12,
+		"night_growth": 0.0,
+		"update_every": 2,
+		"initial_fill": 0.8
+	},
+	"resources": {
+		"scale": 1.0
+	},
+	"dropped": {
+		"spoil_ticks": 90,
+		"sprout_chance": 0.3,
+		"sprout_food": 2.0,
+		"sprout_fertility": 0.1
+	},
+	"body": {
+		"energy_per_size": 40.0,
+		"start_energy_frac": 0.6
+	},
+	"metab": {
+		"base": 0.06,
+		"sense_cost": 0.02,
+		"move": 0.08,
+		"rest_factor": 0.5
+	},
+	"eat": {
+		"bite": 3.0,
+		"efficiency": 0.9
+	},
+	"life": {
+		"max_age": 200,
+		"max_age_jitter": 30
+	},
+	"repro": {
+		"maturity": 30,
+		"min_energy_frac": 0.35,
+		"cost_frac": 0.3,
+		"transfer_efficiency": 0.8,
+		"cooldown": 10,
+		"mate_radius": 2,
+		"asexual_when_alone": false
+	},
+	"population": {
+		"initial": 200,
+		"cap": 250,
+		"initial_age_spread": 40
+	},
+	"sense": {
+		"crowd_radius": 2,
+		"crowd_norm": 6.0,
+		"night_factor": 0.5
+	},
+	"traits": {
+		"size_min": 0.6,
+		"size_max": 1.6,
+		"size_init": 1.0,
+		"sense_min": 1.0,
+		"sense_max": 6.0,
+		"sense_init": 3.0,
+		"mutation_scale_size": 0.1,
+		"mutation_scale_sense": 0.5,
+		"mutation_scale_hue": 0.05
+	},
+	"brain": {
+		"hidden": 8,
+		"memory_units": 0,
+		"think_every": 1,
+		"weight_clamp": 4.0,
+		"init_range": 1.0,
+		"policy": "sample",
+		"sharpness": 4
+	},
+	"mutation": {
+		"rate": 0.05,
+		"sigma": 0.3
+	},
+	"carry": {
+		"max": 6.0
+	},
+	"store": {
+		"capacity": 200.0,
+		"max_count": 4,
+		"min_spacing": 12
+	},
+	"farm": {
+		"radius": 5,
+		"seed_cost": 1.0,
+		"growth_mult": 2.5,
+		"max_mult": 1.5,
+		"winter_floor": 0.4,
+		"abandon_ticks": 300
+	},
+	"discovery": {
+		"region_size": 8,
+		"forage_min_energy_frac": 0.8,
+		"forage_threshold": 300,
+		"store_threshold": 60.0,
+		"farm_radius": 6,
+		"farm_threshold": 15
+	},
+	"hash": {
+		"every": 100
+	},
+	"record": {
+		"every": 20,
+		"generation_milestone": 100
+	},
+	"run": {
+		"max_ticks": 2000000
+	}
+}

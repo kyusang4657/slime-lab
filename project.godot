@@ -1,0 +1,19 @@
+; Engine configuration file.
+config_version=5
+
+[application]
+
+config/name="슬라임 인공생명 실험실"
+config/description="슬라임 무리의 생태·진화·문명 발견을 관찰하는 연구용 시뮬레이션"
+config/version="0.1.0"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

@@ -1,0 +1,23 @@
+{
+	"_comment": "실험 예설정. 이름 → 기본값(sim-defaults.json)에 덮어쓸 값(점으로 이은 키). 값 조정 근거는 docs/TEST-REPORT.md 수치 변경 기록.",
+	"default": {
+		"label": "기본",
+		"set": {}
+	},
+	"abundant": {
+		"label": "풍요",
+		"set": {"resources.scale": 1.6}
+	},
+	"harsh_winter": {
+		"label": "혹독한 겨울",
+		"set": {"seasons.growth": [1.0, 1.2, 0.8, 0.0], "time.season_days": 5}
+	},
+	"fast_civ": {
+		"label": "빠른 문명",
+		"set": {"discovery.forage_threshold": 120, "discovery.store_threshold": 30.0, "discovery.farm_threshold": 8}
+	},
+	"no_resources": {
+		"label": "자원 없음",
+		"set": {"resources.scale": 0.0, "plants.initial_fill": 0.0}
+	}
+}
