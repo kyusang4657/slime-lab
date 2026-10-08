@@ -42,7 +42,7 @@
 | `is_extinct()`, `extinct_tick`, `peak_population` | | 멸종·최고 인구 |
 | `cfg` | Dictionary | 이 세계의 실험 설정(`SimConfig.build` 결과). **읽기 전용 — 화면은 절대 쓰지 않음**(시뮬레이션이 매 틱 읽는 살아 있는 사전). 화면이 읽는 키: `cfg.time.day_ticks`(날 표시, LabMain), `cfg.brain.weight_clamp`(두뇌 열지도 색 상한, InfoPanel), `cfg.hash.every`(검사만), **모든 잎 키**(ParamPanel — `cfg` 를 깊은 사본으로 떠서 다음 실험 조건과 견주고 "지금 실험" 요약에만 씀). ParamPanel 은 스냅숏 저장 파일 이름에 `tick` 도 읽음 |
 
-사건 `kind`: `discovery`(+`stage`), `store_built`(+`tile`), `first_farm`, `farm_lost`, `milestone`, `extinction`.
+사건 `kind`: `discovery`(+`stage`), `store_built`(+`tile`), `first_farm`, `farm_lost`, `milestone`, `extinction`. `mean_gen` = 사건 때의 평균 세대(0.01 단위) — `extinction` 은 개체가 모두 사라진 뒤라 마지막 개체군(마지막 틱에 죽은 개체)의 평균 세대.
 
 ## 상수·정적 도움 함수
 

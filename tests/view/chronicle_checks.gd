@@ -19,8 +19,21 @@ const SYNTH_KINDS: Array[String] = ["discovery", "store_built", "first_farm", "f
 const DT := 1.0 / 60.0
 const LONG_TEXT := "아주 긴 사건 문장 — 화면 폭을 여러 번 넘도록 낱말을 계속 이어 붙여서 두 줄 안에 다 들어가지 않는지 확인합니다 (끝 표지 ZZ-끝)"
 const KEEP_ALL_TEXT := "버려진 밭 1곳이 풀밭으로 돌아감 (남은 밭 84)"
-## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 60
+## 괄호·숫자를 떼지 않는 줄바꿈(G54): 예전에는 "(30, / 0)"·"(남은 밭 / 55)"·"밭 / 1곳이" 처럼 끊겼음
+const GLUE_TEXTS: Array[String] = ["첫 밭 — #1030 가 (30, 0) 에 심음", "버려진 밭 1곳이 풀밭으로 돌아감 (남은 밭 55)",
+		"채집 발견 — 배부른 줍기 시도 121회 (평균 4.3세대)", "평균 25세대 도달 — 개체 128"]
+## 씨앗 1 의 422틱 채집 발견: mean_gen 4.35(0.01 단위로 반올림해 저장), 문장은 반올림 전 값으로 "(평균 4.3세대)".
+## 줄의 평균 세대를 0.1 단위로 한 번 더 반올림하면 4.4 가 되어 문장과 어긋났음(G26)
+const GEN_PIN_TICK := 422
+const GEN_PIN_COL := "4.35세대"
+const GEN_PIN_TEXT := "4.3"
+## 줄의 평균 세대(0.01 단위)와 문장의 평균 세대(0.1 단위)가 같은 값을 반올림한 것이면 둘의 차이는 0.05 + 0.005 이내
+const GEN_TOL := 0.0551
+## 다시 읽은 바로 뒤 틱(G04): 씨앗 2 는 126 → 127틱 진행에서 "저장 발견"·"저장고 1호"(틱 번호 126)가 나옴
+const REBUILD_W := 126
+const SNAP_PATH := "user://chronicle_checks_rebuild.json"
+## 이 모듈이 하는 검사 수(조건부 검사도 고정 씨앗이라 늘 같음 — 중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
+const MIN_CHECKS := 85
 
 
 func run(t) -> void:
@@ -28,6 +41,7 @@ func run(t) -> void:
 	await _synthetic(t)
 	await _compare(t)
 	await _with_lab(t)
+	await _rebuild_next_tick(t)
 	_wrap(t)
 
 
@@ -64,11 +78,28 @@ func _real_chronicle(t) -> void:
 		if panel.item_text(i) != _fmt(ch[ch.size() - 1 - i]):
 			all_match = false
 	t.check(all_match, "모든 줄 = \"틱 N · 평균 G세대 · 문장\"(연대기 역순)")
+	# 평균 세대는 한 번만 반올림(G26): 줄(목록 열·item_text) = 저장된 mean_gen 그대로(0.01 단위 — chronicle.csv 와 같음),
+	# 문장 "(평균 X세대)"(0.1 단위)와 같은 값을 반올림한 사이(0.055 이내)
+	var gen_re := RegEx.create_from_string("\\(평균 ([0-9.]+)세대\\)")
+	var gen_ok := true
+	var pinned := ""
+	for i in panel.item_count():
+		var it := panel.item(i)
+		var col := ChroniclePanel.GEN_SHORT % float(it.gen)
+		if col != "%.2f세대" % float(it.gen) or not panel.item_text(i).contains(" · 평균 " + col + " · "):
+			gen_ok = false
+		var m := gen_re.search(str(it.text))
+		if m != null and absf(col.trim_suffix("세대").to_float() - m.get_string(1).to_float()) > GEN_TOL:
+			gen_ok = false
+		if int(it.tick) == GEN_PIN_TICK and str(it.kind) == "discovery":
+			pinned = "%s · 문장 %s" % [col, m.get_string(1) if m != null else "?"]
+	t.check(gen_ok and pinned == "%s · 문장 %s" % [GEN_PIN_COL, GEN_PIN_TEXT],
+			"줄의 평균 세대 = 저장값(0.01), 문장의 평균 세대와 어긋나지 않음(%d틱 %s)" % [GEN_PIN_TICK, pinned])
 	# 다시 읽은 뒤 아직 비우지 않은 사건(이미 읽은 것)이 와도 두 번 넣지 않는다
 	var pending := x.world.drain_events()
 	t.check(pending.size() == ch.size(), "세계에 아직 비우지 않은 사건 %d개" % pending.size())
 	panel.append_events(0, pending)
-	t.check(panel.item_count() == ch.size(), "다시 읽은 틱 이하의 사건은 건너뜀(중복 없음)")
+	t.check(panel.item_count() == ch.size(), "다시 읽을 때 이미 읽은 사건(아직 비우지 않은 것)은 건너뜀(중복 없음)")
 	# 새 사건 덧붙이기(실제 진행)
 	var n0 := ch.size()
 	var guard := 0
@@ -352,7 +383,71 @@ func _with_lab(t) -> void:
 	await t.frames(1)
 
 
-## ⑤ 낱말 단위 줄바꿈(한글 음절 사이에서 끊지 않음)·말줄임
+## ⑤ 다시 읽은 바로 뒤 틱의 사건(G04). 발견·저장고·첫 밭·밭 잃음은 한 틱을 진행하는 도중에 진행 전 틱 번호를 달고 나온다.
+## 그래서 틱 W 에서 다시 읽고 한 틱 진행하면 "틱 W" 의 새 사건이 오는데, 예전에는 "다시 읽은 틱 이하는 이미 읽음" 으로 걸러
+## 잃었다(토스트·소리는 나는데 줄이 없음). 직접(set_experiments — 비우지 않은 사건이 있을 때·없을 때)·스냅숏 열기·비교 끝내기.
+func _rebuild_next_tick(t) -> void:
+	for drained: bool in [false, true]:
+		var x: Experiment = Experiment.create(PRESET, SETS, SEED_B).experiment
+		x.step_n(REBUILD_W)
+		if drained:
+			x.world.drain_events()
+		var panel := ChroniclePanel.new()
+		panel.size = Vector2(UiConfig.num("chronicle.width"), UiConfig.num("lab.bottom_panel_height"))
+		t.root.add_child(panel)
+		panel.set_experiments([x])
+		var n0 := x.world.chronicle.size()
+		x.step()
+		var ev := x.world.drain_events()
+		var ch: Array = x.world.chronicle
+		var fresh := ch.size() - n0
+		t.check(fresh >= 2 and int(ch.back().tick) == REBUILD_W,
+				"다시 읽은 틱 %d 에서 한 틱 → 그 틱 번호의 새 사건 %d개(비운 뒤 %s)" % [REBUILD_W, fresh, drained])
+		panel.append_events(0, ev)
+		t.check(panel.item_count() == ch.size() and panel.item_text(0) == _fmt(ch.back()) and panel.item_text(1) == _fmt(ch[ch.size() - 2]),
+				"다시 읽은 바로 뒤 틱의 사건도 덧붙음(비운 뒤 %s): 줄 %d = 연대기 %d" % [drained, panel.item_count(), ch.size()])
+		panel.queue_free()
+	await t.frames(1)
+	# 실험실: 스냅숏을 열고(experiments_changed) 한 틱 → advance_frame 의 events_tagged
+	var lab: LabMain = load("res://scenes/lab.tscn").instantiate()
+	t.root.add_child(lab)
+	await t.frames(1)
+	lab.set_process(false)
+	lab.set_paused(true)
+	# 소리는 이 검사와 상관없음(모듈 끝 바로 앞이라 재생 중에 끝나면 오디오 재생 객체가 남았다고 경고)
+	lab.lab_sound.enabled = false
+	var cp := lab.chronicle_panel
+	lab.new_experiment(PRESET, SETS, SEED_B)
+	lab.step_ticks(REBUILD_W)
+	lab.advance_frame(DT)
+	t.check(lab.save_snapshot(SNAP_PATH) == "" and lab.open_snapshot(SNAP_PATH) == "" and lab.world.tick == REBUILD_W,
+			"틱 %d 에서 스냅숏 저장 → 열기" % REBUILD_W)
+	lab.step_ticks(1)
+	lab.advance_frame(DT)
+	t.check(cp.item_count() == lab.world.chronicle.size() and lab.world.chronicle.size() >= 3,
+			"스냅숏을 열고 한 틱: 연대기 창 %d줄 = 세계 연대기 %d" % [cp.item_count(), lab.world.chronicle.size()])
+	# 비교를 끝내고(experiments_changed([A])) 한 틱
+	t.check(lab.start_compare({preset = PRESET, overrides = SETS, seed = SEED_B}, {preset = PRESET, overrides = SETS, seed = 1}) == "",
+			"비교 시작")
+	lab.step_ticks(REBUILD_W)
+	lab.advance_frame(DT)
+	lab.stop_compare()
+	lab.step_ticks(1)
+	lab.advance_frame(DT)
+	t.check(not lab.is_comparing() and cp.item_count() == lab.world.chronicle.size() and lab.world.chronicle.size() >= 3,
+			"비교를 끝내고 한 틱: 연대기 창 %d줄 = 세계 연대기 %d" % [cp.item_count(), lab.world.chronicle.size()])
+	var ref: SimWorld = t.make_world(SETS, SEED_B, PRESET)
+	ref.step_n(lab.world.tick)
+	var diff: String = t.same_state(lab.world, ref)
+	t.check(diff == "", "다시 읽어도 역사·상태가 헤드리스와 같음 %s" % diff)
+	lab.queue_free()
+	await t.frames(1)
+	for f in [SNAP_PATH, SNAP_PATH + ".bak", SNAP_PATH + ".tmp"]:
+		if FileAccess.file_exists(f):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(f))
+
+
+## ⑥ 낱말 단위 줄바꿈(한글 음절 사이에서 끊지 않음)·말줄임
 func _wrap(t) -> void:
 	var font: Font = UiTheme.regular_font()
 	var fs := UiConfig.integer("chronicle.text_font_size")
@@ -373,13 +468,52 @@ func _wrap(t) -> void:
 		if font.get_string_size(ln, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > 60.5:
 			one_fit = false
 	t.check(one_fit and "".join(one) == "가나다라마바사아자차카타파하가나다라마바사아자차카타파하", "폭보다 긴 낱말만 글자 단위로 자름")
+	# 괄호 안·숫자 앞 빈칸에서는 끊지 않음(G54): 가장 넓은 덩어리 폭부터 문장 전체 폭까지 1px 씩 — 줄마다 괄호가 짝이 맞고,
+	# 숫자로 시작하는 줄이 없고, 빈칸으로 이으면 원문, 폭 안
+	var glue_ok := true
+	var glue_bad := ""
+	var widths := 0
+	for text in GLUE_TEXTS:
+		var full := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		# 가장 넓은 덩어리(붙여 둘 묶음 또는 낱말 하나) 폭
+		var w0 := 0.0
+		var units: Array = Array(text.split(" ", false)) + ["(30, 0)", "(남은 밭 55)", "밭 1곳이", "시도 121회", "(평균 4.3세대)", "평균 25세대", "개체 128"]
+		for unit: String in units:
+			if text.contains(unit):
+				w0 = maxf(w0, font.get_string_size(unit, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
+		var wx := ceilf(w0)
+		while wx <= ceilf(full):
+			var ls := ChroniclePanel.wrap_text(font, text, fs, wx, 9)
+			widths += 1
+			var ok := " ".join(ls) == text
+			for ln in ls:
+				ok = ok and ln.count("(") == ln.count(")") and not ln.left(1).is_valid_int() \
+						and font.get_string_size(ln, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x <= wx + 0.5
+			if not ok and glue_bad == "":
+				glue_bad = "폭 %.0f: %s" % [wx, ls]
+			glue_ok = glue_ok and ok
+			wx += 1.0
+	t.check(glue_ok and widths > 100, "괄호 안·숫자 앞에서 줄을 바꾸지 않음(폭 %d가지) %s" % [widths, glue_bad])
+	# 괄호 묶음이 폭보다 넓으면 그 안의 빈칸에서 접되(글자 단위로 자르지 않음) 숫자는 앞 낱말과 함께: "(남은" / "밭 55)"
+	var paren := "(남은 밭 55)"
+	# 폭 = "(남은 밭"·"밭 55)"·가장 넓은 낱말 가운데 큰 것(낱말이 글자 단위로 잘리지 않게) < 괄호 묶음 전체
+	var narrow := 0.0
+	for s: String in Array(GLUE_TEXTS[1].split(" ", false)) + ["(남은 밭", "밭 55)"]:
+		narrow = maxf(narrow, ceilf(font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x))
+	var split := ChroniclePanel.wrap_text(font, GLUE_TEXTS[1], fs, narrow, 9)
+	var split_fit := true
+	for ln in split:
+		split_fit = split_fit and font.get_string_size(ln, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x <= narrow + 0.5
+	t.check(narrow < font.get_string_size(paren, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x and split_fit and " ".join(split) == GLUE_TEXTS[1]
+			and split.size() >= 2 and split[split.size() - 1] == "밭 55)" and split[split.size() - 2] == "(남은",
+			"폭(%.0f)보다 넓은 괄호는 안의 빈칸에서, 숫자는 떼지 않고 접음: %s" % [narrow, split])
 
 
 # ── 도움 ──
 
-## 줄 글 기대값: "틱 N · 평균 G세대 · 문장"
+## 줄 글 기대값: "틱 N · 평균 G세대 · 문장"(G = 저장된 mean_gen 그대로 0.01 단위 — G26 에서 0.1 단위를 바꿈)
 func _fmt(e: Dictionary) -> String:
-	return "틱 %s · 평균 %.1f세대 · %s" % [_commas(int(e.tick)), float(e.mean_gen), str(e.text)]
+	return "틱 %s · 평균 %.2f세대 · %s" % [_commas(int(e.tick)), float(e.mean_gen), str(e.text)]
 
 
 func _commas(v: int) -> String:

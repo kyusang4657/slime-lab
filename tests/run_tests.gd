@@ -42,7 +42,7 @@ func _init() -> void:
 		"test_discovery_forage", "test_discovery_store", "test_storehouse_rules", "test_farm_rules",
 		"test_determinism", "test_snapshot_roundtrip", "test_snapshot_files", "test_runner",
 		"test_extinction_no_resources", "test_memory_units", "test_performance", "test_farm_reachable",
-		"test_time_after_step", "test_event_copies",
+		"test_time_after_step", "test_event_copies", "test_extinction_mean_gen",
 	]
 	for t in tests:
 		if not _only.is_empty() and not _only.has(t):
@@ -898,3 +898,49 @@ func test_event_copies() -> void:
 	var before := str(wd.chronicle[0].text)
 	ev[0]["text"] = "바뀜"
 	check(str(wd.chronicle[0].text) == before, "꺼낸 사건을 고쳐도 연대기는 그대로")
+
+
+## 멸종 사건의 평균 세대 = 마지막 개체군(마지막 틱에 죽은 개체)의 평균 세대. 예전에는 개체가 모두 사라진 뒤에 재서
+## 늘 0.0 이었다(연대기 창·chronicle.csv 가 "0.0세대 멸종"). 역사 해시는 연대기를 담지 않으므로 그대로.
+func test_extinction_mean_gen() -> void:
+	var sets := {"resources.scale": 0.5}
+	var wd := world(sets, 1)
+	var last := 0.0
+	var births := 0
+	while not wd.is_extinct() and wd.tick < 3000:
+		last = wd.mean_generation()
+		births = wd.total_births
+		wd.step()
+	check(wd.is_extinct() and wd.tick == wd.extinct_tick, "자원 절반·씨앗 1 → 멸종(t=%d)" % wd.tick)
+	var ev: Dictionary = wd.chronicle.back() if not wd.chronicle.is_empty() else {}
+	check(str(ev.get("kind", "")) == "extinction" and int(ev.get("tick", -1)) == wd.extinct_tick, "연대기 끝 = 멸종 사건")
+	var s := 0
+	var n := 0
+	for id in wd.lin_death.size():
+		if wd.lin_death[id] == wd.extinct_tick - 1:
+			s += wd.lin_gen[id]
+			n += 1
+	var want := snappedf(float(s) / float(maxi(n, 1)), SimWorld.EVENT_GEN_STEP)
+	var got := float(ev.get("mean_gen", -1.0))
+	check(n > 0 and got > 0.0 and got == want, "멸종 사건의 평균 세대 %.2f = 마지막 틱에 죽은 %d마리의 평균 %.2f(0 아님)" % [got, n, want])
+	check(wd.total_births == births and got == snappedf(last, SimWorld.EVENT_GEN_STEP),
+			"마지막 틱에 출생 없음 → 멸종 직전(마지막으로 살아 있던 틱 끝)의 mean_generation() %.2f 와 같음" % last)
+	var csv := SimRecorder.chronicle_csv(wd).split("\n", false)
+	check(csv[csv.size() - 1].begins_with("%d,%s,extinction," % [wd.extinct_tick, SimRecorder.fmt(got)]), "chronicle.csv 멸종 줄에도 같은 값: " + csv[csv.size() - 1])
+	# 상태를 따로 두지 않음: 멸종 한 틱 전에 저장한 스냅숏을 이어 돌려도 같은 사건·해시
+	var w2 := world(sets, 1)
+	w2.step_n(wd.extinct_tick - 1)
+	var r := SimSnapshot.from_text(SimSnapshot.to_text(w2))
+	var w3: SimWorld = r.world
+	check(w3 != null, "멸종 한 틱 전 스냅숏 복원")
+	if w3 == null:
+		return
+	w3.step()
+	var e3: Dictionary = w3.chronicle.back() if not w3.chronicle.is_empty() else {}
+	check(w3.is_extinct() and str(e3.get("kind", "")) == "extinction" and float(e3.get("mean_gen", -1.0)) == got and w3.history_hash == wd.history_hash,
+			"스냅숏에서 이어 돌린 멸종 사건도 평균 %.2f세대 · 같은 해시" % float(e3.get("mean_gen", -1.0)))
+	# 번식 없이 사라진 세계(첫 세대뿐)는 0 이 맞음
+	var w0 := world({}, 1, "no_resources")
+	while not w0.is_extinct() and w0.tick < 3000:
+		w0.step()
+	check(w0.is_extinct() and float(w0.chronicle.back().mean_gen) == 0.0, "첫 세대만 살다 사라지면 평균 0세대")

@@ -5,7 +5,8 @@ extends SceneTree
 ## 발견·저장고·첫 밭·밭 잃음·세대 사건이 다 있는 연대기를 만들고, 실험실 아래 자리와 같은 바탕(DockPanel) 위에 찍는다.
 ##   chronicle.png  왼쪽 = 420×220(실험실 아래 자리 높이, 첫 밭 줄을 누른 상태), 오른쪽 = 420×300(같은 실험, 더 긴 자리)
 ## --extra 를 주면 참고용도 찍는다: chronicle-compare.png(A/B 두 실험), chronicle-filter.png(건물·밭 잃음 거르기),
-##   chronicle-limit.png(max_items 를 줄여 "더 오래된 K개"), chronicle-empty.png(빈 안내)
+##   chronicle-limit.png(max_items 를 줄여 "더 오래된 K개"), chronicle-empty.png(빈 안내),
+##   chronicle-extinct.png(번식한 뒤 사라진 세계의 멸종 줄 — 평균 세대 = 마지막 개체군)
 ## 인자: --out=폴더(기본 res://docs/screenshots/v0.1), --seed=N, --ticks=N, --extra
 
 const TICKS := 2130
@@ -18,6 +19,10 @@ const MARGIN := 16
 const TALL := 300
 ## 참고 캡처의 "더 오래된" 한도
 const LIMIT_ITEMS := 6
+## 참고 캡처의 멸종 세계(기본 예설정·자원 절반 — 씨앗 1 은 4세대까지 번식한 뒤 699틱에 멸종)와 진행 한도
+const EXTINCT_PRESET := "default"
+const EXTINCT_SETS := {"resources.scale": 0.5}
+const EXTINCT_MAX_TICKS := 5000
 
 var _out := "res://docs/screenshots/v0.1"
 var _seed := SEED
@@ -117,6 +122,19 @@ func _run() -> void:
 	(empty.panel as ChroniclePanel).set_experiments([r3.experiment])
 	await _frames(3)
 	_shot(_rect(empty), "chronicle-empty.png")
+	empty.dock.queue_free()
+	# 멸종: 번식한 뒤 사라진 세계 — 멸종 줄의 평균 세대가 마지막 개체군의 것(0.00 이 아님)
+	var r4 := Experiment.create(EXTINCT_PRESET, EXTINCT_SETS, _seed)
+	var z: Experiment = r4.experiment
+	var guard := 0
+	while z != null and not z.world.is_extinct() and guard < EXTINCT_MAX_TICKS:
+		z.step()
+		guard += 1
+	var ext := _dock(Vector2(MARGIN, MARGIN), w, h)
+	(ext.panel as ChroniclePanel).set_experiments([z])
+	await _frames(3)
+	print("멸종 줄: %s" % (ext.panel as ChroniclePanel).item_text(0))
+	_shot(_rect(ext), "chronicle-extinct.png")
 	quit(0)
 
 
