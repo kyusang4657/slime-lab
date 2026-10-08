@@ -69,6 +69,9 @@ var _empty: VBoxContainer
 var _empty_label: Label
 var _main: VBoxContainer
 var _swatch: SlimeSwatch
+# 비교 모드 이름표(A/B, 실험 색 바탕). 혼자면 숨김(4단계)
+var _tag: PanelContainer
+var _tag_label: Label
 var _title: Label
 var _gen: Label
 var _status: Label
@@ -231,6 +234,21 @@ func set_empty_text(text: String) -> void:
 	_empty_text = text
 	if _id < 0:
 		_empty_label.text = _empty_text if _empty_text != "" else EMPTY_TEXT
+
+
+## (추가, 4단계) 비교 모드에서 어느 실험의 개체인지 머리에 이름표("A"/"B")로 보인다. "" = 숨김(혼자 모드).
+## col = 이름표 바탕(실험 색, 글자는 어두운 바탕색). 투명이면 강조 색.
+func set_tag(tag: String, col: Color = Color(0, 0, 0, 0)) -> void:
+	_tag_label.text = tag
+	_tag.visible = tag != ""
+	var sb := _tag.get_theme_stylebox("panel") as StyleBoxFlat
+	if sb != null:
+		sb.bg_color = col if col.a > 0.0 else _c_accent
+
+
+## (추가, 4단계) 지금 이름표("" = 없음). 검사용.
+func current_tag() -> String:
+	return _tag_label.text if _tag.visible else ""
 
 
 ## (추가) 따라가기 단추 상태만 맞춘다(신호 없음). LabMain 이 F 키로 바꿨을 때 쓴다.
@@ -541,6 +559,16 @@ func _build_header() -> void:
 	head.add_child(tb)
 	var trow := HBoxContainer.new()
 	tb.add_child(trow)
+	# 비교 모드 이름표(A/B): 실험 색 바탕 + 어두운 글자(글자 자체는 색을 입히지 않음)
+	_tag = PanelContainer.new()
+	_tag.add_theme_stylebox_override("panel", UiTheme.box(_c_accent, Color(0, 0, 0, 0), 0, UiConfig.integer("info.corner_radius"),
+			UiConfig.num("info.relative_pad_left"), 0.0))
+	_tag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tag.visible = false
+	trow.add_child(_tag)
+	_tag_label = _label("", _fs, _c_bg, true)
+	_tag.add_child(_tag_label)
 	_title = _label("", _fs_title, _c_text, true)
 	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	trow.add_child(_title)

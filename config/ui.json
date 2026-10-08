@@ -54,7 +54,9 @@
 		"toast_coalesce_kinds": [
 			"farm_lost"
 		],
-		"pause_on_extinction": true
+		"pause_on_extinction": true,
+		"left_dock_open": true,
+		"bottom_dock_open": true
 	},
 	"theme": {
 		"background": "#15181d",
@@ -291,6 +293,9 @@
 		"min_interval_s": 0.5
 	},
 	"compare": {
-		"gap_px": 4
+		"gap_px": 4,
+		"tag_radius": 3,
+		"tag_pad_h": 5,
+		"tag_pad_v": 0
 	}
 }

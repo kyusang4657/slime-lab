@@ -1,8 +1,8 @@
 class_name LabMain
 extends Control
-## 실험실 주 화면. 계약: docs/VIEW-API.md "LabMain".
-## 위쪽 막대(재생·속도·상태) / 왼쪽 자리 | 지도 관찰 창(SubViewport + MapView) | 개체 정보 창 / 아래 자리.
-## 시뮬레이션을 진행(step)하고 사건을 소비(drain_events)하는 것은 화면 가운데 여기뿐이다. 배열에는 쓰지 않는다.
+## 실험실 주 화면. 계약: docs/VIEW-API.md "LabMain"·"4단계 계약".
+## 위쪽 막대(재생·속도·상태) / [왼쪽 자리 | 지도 관찰 창(SubViewport + MapView, 비교 모드면 A | B 둘)] 아래 자리 | 개체 정보 창.
+## 시뮬레이션을 진행(step)하고 사건을 소비(drain_events)하는 것은 화면 가운데 여기뿐이다(Experiment 를 거쳐). 배열에는 쓰지 않는다.
 
 signal ticked(world: SimWorld)
 signal events(list: Array)
@@ -12,7 +12,7 @@ signal world_changed(world: SimWorld)
 signal experiments_changed(list: Array)
 ## index 번째 실험이 시계열 한 줄을 기록했을 때(Experiment.step 이 record.every 마다)
 signal recorded(index: int, row: Dictionary)
-## index 번째 실험의 drain_events() 결과(비어 있지 않을 때). events(list) 는 첫째 실험만(3단계 호환)
+## index 번째 실험의 drain_events() 결과(비어 있지 않을 때, 사본). events(list) 는 첫째 실험만(3단계 호환)
 signal events_tagged(index: int, list: Array)
 ## 그래프에 시점 표시를 요청(연대기 줄을 눌렀을 때 등). tick < 0 = 표시 지움
 signal cursor_tick_requested(tick: int)
@@ -31,16 +31,50 @@ const TOAST_TAGS := {discovery = "새 발견", error = "오류"}
 const TOAST_HIGHLIGHT_ALPHA := 0.85
 # 오래 보이는 알림(오류·경고: 경로 등을 읽을 시간)
 const TOAST_LONG_KINDS: Array[String] = ["error", "warn"]
-const MAP_HINT := "끌기 이동 · 휠 확대 · 오른쪽 끌기 회전 · 클릭 고르기   │   스페이스 멈춤 · 1~7 속도 · F 따라가기 · Home 전체 보기 · Esc 선택 해제"
+# 조작 도움말: 지도가 넓으면 한 줄, 좁으면(1280 창·비교 모드) 두 줄
+const HINT_MOUSE := "끌기 이동 · 휠 확대 · 오른쪽 끌기 회전 · 클릭 고르기"
+const HINT_KEYS := "스페이스 멈춤 · 1~7 속도 · F 따라가기 · Home 전체 보기 · Esc 선택 해제"
+const HINT_SEP := "   │   "
+const MAP_HINT := HINT_MOUSE + HINT_SEP + HINT_KEYS
 const FIT_TEXT := "전체 보기"
+## 자리 접기 단추(지도 오른쪽 아래). 눌림 = 자리가 보임
+const DOCK_LEFT := "left"
+const DOCK_BOTTOM := "bottom"
+const LEFT_TOGGLE_TEXT := "설정"
+const BOTTOM_TOGGLE_TEXT := "그래프·연대기"
+## 비교 모드 실험 색(이름표 바탕): 그래프 계열 색과 같게(A 실선·B 점선과 한눈에 맞도록)
+const TAG_COLOR_KEYS: Array[String] = ["graph.series_a", "graph.series_b"]
+
+
+## 지도 한 칸(혼자면 하나, 비교 모드면 A·B 둘): SubViewportContainer ⊃ SubViewport ⊃ MapView + 왼쪽 위 표지.
+class MapPane:
+	var container: SubViewportContainer
+	var viewport: SubViewport
+	var map: MapView
+	## 왼쪽 위 표지(OverlayPanel): 이름표(비교 모드) · 실험 이름 · 멈춤 · 멸종 · 전체 보기
+	var head: PanelContainer
+	var tag: PanelContainer
+	var title: Label
+	var paused: Label
+	var extinct: Label
+	var fit: Button
+	## 표지 폭을 마지막으로 맞춘 조건(바뀔 때만 다시 잼)
+	var fit_key := ""
+	var width := 0.0
+
 
 var world: SimWorld
-## 진행 중인 실험들(혼자면 1개, 비교 모드면 2개: [A, B]). world = experiments[0].world
+## 진행 중인 실험들(혼자면 1개, 비교 모드면 2개: [A, B]). world = experiments[0].world, map_view = A 의 지도
 var experiments: Array[Experiment] = []
 var map_view: MapView
 var info_panel: InfoPanel
 var left_dock: VBoxContainer
 var bottom_dock: HBoxContainer
+## 4단계 패널(_ready 에서 자리에 넣고 bind_lab(self))
+var param_panel: ParamPanel
+var graph_panel: GraphPanel
+var chronicle_panel: ChroniclePanel
+var lab_sound: LabSound
 ## 마지막 advance_frame 의 시뮬레이션 시간(ms)과 예산을 다 써서 밀린 틱을 버렸는지(성능 기록·검사용)
 var last_sim_ms := 0.0
 var last_budget_hit := false
@@ -50,6 +84,8 @@ var _paused := false
 var _fast := false
 var _acc := 0.0
 var _selected := -1
+# 선택한 개체가 속한 실험(비교 모드 0 = A, 1 = B). 선택을 지워도 마지막 값을 둔다(F 따라가기가 쓸 지도)
+var _selected_index := 0
 var _frame := 0
 var _title := ""
 # 실제 배속 측정: 최근 프레임의 (시간, 진행한 틱 몫). 틱 몫은 정수 틱이 아니라 누적의 소수 부분까지 센 진행량
@@ -61,16 +97,20 @@ var _hist_ticks := 0.0
 var _speed_label_wait := 0.0
 # 세계를 바꾼 직후 첫 프레임(불러오기 시간이 든 긴 프레임)은 실제 배속 창에 넣지 않는다
 var _skip_record := false
-# 한 틱 비용 추정(µs, 지수 이동 평균): 예산을 넘기 **전에** 멈추려고 다음 틱 비용을 미리 더해 본다
+# 한 틱 비용 추정(µs, 지수 이동 평균): 예산을 넘기 **전에** 멈추려고 다음 틱 비용을 미리 더해 본다.
+# 한 틱 = 모든 실험을 한 틱씩(비교 모드면 A·B 둘 몫을 합친 시간)
 var _step_us_est := 0.0
 var _est_alpha := 0.2
 var _behind_fill := 0.5
-# 멸종을 이미 보았는지(멸종하는 순간 한 번만 멈추고 알리려고), 멸종 때문에 저절로 멈췄는지(새 세계에서는 다시 재생)
-var _extinct_seen := false
+# 실험마다 멸종을 이미 보았는지(멸종하는 순간 한 번만 알리려고), 모두 멸종해 저절로 멈췄는지(새 세계에서는 다시 재생)
+var _extinct_seen: Array[bool] = []
 var _extinct_paused := false
-# 알림: {panel, left(남은 초), kind, text, body, count_label, when, count}
+# 알림: {panel, left(남은 초), kind, group(비교 모드 이름표), text, body, count_label, when, count}
 var _toasts: Array[Dictionary] = []
 var _coalesce: Array[String] = []
+# 자리 접기(lab.left_dock_open·bottom_dock_open 이 처음 값)
+var _left_open := true
+var _bottom_open := true
 
 # 화면 수치(ui.json, _ready 에서 한 번 읽음)
 var _tps := 6.0
@@ -88,21 +128,34 @@ var _speed_group := ButtonGroup.new()
 var _fast_btn: Button
 var _lbl_tick: Label
 var _lbl_day: Label
+var _day_chip: Control
 var _lbl_season: Label
 var _lbl_daynight: Label
 var _lbl_gen: Label
 var _lbl_pop: Label
 var _lbl_stage: Label
 var _lbl_speed: Label
+# 혼자 모드 상태(평균 세대·개체·문명) / 비교 모드 상태(A 개체 · 문명 │ B 개체 · 문명)
+var _single_box: HBoxContainer
+var _cmp_box: HBoxContainer
+var _cmp_pop: Array[Label] = []
+var _cmp_stage: Array[Label] = []
 var _left_wrap: PanelContainer
 var _bottom_wrap: PanelContainer
 var _map_area: Control
+var _panes: Array[MapPane] = []
+# A 지도(_panes[0])의 노드 별명(3단계 검사·캡처가 씀)
 var _map_container: SubViewportContainer
 var _map_viewport: SubViewport
 var _map_title: Label
 var _paused_badge: Label
 var _extinct_badge: Label
 var _fit_btn: Button
+var _hint: PanelContainer
+var _hint_label: Label
+var _dock_toggles: HBoxContainer
+var _left_toggle: Button
+var _bottom_toggle: Button
 var _toast_box: VBoxContainer
 
 
@@ -119,8 +172,12 @@ func _ready() -> void:
 	for v in UiConfig.value("lab.toast_coalesce_kinds", []):
 		_coalesce.append(str(v))
 	_speed = UiConfig.integer("speed.start_mult")
+	_left_open = bool(UiConfig.value("lab.left_dock_open", true))
+	_bottom_open = bool(UiConfig.value("lab.bottom_dock_open", true))
 	theme = UiTheme.build()
 	_build_layout()
+	# 패널은 첫 실험을 열기 전에 붙인다(첫 experiments_changed 를 받게)
+	_place_panels()
 	if DisplayServer.get_name() != "headless":
 		DisplayServer.window_set_min_size(Vector2i(UiConfig.integer("lab.min_width"), UiConfig.integer("lab.min_height")))
 	var errs := apply_args(OS.get_cmdline_user_args())
@@ -146,7 +203,7 @@ func new_experiment(preset: String, overrides: Dictionary, seed_value: int) -> S
 	return ""
 
 
-## 스냅숏 파일을 열어 붙인다. 성공 "", 실패면 오류 문장(지금 세계는 그대로). 백업에서 살렸으면 알림.
+## 스냅숏 파일을 열어 붙인다(비교 모드면 끝내고 하나만). 성공 "", 실패면 오류 문장(지금 세계는 그대로). 백업에서 살렸으면 알림.
 func open_snapshot(path: String) -> String:
 	var r := Experiment.from_snapshot(path)
 	if r.experiment == null:
@@ -159,15 +216,44 @@ func open_snapshot(path: String) -> String:
 	return ""
 
 
-## 두 실험을 나란히(A | B) 시작한다. a·b = {preset, overrides, seed}. 성공 "", 실패면 오류 문장(지금 실험 그대로).
-## (뼈대: 4단계 LabMain 담당이 지도 둘·번갈아 진행·선택을 구현)
-func start_compare(_a: Dictionary, _b: Dictionary) -> String:
-	return "비교 모드는 아직 준비 중입니다"
+## 두 실험을 나란히(A | B) 시작한다. a·b = {preset, overrides, seed}(빠진 키는 기본 예설정·{}·기본 씨앗).
+## 지도 둘을 나란히 보이고, 같은 배속으로 틱마다 A 다음 B 를 진행한다. 성공 "", 실패면 "A: 오류"/"B: 오류"(지금 실험 그대로).
+func start_compare(a: Dictionary, b: Dictionary) -> String:
+	var list: Array[Experiment] = []
+	var specs: Array[Dictionary] = [a, b]
+	for k in specs.size():
+		var r := _create_from(specs[k])
+		if r.experiment == null:
+			return "%s: %s" % [Experiment.TAGS[k], str(r.error)]
+		list.append(r.experiment)
+	_adopt_list(list)
+	return ""
 
 
-## 비교를 끝내고 A 만 남긴다.
+## 비교를 끝내고 A 만 남긴다(A 의 세계·기록·카메라·선택은 그대로, B 지도는 지움). 비교 중이 아니면 아무것도 안 함.
 func stop_compare() -> void:
-	pass
+	if not is_comparing():
+		return
+	var a := experiments[0]
+	var keep := _selected if _selected_index == 0 else -1
+	experiments.clear()
+	a.tag = ""
+	experiments.append(a)
+	_extinct_seen.resize(1)
+	_set_pane_count(1)
+	_title = a.label
+	# 이름표가 붙은 알림(A · / B ·)은 지운다. 한 틱 비용이 B 몫만큼 줄었으니 다시 잰다
+	_clear_toasts()
+	_step_us_est = 0.0
+	_reset_speed_window()
+	_skip_record = true
+	_update_titles()
+	select_slime(keep, 0)
+	info_panel.set_empty_text(_empty_text())
+	_set_window_title()
+	_refresh_status(true)
+	experiments_changed.emit(experiments)
+	show_toast("비교를 끝냈습니다 — %s 만 계속합니다" % a.label, "info")
 
 
 func is_comparing() -> bool:
@@ -176,6 +262,16 @@ func is_comparing() -> bool:
 
 func experiment(index: int = 0) -> Experiment:
 	return experiments[index] if index >= 0 and index < experiments.size() else null
+
+
+## index 번째 실험의 지도(비교 모드 0 = A, 1 = B). 없으면 null.
+func map_view_of(index: int) -> MapView:
+	return _panes[index].map if index >= 0 and index < _panes.size() else null
+
+
+## 비교 모드 실험 색(이름표 바탕) = 그래프 계열 색(ui.graph.series_a / series_b).
+static func tag_color(index: int) -> Color:
+	return UiConfig.color(TAG_COLOR_KEYS[clampi(index, 0, TAG_COLOR_KEYS.size() - 1)])
 
 
 ## 스냅숏 저장(index 번째 실험). 성공 "", 실패면 오류 문장. 성공하면 알림.
@@ -268,19 +364,35 @@ func apply_args(args: PackedStringArray) -> String:
 	return "\n".join(errors)
 
 
-## 실험 목록을 바꿔 끼우고 선택·누적·측정·알림을 처음으로 되돌린다.
+## {preset, overrides, seed} 로 실험 하나를 만든다(빠진 키는 기본값). 결과: Experiment.create 와 같은 {experiment, error}.
+static func _create_from(spec: Dictionary) -> Dictionary:
+	var preset := str(spec.get("preset", UiConfig.value("lab.default_preset", "default")))
+	var ov: Variant = spec.get("overrides", {})
+	if typeof(ov) != TYPE_DICTIONARY:
+		return {experiment = null, error = "바꾼 값(overrides)은 사전이어야 합니다"}
+	var sd: Variant = spec.get("seed", UiConfig.integer("lab.default_seed"))
+	if typeof(sd) != TYPE_INT and typeof(sd) != TYPE_FLOAT:
+		return {experiment = null, error = "씨앗은 정수여야 합니다: %s" % str(sd)}
+	return Experiment.create(preset, ov as Dictionary, int(sd))
+
+
+## 실험 목록을 바꿔 끼우고(이름표 A/B, 지도 수) 선택·누적·측정·알림을 처음으로 되돌린다.
 func _adopt_list(list: Array) -> void:
 	experiments.clear()
 	for k in list.size():
 		var x: Experiment = list[k]
 		x.tag = Experiment.TAGS[k] if list.size() > 1 else ""
 		experiments.append(x)
-	_title = experiments[0].label if experiments.size() == 1 else "비교 모드"
+	if experiments.size() == 1:
+		_title = experiments[0].label
+	else:
+		_title = "비교 · A %s │ B %s" % [experiments[0].label, experiments[1].label]
+	_set_pane_count(experiments.size())
 	_adopt(experiments[0].world)
 	experiments_changed.emit(experiments)
 
 
-## 세계를 바꿔 끼우고 선택·누적·측정·알림을 처음으로 되돌린다(_adopt_list 가 부름).
+## 세계를 바꿔 끼우고 선택·누적·측정·알림을 처음으로 되돌린다(_adopt_list 가 부름). 지도마다 자기 실험의 세계를 붙인다.
 func _adopt(w: SimWorld) -> void:
 	# 앞 세계의 알림(멸종·발견 등)이 새 세계 위에 남지 않게
 	_clear_toasts()
@@ -291,18 +403,28 @@ func _adopt(w: SimWorld) -> void:
 	_skip_record = true
 	_step_us_est = 0.0
 	# 이미 멸종한 스냅숏을 열면 멈추지 않고 표시만(멸종하는 순간에만 멈춤). 앞 세계의 멸종으로 저절로 멈췄으면 다시 재생.
-	_extinct_seen = world.extinct_tick >= 0
+	_extinct_seen.clear()
+	for x in experiments:
+		_extinct_seen.append(x.world.extinct_tick >= 0)
 	if _extinct_paused:
 		_extinct_paused = false
 		set_paused(false)
-	info_panel.set_empty_text(_extinct_text() if _extinct_seen else "")
-	map_view.bind(world)
+	info_panel.set_empty_text(_empty_text())
+	for k in _panes.size():
+		_panes[k].map.follow_selected = false
+		_panes[k].map.bind(experiments[k].world if k < experiments.size() else null)
+	_selected_index = 0
 	select_slime(-1)
-	_map_title.text = _title
-	if is_inside_tree():
-		get_window().title = "%s — %s" % [str(ProjectSettings.get_setting("application/config/name", "")), _title]
+	info_panel.set_follow(false)
+	_update_titles()
+	_set_window_title()
 	_refresh_status(true)
 	world_changed.emit(world)
+
+
+func _set_window_title() -> void:
+	if is_inside_tree():
+		get_window().title = "%s — %s" % [str(ProjectSettings.get_setting("application/config/name", "")), _title]
 
 
 # ════════════════════════════ 속도 ════════════════════════════
@@ -364,35 +486,59 @@ func actual_speed() -> float:
 
 # ════════════════════════════ 선택 ════════════════════════════
 
-## 개체 선택(지도 표시 + 정보 창). -1 또는 없는 id 면 선택 해제.
-func select_slime(id: int) -> void:
-	if world == null or id < 0 or world.slime_info(id).is_empty():
+## 개체 선택(그 실험의 지도에만 고리 + 정보 창, 비교 모드면 정보 창 머리에 A/B). index = 실험 번호(0 = A, 1 = B).
+## -1·없는 id·없는 실험이면 선택 해제(모든 지도의 고리를 지움). 죽은 개체 id 는 기록으로 표시.
+## 다른 실험의 개체로 옮기면 앞 지도의 따라가기를 끄고, 정보 창 따라가기 단추를 새 지도 상태로 맞춘다.
+func select_slime(id: int, index: int = 0) -> void:
+	var x := experiment(index)
+	if x == null or id < 0 or x.world.slime_info(id).is_empty():
 		id = -1
+	if id >= 0 and index != _selected_index:
+		for p in _panes:
+			p.map.follow_selected = false
+		_selected_index = index
+	_selected_index = clampi(_selected_index, 0, maxi(0, _panes.size() - 1))
 	_selected = id
-	map_view.set_selected(id)
+	for k in _panes.size():
+		_panes[k].map.set_selected(id if k == _selected_index else -1)
 	if id < 0:
 		info_panel.clear()
 	else:
-		info_panel.show_slime(world, id)
+		info_panel.set_tag(x.tag, tag_color(index))
+		info_panel.show_slime(x.world, id)
+	if not _panes.is_empty():
+		info_panel.set_follow(_sel_map().follow_selected)
 
 
 func selected_id() -> int:
 	return _selected
 
 
+## 선택한 개체가 속한 실험 번호(0 = A, 1 = B). 선택이 없으면 -1.
+func selected_index() -> int:
+	return _selected_index if _selected >= 0 else -1
+
+
+## 선택(또는 마지막으로 선택했던) 실험의 지도: 따라가기·가계 이동·F 키가 쓴다.
+func _sel_map() -> MapView:
+	return _panes[clampi(_selected_index, 0, _panes.size() - 1)].map
+
+
 func _on_slime_requested(id: int) -> void:
-	select_slime(id)
+	# 정보 창 가계 단추: 같은 실험 안에서 옮겨 가고 그 지도에서 카메라를 맞춘다
+	select_slime(id, _selected_index)
 	if _selected >= 0:
-		map_view.focus_on(id)
+		_sel_map().focus_on(id)
 
 
 func _on_follow_toggled(on: bool) -> void:
-	map_view.follow_selected = on
+	_sel_map().follow_selected = on
 
 
 # ════════════════════════════ 진행 ════════════════════════════
 
 ## 한 프레임 진행: before_steps → 누적 시간만큼 step(틱마다 before_steps, 예산 안) → update_view(alpha) → 신호·알림·상태 표시.
+## 지도가 둘(비교 모드)이면 before_steps·update_view 를 지도마다, 한 틱 = A 다음 B.
 ## _process 가 부르고, 검사·캡처는 직접 불러 프레임을 결정적으로 몬다. 이 프레임에 돈 틱 수를 돌려준다.
 func advance_frame(delta: float) -> int:
 	# 진행·알림은 잘린 프레임 시간(멈칫한 프레임이 한꺼번에 몰아 돌지 않게), 실제 배속 측정은 잘리지 않은 시간
@@ -401,7 +547,8 @@ func advance_frame(delta: float) -> int:
 	_age_toasts(step_dt)
 	if world == null:
 		return 0
-	map_view.before_steps()
+	for p in _panes:
+		p.map.before_steps()
 	var n := 0
 	var progress := 0.0
 	last_budget_hit = false
@@ -435,7 +582,9 @@ func advance_frame(delta: float) -> int:
 				n += 1
 			progress = float(n) + _acc - acc0
 	last_sim_ms = float(Time.get_ticks_usec() - t0) / USEC_PER_MS
-	map_view.update_view(clampf(_acc, 0.0, 1.0), step_dt)
+	var alpha := clampf(_acc, 0.0, 1.0)
+	for p in _panes:
+		p.map.update_view(alpha, step_dt)
 	if _skip_record:
 		_skip_record = false
 	else:
@@ -443,14 +592,19 @@ func advance_frame(delta: float) -> int:
 		_record_speed(minf(raw, _window_s), progress)
 	if n > 0:
 		ticked.emit(world)
-	var ev := world.drain_events()
-	if not ev.is_empty():
-		events.emit(ev)
-		events_tagged.emit(0, ev)
+	# 사건: 실험마다 비우고, 받는 쪽마다 사본(고쳐 써도 알림·다른 청취자·연대기가 바뀌지 않게)
+	for k in experiments.size():
+		var ev := experiments[k].world.drain_events()
+		if ev.is_empty():
+			continue
+		if k == 0:
+			events.emit(ev.duplicate(true))
+		events_tagged.emit(k, ev.duplicate(true))
 		for e in ev:
-			_show_event(e)
-	if world.extinct_tick >= 0 and not _extinct_seen:
-		_on_extinct()
+			_show_event(e, k)
+	for k in experiments.size():
+		if experiments[k].world.extinct_tick >= 0 and not _extinct_seen[k]:
+			_on_extinct(k)
 	_frame += 1
 	var every := maxi(1, UiConfig.integer("info.refresh_frames"))
 	if info_panel.current_id() >= 0 and _frame % every == 0:
@@ -460,9 +614,11 @@ func advance_frame(delta: float) -> int:
 	return n
 
 
-## 틱 하나: 보간 기억(지금 틱 = 다음 그림의 한 틱 전) → step → 한 틱 비용 추정 갱신.
+## 틱 하나: 지도마다 보간 기억(지금 틱 = 다음 그림의 한 틱 전) → 실험마다 step(A 다음 B, 기록하면 recorded)
+## → 한 틱 비용 추정 갱신(모든 실험 몫을 합친 시간이라 비교 모드 예산이 둘 몫을 셈).
 func _step_once() -> void:
-	map_view.before_steps()
+	for p in _panes:
+		p.map.before_steps()
 	var s0 := Time.get_ticks_usec()
 	for k in experiments.size():
 		if experiments[k].step():
@@ -471,18 +627,40 @@ func _step_once() -> void:
 	_step_us_est = us if _step_us_est <= 0.0 else lerpf(_step_us_est, us, _est_alpha)
 
 
-## 멸종하는 순간 한 번: lab.pause_on_extinction 이면 멈추고(헤드리스 실행기의 끝 조건과 같게),
-## 정보 창 빈 안내를 멸종 문구로. 멸종 표지는 _refresh_status 가 계속 보인다. 다시 재생하면 빈 지도가 계속 진행한다.
-func _on_extinct() -> void:
-	_extinct_seen = true
-	info_panel.set_empty_text(_extinct_text())
-	if bool(UiConfig.value("lab.pause_on_extinction", true)) and not _paused:
+## k 번째 실험이 멸종하는 순간 한 번: 정보 창 빈 안내를 멸종 문구로, 지도 표지는 _refresh_status 가 계속 보인다.
+## 모든 실험이 멸종했으면(혼자 모드 = 그 실험) lab.pause_on_extinction 이면 멈춘다(헤드리스 실행기의 끝 조건과 같게).
+## 비교 모드에서 한쪽만 멸종하면 멈추지 않는다 — 살아남은 쪽을 같은 틱으로 계속 견주게(멸종 알림·표지로 그 순간을 남김).
+## 다시 재생하면 빈 지도가 계속 진행한다.
+func _on_extinct(k: int) -> void:
+	_extinct_seen[k] = true
+	info_panel.set_empty_text(_empty_text())
+	if _all_extinct() and bool(UiConfig.value("lab.pause_on_extinction", true)) and not _paused:
 		set_paused(true)
 		_extinct_paused = true
 
 
-func _extinct_text() -> String:
-	return "멸종했습니다 (틱 %s) — 고를 개체가 없습니다" % _commas(world.extinct_tick)
+func _all_extinct() -> bool:
+	for x in experiments:
+		if x.world.extinct_tick < 0:
+			return false
+	return not experiments.is_empty()
+
+
+## 정보 창 빈 안내: 멸종이 없으면 ""(기본 문구), 혼자면 "멸종했습니다 (틱 N) …", 비교 모드면 어느 쪽인지.
+func _empty_text() -> String:
+	var dead: Array[int] = []
+	for k in experiments.size():
+		if experiments[k].world.extinct_tick >= 0:
+			dead.append(k)
+	if dead.is_empty():
+		return ""
+	if not is_comparing():
+		return "멸종했습니다 (틱 %s) — 고를 개체가 없습니다" % _commas(experiments[0].world.extinct_tick)
+	if dead.size() == experiments.size():
+		return "A·B 모두 멸종했습니다 — 고를 개체가 없습니다"
+	var k := dead[0]
+	return "%s 는 멸종했습니다 (틱 %s) — %s 지도에서 고르세요" % [experiments[k].tag, _commas(experiments[k].world.extinct_tick),
+			experiments[1 - k].tag]
 
 
 ## 실제 배속 창에 이 프레임(시간, 진행한 틱 몫)을 넣고 창보다 오래된 프레임을 뺀다.
@@ -525,10 +703,14 @@ func _dialog_open() -> bool:
 	return false
 
 
-## 지도 전체 보기(Home·0 키, 지도 위 "전체 보기" 단추): 카메라를 처음 맞춤으로, 따라가기 끔(정보 창 단추도).
-func fit_map() -> void:
-	map_view.fit_map()
-	info_panel.set_follow(false)
+## 지도 전체 보기(Home·0 키 = 모든 지도, 지도 위 "전체 보기" 단추 = 그 지도): 카메라를 처음 맞춤으로, 따라가기 끔
+## (정보 창 단추도 선택 지도의 상태로). index < 0 = 모든 지도.
+func fit_map(index: int = -1) -> void:
+	for k in _panes.size():
+		if index < 0 or index == k:
+			_panes[k].map.fit_map()
+	if not _panes.is_empty():
+		info_panel.set_follow(_sel_map().follow_selected)
 
 
 func _handle_key(code: Key) -> bool:
@@ -540,12 +722,15 @@ func _handle_key(code: Key) -> bool:
 			select_slime(-1)
 			return true
 		KEY_F:
-			map_view.follow_selected = not map_view.follow_selected
+			# 따라가기는 선택한 개체의 지도(비교 모드면 그 실험의 지도)에서
+			var mv := _sel_map()
+			mv.follow_selected = not mv.follow_selected
 			# 정보 창의 "따라가기" 단추도 같은 상태로(신호 없이)
-			info_panel.set_follow(map_view.follow_selected)
-			if map_view.follow_selected and _selected >= 0:
-				map_view.focus_on(_selected)
-			show_toast("따라가기 켬" if map_view.follow_selected else "따라가기 끔", "info")
+			info_panel.set_follow(mv.follow_selected)
+			if mv.follow_selected and _selected >= 0:
+				mv.focus_on(_selected)
+			var where := "%s 지도 " % experiments[_selected_index].tag if is_comparing() else ""
+			show_toast(where + ("따라가기 켬" if mv.follow_selected else "따라가기 끔"), "info")
 			return true
 		KEY_HOME, KEY_0, KEY_KP_0:
 			fit_map()
@@ -566,13 +751,14 @@ func _handle_key(code: Key) -> bool:
 ## 위쪽 가운데 알림(ui.lab.toast_seconds 뒤 사라짐, 오류·경고는 toast_error_seconds). kind: 사건 종류(discovery·extinction 등)
 ## 또는 info·warn·error. 왼쪽 띠는 종류 색, 발견은 강조 색·멸종과 오류는 위험 색·경고는 경고 색 테두리
 ## (밭 잃음은 경고 색 띠만). tick >= 0 이면 끝에 흐리게 틱을 붙인다. 긴 문장은 지도 폭 안에서 줄을 바꾼다.
-## lab.toast_coalesce_kinds 의 종류(밭 잃음 등)는 이미 보이는 같은 종류 알림을 새 문장으로 고쳐 쓰고 "×N" 을 붙인다.
-## 최대 lab.toast_max 개: 넘치면 (방금 띄운 것을 빼고) 강조 알림이 아닌 것 가운데 오래된 것부터 지운다(모두 강조면 가장 오래된 것).
-func show_toast(text: String, kind: String = "info", tick: int = -1) -> void:
+## lab.toast_coalesce_kinds 의 종류(밭 잃음 등)는 이미 보이는 같은 종류·같은 group(비교 모드 이름표) 알림을 새 문장으로
+## 고쳐 쓰고 "×N" 을 붙인다. 최대 lab.toast_max 개: 넘치면 (방금 띄운 것을 빼고) 강조 알림이 아닌 것 가운데 오래된 것부터
+## 지운다(모두 강조면 가장 오래된 것).
+func show_toast(text: String, kind: String = "info", tick: int = -1, group: String = "") -> void:
 	if kind in _coalesce:
 		for idx in range(_toasts.size() - 1, -1, -1):
 			var old: Dictionary = _toasts[idx]
-			if old.kind != kind:
+			if old.kind != kind or str(old.group) != group:
 				continue
 			old.count = int(old.count) + 1
 			old.text = text
@@ -637,7 +823,8 @@ func show_toast(text: String, kind: String = "info", tick: int = -1) -> void:
 	when.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	row.add_child(when)
 	_toast_box.add_child(p)
-	var entry := {panel = p, left = _toast_life(kind), kind = kind, text = text, body = body, count_label = count, when = when, count = 1}
+	var entry := {panel = p, left = _toast_life(kind), kind = kind, group = group, text = text, body = body, count_label = count,
+			when = when, count = 1}
 	_toasts.append(entry)
 	_fit_toast(entry)
 	var cap := maxi(1, UiConfig.integer("lab.toast_max"))
@@ -688,7 +875,7 @@ func _clear_toasts() -> void:
 	_toasts.clear()
 
 
-## 지금 보이는 알림 [{kind, text, left, count}] (검사·캡처용).
+## 지금 보이는 알림 [{kind, text, left, count}] (검사·캡처용). 비교 모드 사건 알림의 text 는 "A · …"/"B · …".
 func visible_toasts() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for t in _toasts:
@@ -696,8 +883,14 @@ func visible_toasts() -> Array[Dictionary]:
 	return out
 
 
-func _show_event(e: Dictionary) -> void:
-	show_toast(str(e.get("text", "")), str(e.get("kind", "info")), int(e.get("tick", -1)))
+## 사건 하나를 알림으로. 비교 모드면 앞에 "A · "/"B · "(밭 잃음 묶기도 실험마다 따로).
+func _show_event(e: Dictionary, k: int = 0) -> void:
+	var text := str(e.get("text", ""))
+	var group := ""
+	if is_comparing() and k >= 0 and k < experiments.size():
+		group = experiments[k].tag
+		text = "%s · %s" % [group, text]
+	show_toast(text, str(e.get("kind", "info")), int(e.get("tick", -1)), group)
 
 
 func _kind_color(kind: String) -> Color:
@@ -732,34 +925,86 @@ func _age_toasts(delta: float) -> void:
 
 # ════════════════════════════ 상태 표시 ════════════════════════════
 
+## 위쪽 막대·지도 표지 갱신. 틱·계절·낮밤은 실험마다 같으면 한 번, 다르면(비교 모드에서 시간 설정이 다른 예설정)
+## "A값/B값", 날이 다르면(하루 길이가 다름) 날은 숨김. 혼자면 평균 세대·개체·문명, 비교 모드면 "[A] 개체 · 문명 │ [B] 개체 · 문명".
 func _refresh_status(with_speed: bool) -> void:
 	if world == null or _lbl_tick == null:
 		return
-	_lbl_tick.text = _commas(world.tick)
-	_lbl_day.text = _commas(world.tick / _day_ticks() + 1)
-	_lbl_season.text = SEASON_NAMES[world.season] if world.season >= 0 and world.season < SEASON_NAMES.size() else NO_SEASON
-	var is_day := world.light >= UiConfig.num("lab.day_light_threshold")
-	_lbl_daynight.text = "낮" if is_day else "밤"
-	_tint(_lbl_daynight, UiTheme.color("day" if is_day else "night"))
-	var pop := world.population()
-	# 개체가 없으면 평균 세대는 뜻이 없다(0.0 은 처음으로 되돌아간 것처럼 보임)
-	_lbl_gen.text = "%.1f" % world.mean_generation() if pop > 0 else "—"
-	_tint(_lbl_gen, UiTheme.color("text" if pop > 0 else "text_dim"))
-	_lbl_pop.text = _commas(pop) if pop > 0 else "멸종"
-	_tint(_lbl_pop, UiTheme.color("text" if pop > 0 else "danger"))
-	var st := clampi(world.stage, 0, SimWorld.STAGE_NAMES.size() - 1)
-	_lbl_stage.text = SimWorld.STAGE_NAMES[st]
-	_tint(_lbl_stage, UiTheme.color("accent" if st > 0 else "text_dim"))
+	var ticks: Array[String] = []
+	var days: Array[String] = []
+	var seasons: Array[String] = []
+	var lights: Array[String] = []
+	for x in experiments:
+		var w := x.world
+		ticks.append(_commas(w.tick))
+		days.append(_commas(w.tick / _day_ticks_of(w) + 1))
+		seasons.append(SEASON_NAMES[w.season] if w.season >= 0 and w.season < SEASON_NAMES.size() else NO_SEASON)
+		lights.append("낮" if w.light >= UiConfig.num("lab.day_light_threshold") else "밤")
+	_lbl_tick.text = _joined(ticks)
+	# 하루 길이가 다른 두 실험(고급 설정)은 같은 틱이라도 날이 달라 "날" 은 숨긴다(틱이 기준, 위쪽 막대가 최소 창 폭 안에)
+	var same_day := _all_same(days)
+	if _day_chip.visible != same_day:
+		_day_chip.visible = same_day
+	_lbl_day.text = days[0] if not days.is_empty() else ""
+	_lbl_season.text = _joined(seasons)
+	_lbl_daynight.text = _joined(lights)
+	var sky := "text"
+	if _lbl_daynight.text == "낮":
+		sky = "day"
+	elif _lbl_daynight.text == "밤":
+		sky = "night"
+	_tint(_lbl_daynight, UiTheme.color(sky))
+	var cmp := is_comparing()
+	if _single_box.visible == cmp:
+		_single_box.visible = not cmp
+		_cmp_box.visible = cmp
+	if cmp:
+		for k in mini(experiments.size(), _cmp_pop.size()):
+			_pop_stage(experiments[k].world, _cmp_pop[k], _cmp_stage[k])
+	else:
+		var pop := world.population()
+		# 개체가 없으면 평균 세대는 뜻이 없다(0.0 은 처음으로 되돌아간 것처럼 보임)
+		_lbl_gen.text = "%.1f" % world.mean_generation() if pop > 0 else "—"
+		_tint(_lbl_gen, UiTheme.color("text" if pop > 0 else "text_dim"))
+		_pop_stage(world, _lbl_pop, _lbl_stage)
 	if with_speed:
 		_speed_label_wait = UiConfig.num("speed.label_refresh_s")
 		_lbl_speed.text = speed_text()
 		var behind := not _paused and not _fast and _hist_time >= _window_s * _behind_fill \
 				and actual_speed() < float(_speed) * UiConfig.num("speed.behind_ratio")
 		_tint(_lbl_speed, UiTheme.color("warn" if behind else "text"))
-	_paused_badge.visible = _paused
-	_extinct_badge.visible = world.extinct_tick >= 0
-	if _extinct_badge.visible:
-		_extinct_badge.text = "멸종 · 틱 %s" % _commas(world.extinct_tick)
+	for k in mini(_panes.size(), experiments.size()):
+		var p := _panes[k]
+		var w := experiments[k].world
+		p.paused.visible = _paused
+		p.extinct.visible = w.extinct_tick >= 0
+		if p.extinct.visible:
+			p.extinct.text = "멸종 · 틱 %s" % _commas(w.extinct_tick)
+		_fit_title(p)
+
+
+## 개체 수(0 이면 "멸종", 위험 색)와 문명 단계(0 단계는 흐리게).
+func _pop_stage(w: SimWorld, pop_label: Label, stage_label: Label) -> void:
+	var pop := w.population()
+	pop_label.text = _commas(pop) if pop > 0 else "멸종"
+	_tint(pop_label, UiTheme.color("text" if pop > 0 else "danger"))
+	var st := clampi(w.stage, 0, SimWorld.STAGE_NAMES.size() - 1)
+	stage_label.text = SimWorld.STAGE_NAMES[st]
+	_tint(stage_label, UiTheme.color("accent" if st > 0 else "text_dim"))
+
+
+## 모두 같으면 하나, 다르면 "A값/B값".
+static func _joined(vals: Array[String]) -> String:
+	if _all_same(vals):
+		return vals[0] if not vals.is_empty() else ""
+	return "/".join(vals)
+
+
+static func _all_same(vals: Array[String]) -> bool:
+	for v in vals:
+		if v != vals[0]:
+			return false
+	return true
 
 
 ## 글자 색을 바뀔 때만 덮어쓴다(같은 색을 매 프레임 다시 넣으면 테마 변경 알림이 돈다).
@@ -782,9 +1027,9 @@ func speed_text() -> String:
 
 
 ## 하루 틱 수(날 표시용). SIM-API 의 읽기 전용 cfg(time.day_ticks)를 읽기만 한다.
-## 날·계절·빛은 모두 지금 틱(world.tick)을 뜻한다(SimWorld 가 step 끝에 다시 계산).
-func _day_ticks() -> int:
-	var t: Variant = world.cfg.get("time")
+## 날·계절·빛은 모두 지금 틱(tick)을 뜻한다(SimWorld 가 step 끝에 다시 계산).
+static func _day_ticks_of(w: SimWorld) -> int:
+	var t: Variant = w.cfg.get("time")
 	if typeof(t) == TYPE_DICTIONARY:
 		return maxi(1, int((t as Dictionary).get("day_ticks", 1)))
 	return 1
@@ -816,6 +1061,8 @@ func _sync_controls() -> void:
 
 # ════════════════════════════ 배치 ════════════════════════════
 
+## Column = TopBar / Body(HBox) = Main(VBox: Middle(HBox: LeftWrap | MapArea) / BottomWrap) | InfoPanel.
+## 정보 창은 아래 자리 옆까지 세로 전체(두뇌 열지도가 스크롤 없이 들어가게 — V07), 아래 자리는 왼쪽 자리 + 지도 폭.
 func _build_layout() -> void:
 	var bg := ColorRect.new()
 	bg.name = "Background"
@@ -831,11 +1078,21 @@ func _build_layout() -> void:
 	_top_bar = _build_top_bar()
 	col.add_child(_top_bar)
 
+	var body := HBoxContainer.new()
+	body.name = "Body"
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 0)
+	col.add_child(body)
+	var main := VBoxContainer.new()
+	main.name = "Main"
+	main.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main.add_theme_constant_override("separation", 0)
+	body.add_child(main)
 	var mid := HBoxContainer.new()
 	mid.name = "Middle"
 	mid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	mid.add_theme_constant_override("separation", 0)
-	col.add_child(mid)
+	main.add_child(mid)
 	_left_wrap = PanelContainer.new()
 	_left_wrap.name = "LeftWrap"
 	_left_wrap.theme_type_variation = UiTheme.DOCK
@@ -852,52 +1109,95 @@ func _build_layout() -> void:
 	_map_area.clip_contents = true
 	_map_area.mouse_filter = Control.MOUSE_FILTER_PASS
 	mid.add_child(_map_area)
-	_map_container = SubViewportContainer.new()
-	_map_container.name = "MapContainer"
-	_map_container.stretch = true
-	_map_container.focus_mode = Control.FOCUS_NONE
-	_map_container.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_map_area.add_child(_map_container)
-	_map_viewport = SubViewport.new()
-	_map_viewport.name = "MapViewport"
-	_map_viewport.own_world_3d = true
-	_map_viewport.msaa_3d = clampi(UiConfig.integer("lab.map_msaa"), 0, 3) as Viewport.MSAA
-	_map_container.add_child(_map_viewport)
-	map_view = MapView.new()
-	map_view.name = "MapView"
-	_map_viewport.add_child(map_view)
 	_build_map_overlay()
-
-	info_panel = InfoPanel.new()
-	info_panel.name = "InfoPanel"
-	info_panel.custom_minimum_size.x = UiConfig.num("lab.right_panel_width")
-	mid.add_child(info_panel)
+	var a := _make_pane(0)
+	_panes.append(a)
+	map_view = a.map
+	_map_container = a.container
+	_map_viewport = a.viewport
+	_map_title = a.title
+	_paused_badge = a.paused
+	_extinct_badge = a.extinct
+	_fit_btn = a.fit
+	_map_area.resized.connect(_layout_maps)
 
 	_bottom_wrap = PanelContainer.new()
 	_bottom_wrap.name = "BottomWrap"
 	_bottom_wrap.theme_type_variation = UiTheme.DOCK
 	_bottom_wrap.custom_minimum_size.y = UiConfig.num("lab.bottom_panel_height")
 	_bottom_wrap.visible = false
-	col.add_child(_bottom_wrap)
+	main.add_child(_bottom_wrap)
 	bottom_dock = HBoxContainer.new()
 	bottom_dock.name = "BottomDock"
 	_bottom_wrap.add_child(bottom_dock)
 
-	# 빈 자리는 숨기고, 4단계가 무언가를 넣으면 보인다
+	info_panel = InfoPanel.new()
+	info_panel.name = "InfoPanel"
+	info_panel.custom_minimum_size.x = UiConfig.num("lab.right_panel_width")
+	body.add_child(info_panel)
+
+	# 빈 자리는 숨기고, 무언가를 넣으면 보인다(접기 단추로 접은 자리는 숨긴 채)
 	for dock: Control in [left_dock, bottom_dock]:
 		dock.child_entered_tree.connect(func(_n: Node) -> void: _sync_docks.call_deferred())
 		dock.child_exiting_tree.connect(func(_n: Node) -> void: _sync_docks.call_deferred())
 
-	map_view.slime_clicked.connect(select_slime)
 	info_panel.slime_requested.connect(_on_slime_requested)
 	info_panel.follow_toggled.connect(_on_follow_toggled)
 
 
+## 4단계 패널을 자리에 넣고 bind_lab(self): ParamPanel → 왼쪽, GraphPanel(늘어남) + ChroniclePanel(폭 chronicle.width) → 아래,
+## LabSound → 자식. 첫 실험을 열기 전에 부르므로 bind_lab 안에서 experiments 는 비어 있을 수 있다(첫 experiments_changed 가 옴).
+func _place_panels() -> void:
+	param_panel = ParamPanel.new()
+	param_panel.name = "ParamPanel"
+	param_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	left_dock.add_child(param_panel)
+	graph_panel = GraphPanel.new()
+	graph_panel.name = "GraphPanel"
+	graph_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	graph_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bottom_dock.add_child(graph_panel)
+	chronicle_panel = ChroniclePanel.new()
+	chronicle_panel.name = "ChroniclePanel"
+	chronicle_panel.custom_minimum_size.x = UiConfig.num("chronicle.width")
+	chronicle_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bottom_dock.add_child(chronicle_panel)
+	lab_sound = LabSound.new()
+	lab_sound.name = "LabSound"
+	add_child(lab_sound)
+	param_panel.bind_lab(self)
+	graph_panel.bind_lab(self)
+	chronicle_panel.bind_lab(self)
+	lab_sound.bind_lab(self)
+
+
+## 자리 보이기: 자식이 있고 접지 않았으면 보임. 접기 단추는 자식이 있는 자리만.
 func _sync_docks() -> void:
 	if not is_instance_valid(left_dock):
 		return
-	_left_wrap.visible = _live_children(left_dock) > 0
-	_bottom_wrap.visible = _live_children(bottom_dock) > 0
+	var lc := _live_children(left_dock) > 0
+	var bc := _live_children(bottom_dock) > 0
+	_left_wrap.visible = lc and _left_open
+	_bottom_wrap.visible = bc and _bottom_open
+	_left_toggle.visible = lc
+	_bottom_toggle.visible = bc
+	_dock_toggles.visible = lc or bc
+	_left_toggle.set_pressed_no_signal(_left_open)
+	_bottom_toggle.set_pressed_no_signal(_bottom_open)
+	_layout_maps()
+
+
+## 왼쪽("left")·아래("bottom") 자리를 펴거나 접는다(지도 오른쪽 아래 단추와 같음). 지도는 남는 자리를 채운다.
+func set_dock_open(which: String, open: bool) -> void:
+	if which == DOCK_LEFT:
+		_left_open = open
+	elif which == DOCK_BOTTOM:
+		_bottom_open = open
+	_sync_docks()
+
+
+func is_dock_open(which: String) -> bool:
+	return _left_open if which == DOCK_LEFT else _bottom_open if which == DOCK_BOTTOM else false
 
 
 static func _live_children(n: Node) -> int:
@@ -908,8 +1208,196 @@ static func _live_children(n: Node) -> int:
 	return c
 
 
-## 위쪽 막대: [재생] [1배…64배] [빨리 감기] │ 틱·날·계절·낮밤 │ 평균 세대·개체·문명 …… 목표/실제 배속.
-## 묶음마다 작은 HBox 로 나눠 간격을 줄인다(최소 창 폭 lab.min_width 안에 가장 긴 표시가 들어가게, 검사).
+## 지도 수를 n 으로(비교 모드 B 지도는 필요할 때 만들고, 끝나면 트리에서 바로 빼서 지움). 배치를 다시 맞춘다.
+func _set_pane_count(n: int) -> void:
+	while _panes.size() < n:
+		_panes.append(_make_pane(_panes.size()))
+	while _panes.size() > maxi(1, n):
+		var p: MapPane = _panes.pop_back()
+		for node: Node in [p.container, p.head]:
+			_map_area.remove_child(node)
+			node.queue_free()
+	_layout_maps()
+
+
+## k 번째 지도: MapContainer[B] ⊃ MapViewport ⊃ MapView(own_world_3d — 두 지도의 3D 세계가 섞이지 않게) + 표지 MapTitle[B].
+## 지도 클릭은 select_slime(id, k).
+func _make_pane(k: int) -> MapPane:
+	var p := MapPane.new()
+	var sfx := "" if k == 0 else Experiment.TAGS[k]
+	p.container = SubViewportContainer.new()
+	p.container.name = "MapContainer" + sfx
+	p.container.stretch = true
+	p.container.focus_mode = Control.FOCUS_NONE
+	_map_area.add_child(p.container)
+	# 지도는 맨 아래(표지·도움말·알림이 위)
+	_map_area.move_child(p.container, k)
+	p.viewport = SubViewport.new()
+	p.viewport.name = "MapViewport"
+	p.viewport.own_world_3d = true
+	p.viewport.msaa_3d = clampi(UiConfig.integer("lab.map_msaa"), 0, 3) as Viewport.MSAA
+	p.container.add_child(p.viewport)
+	p.map = MapView.new()
+	p.map.name = "MapView"
+	p.viewport.add_child(p.map)
+	p.map.slime_clicked.connect(select_slime.bind(k))
+	_build_pane_head(p, k)
+	return p
+
+
+## 지도 왼쪽 위 표지: [이름표 A/B(비교 모드)] 실험 이름 [‖ 멈춤] [멸종 · 틱 N] [전체 보기]. 이름은 지도 폭에 맞춰 줄임(…).
+func _build_pane_head(p: MapPane, k: int) -> void:
+	var sfx := "" if k == 0 else Experiment.TAGS[k]
+	var head := PanelContainer.new()
+	head.name = "MapTitle" + sfx
+	head.theme_type_variation = UiTheme.OVERLAY
+	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_map_area.add_child(head)
+	_map_area.move_child(head, _hint.get_index())
+	p.head = head
+	var hrow := HBoxContainer.new()
+	hrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	head.add_child(hrow)
+	p.tag = _tag_chip(Experiment.TAGS[k], tag_color(k))
+	p.tag.name = "Tag"
+	p.tag.visible = false
+	hrow.add_child(p.tag)
+	p.title = Label.new()
+	p.title.name = "Title"
+	p.title.theme_type_variation = UiTheme.DIM
+	p.title.clip_text = true
+	p.title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	hrow.add_child(p.title)
+	p.paused = Label.new()
+	p.paused.theme_type_variation = UiTheme.VALUE
+	p.paused.text = "%s 멈춤" % UiTheme.glyph_or(GLYPH_PAUSE, "")
+	p.paused.add_theme_color_override("font_color", UiTheme.color("warn"))
+	p.paused.visible = false
+	hrow.add_child(p.paused)
+	p.extinct = Label.new()
+	p.extinct.name = "ExtinctBadge"
+	p.extinct.theme_type_variation = UiTheme.VALUE
+	p.extinct.add_theme_color_override("font_color", UiTheme.color("danger"))
+	p.extinct.visible = false
+	hrow.add_child(p.extinct)
+	p.fit = Button.new()
+	p.fit.name = "FitButton"
+	p.fit.text = FIT_TEXT
+	p.fit.focus_mode = Control.FOCUS_NONE
+	p.fit.mouse_filter = Control.MOUSE_FILTER_STOP
+	p.fit.tooltip_text = "이 지도 전체가 보이게 카메라를 되돌림 (Home = 모든 지도)"
+	p.fit.add_theme_font_size_override("font_size", UiConfig.integer("lab.font_size_small"))
+	p.fit.pressed.connect(fit_map.bind(k))
+	hrow.add_child(p.fit)
+
+
+## 비교 모드 이름표: 실험 색 바탕의 작은 상자 + 어두운 굵은 글자(글자 자체에는 실험 색을 입히지 않음).
+func _tag_chip(text: String, col: Color) -> PanelContainer:
+	var chip := PanelContainer.new()
+	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	chip.add_theme_stylebox_override("panel", UiTheme.box(col, Color(0, 0, 0, 0), 0, UiConfig.integer("compare.tag_radius"),
+			UiConfig.num("compare.tag_pad_h"), UiConfig.num("compare.tag_pad_v")))
+	var l := Label.new()
+	l.text = text
+	l.theme_type_variation = UiTheme.VALUE
+	l.add_theme_color_override("font_color", UiTheme.color("background"))
+	l.add_theme_font_size_override("font_size", UiConfig.integer("lab.font_size_small"))
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip.add_child(l)
+	return chip
+
+
+## 지도 이름(혼자 = 실험 이름, 비교 = 이름표 + 각 실험 이름)을 다시 쓰고 배치를 맞춘다.
+func _update_titles() -> void:
+	for k in mini(_panes.size(), experiments.size()):
+		var p := _panes[k]
+		p.tag.visible = is_comparing()
+		p.title.text = experiments[k].label if is_comparing() else _title
+		p.fit_key = ""
+	_layout_maps()
+
+
+## 지도 칸 배치: 혼자면 지도 자리 전체, 비교 모드면 A | B 를 반씩(사이 compare.gap_px, 픽셀 정수).
+## 표지는 각 지도 왼쪽 위, 도움말은 왼쪽 아래, 자리 접기 단추는 오른쪽 아래, 알림은 표지 줄 아래 가운데.
+func _layout_maps() -> void:
+	if _map_area == null or _panes.is_empty():
+		return
+	var area := _map_area.size
+	var n := _panes.size()
+	var m := UiConfig.num("lab.map_overlay_margin")
+	var gap := float(UiConfig.integer("compare.gap_px")) if n > 1 else 0.0
+	var each := floorf(maxf(area.x - gap * float(n - 1), 0.0) / float(n))
+	var x := 0.0
+	var head_bottom := 0.0
+	for k in n:
+		var p := _panes[k]
+		var w := each if k < n - 1 else maxf(area.x - x, 0.0)
+		p.container.position = Vector2(x, 0.0)
+		p.container.size = Vector2(w, area.y)
+		p.width = w
+		p.fit_key = ""
+		_fit_title(p)
+		p.head.position = Vector2(x + m, m)
+		head_bottom = maxf(head_bottom, m + p.head.size.y)
+		x += w + gap
+	_fit_hint(area)
+	# 알림은 지도 표지 줄 아래에서 시작(좁은 지도·비교 모드에서 표지를 가리지 않게)
+	_toast_box.offset_top = head_bottom + UiConfig.num("lab.toast_margin_top")
+	_toast_box.offset_bottom = _toast_box.offset_top
+	_refit_toasts()
+
+
+## 표지 폭 맞춤: 실험 이름 = min(한 줄 폭, 지도 폭 − 양쪽 여백 − 이름표·표지·단추 몫), 넘치면 "…". 조건이 바뀔 때만 잰다.
+func _fit_title(p: MapPane) -> void:
+	var key := "%s|%s|%s|%s|%s|%.0f" % [p.title.text, p.tag.visible, p.paused.visible, p.extinct.visible, p.extinct.text, p.width]
+	if key == p.fit_key or not p.title.is_inside_tree():
+		return
+	p.fit_key = key
+	var font := p.title.get_theme_font("font")
+	var fs := p.title.get_theme_font_size("font_size")
+	var natural := ceilf(font.get_string_size(p.title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x) + 1.0
+	p.title.custom_minimum_size.x = 0.0
+	var chrome := p.head.get_combined_minimum_size().x - p.title.get_combined_minimum_size().x
+	var room := p.width - 2.0 * UiConfig.num("lab.map_overlay_margin")
+	p.title.custom_minimum_size.x = maxf(0.0, minf(natural, room - chrome))
+	p.head.reset_size()
+
+
+## 조작 도움말(왼쪽 아래): 접기 단추 옆에 한 줄이 들어가면 한 줄, 아니면 마우스·키 두 줄(그래도 넘치면 잘라 냄).
+## 비교 모드에서는 A 지도 칸 안에 들어가면 그 안에(두 지도 사이를 걸치지 않게), 아니면 지도 자리 전체 폭으로.
+## 자리 접기 단추는 오른쪽 아래.
+func _fit_hint(area: Vector2) -> void:
+	var m := UiConfig.num("lab.map_overlay_margin")
+	var room := area.x - 2.0 * m
+	if _dock_toggles.visible:
+		_dock_toggles.reset_size()
+		_dock_toggles.position = Vector2(area.x - m - _dock_toggles.size.x, area.y - m - _dock_toggles.size.y)
+		room -= _dock_toggles.size.x + m
+	var font := _hint_label.get_theme_font("font")
+	var fs := _hint_label.get_theme_font_size("font_size")
+	var one := font.get_string_size(MAP_HINT, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var two := maxf(font.get_string_size(HINT_MOUSE, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x,
+			font.get_string_size(HINT_KEYS, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
+	var chrome := _hint.get_combined_minimum_size().x - _hint_label.get_combined_minimum_size().x
+	if _panes.size() > 1:
+		var room_a := minf(room, _panes[0].width - 2.0 * m)
+		if two + chrome <= room_a:
+			room = room_a
+	var text := MAP_HINT
+	var natural := one
+	if one + chrome > room:
+		text = HINT_MOUSE + "\n" + HINT_KEYS
+		natural = two
+	if _hint_label.text != text:
+		_hint_label.text = text
+	_hint_label.custom_minimum_size.x = maxf(0.0, minf(ceilf(natural) + 1.0, room - chrome))
+	_hint.reset_size()
+	_hint.position = Vector2(m, area.y - m - _hint.size.y)
+
+
+## 위쪽 막대: [재생] [1배…64배] [빨리 감기] │ 틱·날·계절·낮밤 │ 평균 세대·개체·문명(비교 모드: [A] 개체 · 문명 │ [B] …)
+## …… 목표/실제 배속. 묶음마다 작은 HBox 로 나눠 간격을 줄인다(최소 창 폭 lab.min_width 안에 가장 긴 표시가 들어가게, 검사).
 func _build_top_bar() -> PanelContainer:
 	var bar := PanelContainer.new()
 	bar.name = "TopBar"
@@ -945,15 +1433,35 @@ func _build_top_bar() -> PanelContainer:
 	row.add_child(status)
 	_lbl_tick = _chip(status, "틱")
 	_lbl_day = _chip(status, "날")
+	_day_chip = _lbl_day.get_parent() as Control
 	var sky := _hbox(UiConfig.integer("lab.chip_inner_gap"))
 	status.add_child(sky)
 	_lbl_season = _value_label(sky)
 	_dot(sky)
 	_lbl_daynight = _value_label(sky)
+	for l: Label in [_lbl_season, _lbl_daynight]:
+		l.tooltip_text = "비교 모드에서 두 실험의 계절·낮밤이 다르면 \"A/B\""
+		l.mouse_filter = Control.MOUSE_FILTER_PASS
 	status.add_child(_vsep())
-	_lbl_gen = _chip(status, "평균 세대")
-	_lbl_pop = _chip(status, "개체")
-	_lbl_stage = _chip(status, "문명")
+	_single_box = _hbox(UiConfig.integer("lab.chip_gap"))
+	status.add_child(_single_box)
+	_lbl_gen = _chip(_single_box, "평균 세대")
+	_lbl_pop = _chip(_single_box, "개체")
+	_lbl_stage = _chip(_single_box, "문명")
+	_cmp_box = _hbox(UiConfig.integer("lab.chip_gap"))
+	_cmp_box.visible = false
+	status.add_child(_cmp_box)
+	for k in Experiment.TAGS.size():
+		if k > 0:
+			_cmp_box.add_child(_vsep())
+		var g := _hbox(UiConfig.integer("lab.chip_inner_gap"))
+		g.mouse_filter = Control.MOUSE_FILTER_PASS
+		g.tooltip_text = "%s 실험: 개체 수 · 문명 단계" % Experiment.TAGS[k]
+		_cmp_box.add_child(g)
+		g.add_child(_tag_chip(Experiment.TAGS[k], tag_color(k)))
+		_cmp_pop.append(_value_label(g))
+		_dot(g)
+		_cmp_stage.append(_value_label(g))
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -964,57 +1472,25 @@ func _build_top_bar() -> PanelContainer:
 	return bar
 
 
-## 지도 위 표지: 왼쪽 위 실험 이름·멈춤, 왼쪽 아래 조작 도움말, 위쪽 가운데 알림 묶음.
+## 지도 위 공용 표지: 왼쪽 아래 조작 도움말, 오른쪽 아래 자리 접기 단추, 위쪽 가운데 알림 묶음(지도마다의 표지는 _build_pane_head).
 func _build_map_overlay() -> void:
-	var m := UiConfig.num("lab.map_overlay_margin")
-	var head := PanelContainer.new()
-	head.name = "MapTitle"
-	head.theme_type_variation = UiTheme.OVERLAY
-	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	head.position = Vector2(m, m)
-	_map_area.add_child(head)
-	var hrow := HBoxContainer.new()
-	hrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	head.add_child(hrow)
-	_map_title = Label.new()
-	_map_title.theme_type_variation = UiTheme.DIM
-	hrow.add_child(_map_title)
-	_paused_badge = Label.new()
-	_paused_badge.theme_type_variation = UiTheme.VALUE
-	_paused_badge.text = "%s 멈춤" % UiTheme.glyph_or(GLYPH_PAUSE, "")
-	_paused_badge.add_theme_color_override("font_color", UiTheme.color("warn"))
-	_paused_badge.visible = false
-	hrow.add_child(_paused_badge)
-	_extinct_badge = Label.new()
-	_extinct_badge.name = "ExtinctBadge"
-	_extinct_badge.theme_type_variation = UiTheme.VALUE
-	_extinct_badge.add_theme_color_override("font_color", UiTheme.color("danger"))
-	_extinct_badge.visible = false
-	hrow.add_child(_extinct_badge)
-	_fit_btn = Button.new()
-	_fit_btn.name = "FitButton"
-	_fit_btn.text = FIT_TEXT
-	_fit_btn.focus_mode = Control.FOCUS_NONE
-	_fit_btn.mouse_filter = Control.MOUSE_FILTER_STOP
-	_fit_btn.tooltip_text = "지도 전체가 보이게 카메라를 되돌림 (Home)"
-	_fit_btn.add_theme_font_size_override("font_size", UiConfig.integer("lab.font_size_small"))
-	_fit_btn.pressed.connect(fit_map)
-	hrow.add_child(_fit_btn)
+	_hint = PanelContainer.new()
+	_hint.name = "MapHint"
+	_hint.theme_type_variation = UiTheme.OVERLAY
+	_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_map_area.add_child(_hint)
+	_hint_label = Label.new()
+	_hint_label.theme_type_variation = UiTheme.DIM
+	_hint_label.clip_text = true
+	_hint_label.text = MAP_HINT
+	_hint.add_child(_hint_label)
 
-	var hint := PanelContainer.new()
-	hint.name = "MapHint"
-	hint.theme_type_variation = UiTheme.OVERLAY
-	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	hint.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	hint.offset_left = m
-	hint.offset_bottom = -m
-	hint.offset_top = -m
-	_map_area.add_child(hint)
-	var hl := Label.new()
-	hl.theme_type_variation = UiTheme.DIM
-	hl.text = MAP_HINT
-	hint.add_child(hl)
+	_dock_toggles = _hbox(UiConfig.integer("lab.speed_button_gap"))
+	_dock_toggles.name = "DockToggles"
+	_dock_toggles.visible = false
+	_map_area.add_child(_dock_toggles)
+	_left_toggle = _dock_toggle("LeftToggle", LEFT_TOGGLE_TEXT, "왼쪽 실험 설정 패널 보이기·숨기기", DOCK_LEFT)
+	_bottom_toggle = _dock_toggle("BottomToggle", BOTTOM_TOGGLE_TEXT, "아래 그래프·연대기 보이기·숨기기", DOCK_BOTTOM)
 
 	_toast_box = VBoxContainer.new()
 	_toast_box.name = "Toasts"
@@ -1026,7 +1502,20 @@ func _build_map_overlay() -> void:
 	_toast_box.offset_bottom = _toast_box.offset_top
 	_toast_box.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_map_area.add_child(_toast_box)
-	_map_area.resized.connect(_refit_toasts)
+
+
+## 자리 접기 단추(눌림 = 보임). 작은 글자, 초점 없음.
+func _dock_toggle(node_name: String, text: String, tip: String, which: String) -> Button:
+	var b := Button.new()
+	b.name = node_name
+	b.text = text
+	b.toggle_mode = true
+	b.focus_mode = Control.FOCUS_NONE
+	b.tooltip_text = tip
+	b.add_theme_font_size_override("font_size", UiConfig.integer("lab.font_size_small"))
+	b.toggled.connect(func(on: bool) -> void: set_dock_open(which, on))
+	_dock_toggles.add_child(b)
+	return b
 
 
 ## 단추 아이콘 색(보통·초점; 올림은 테마대로 흰색).
