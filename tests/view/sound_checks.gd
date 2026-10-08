@@ -158,6 +158,8 @@ func _with_lab(t) -> void:
 	t.check(snd.plays == 2 and snd.last_sound == "extinction", "events_tagged(B) → 멸종 소리")
 	# 실제 진행: demo_fast 씨앗 2 는 100틱 안팎에 채집 발견
 	t.check(lab.new_experiment("demo_fast", {}, 2) == "", "새 실험")
+	# 위에서 낸 발견 소리의 최소 간격(실제 시계 0.5초)이 빠른 기계에서는 아직 안 지나 다음 발견 소리를 막는다 — 비우고 잰다
+	snd.reset_rate_limit()
 	var p0 := snd.plays
 	lab.step_ticks(130)
 	lab.advance_frame(DT)

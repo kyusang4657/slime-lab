@@ -134,6 +134,11 @@ func play_event_at(kind: String, now_s: float) -> bool:
 	return true
 
 
+## 최소 간격 기억을 비운다(다음 소리는 바로 낼 수 있음). 검사가 실제 시계에 기대지 않게 할 때 씀.
+func reset_rate_limit() -> void:
+	_last.clear()
+
+
 ## 내던 소리를 모두 멈춘다.
 func stop_all() -> void:
 	for p in _players:
