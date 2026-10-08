@@ -52,7 +52,7 @@ func _bench() -> void:
 	# 인구 상한으로 채운 세계(시작 직후라 250마리 근처)
 	_bench_world(mv, _world("default", {"population.initial": 250}, 11, 0), "기본·250마리", [1, 4, 64])
 	# 농사 단계 세계(건물·밭·운반 열매 있음)
-	_bench_world(mv, _world("fast_civ", {}, 1, 1760), "fast_civ 1760틱", [1, 4, 64])
+	_bench_world(mv, _world("demo_fast", {}, 1, 1760), "demo_fast 1760틱", [1, 4, 64])
 	sv.queue_free()
 	await process_frame
 	print("RESULT: bench ok")

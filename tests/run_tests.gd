@@ -11,7 +11,7 @@ const MAGIC_EXEMPT: Array[String] = ["sim_config.gd"]
 const MAGIC_ALLOWED: Array[String] = ["0", "1", "2", "0.0", "1.0", "0.5", "2.0"]
 const FORBIDDEN_MATH: Array[String] = ["sin", "cos", "tan", "exp", "log", "pow", "tanh", "atan", "atan2", "randfn", "randf_range", "randi_range"]
 ## 농사 도달 검사: 이 예설정·씨앗 조합 중 하나라도 평균 100세대 안에 농사(3단계)에 도달해야 한다.
-const FARM_PRESETS: Array[String] = ["fast_civ", "default"]
+const FARM_PRESETS: Array[String] = ["demo_fast", "default"]
 const FARM_SEEDS: Array[int] = [1, 2, 3]
 const FARM_GENERATIONS := 100.0
 ## 성능 기록: 개체·틱당 마이크로초가 이 값의 두 배를 넘으면 실패(CI 기계 차이를 감안한 느슨한 상한).
@@ -856,7 +856,7 @@ func test_time_after_step() -> void:
 
 ## drain_events() 가 돌려주는 사건은 연대기와 따로인 사본(받는 쪽이 고쳐 써도 연대기·기록이 그대로)
 func test_event_copies() -> void:
-	var wd := world({}, 1, "fast_civ")
+	var wd := world({}, 1, "demo_fast")
 	var guard := 0
 	while wd.chronicle.is_empty() and guard < 5000:
 		wd.step()

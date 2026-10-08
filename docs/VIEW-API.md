@@ -231,3 +231,71 @@ func run(t) -> void:
 
 - 헤드리스 미세 측정: `godot --headless --path . --script res://tests/perf_capture.gd -- --bench` — 1260×856 SubViewport 의 MapView 에 대해 프레임마다 `before_steps` + `update_view` 시간(틱 있는 프레임·없는 프레임 따로, 중앙·95%·최대)과 시뮬레이션 시간을 1·4·64배(60fps 가정)로 잰다. 세계: 기본 `population.initial = 250`(씨앗 11), fast_civ 1,760틱(씨앗 1).
 - 실험실 실측: `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/perf_capture.gd [-- --seconds=N --msaa=N]` — 기본·씨앗 1 을 1,500틱 넘게, 개체 200 이상이 될 때까지 진행한 뒤 1배·64배로 각 N초(기본 10) 실제 시간 진행. `LabMain.advance_frame` 을 실제 프레임 시간으로 직접 불러 FPS·프레임 시간·우리 스크립트 시간(시뮬레이션 `last_sim_ms` + 화면·UI 나머지)·그리기 호출·기본 도형 수를 출력한다. 그리기 호출은 전체(모든 뷰포트 합)와 함께 **뷰포트별**로: 지도 SubViewport(3D)의 그리기 호출·기본 도형, 뿌리 창 2D(UI)의 그리기 호출. `--msaa` 는 지도 MSAA 를 바꿔 잰다. llvmpipe(CPU 소프트웨어 GL)에서는 그리기 몫이 대부분이라 실제 GPU 의 FPS 를 뜻하지 않는다.
+
+# 4단계 계약 — 파라미터·그래프·연대기·내보내기·비교
+
+## Experiment — `scripts/ui/experiment.gd` (`class_name Experiment`, RefCounted) — 완성(바꾸지 않음)
+
+세계 + 기록기 + 만든 조건. 기록은 헤드리스 실행기와 **같은 줄**(만들 때 한 줄, `tick % record.every == 0` 이 되는 step 마다 한 줄). `tests/view/experiment_checks.gd` 가 "화면 쪽 timeseries.csv = 실행기 결과(글자까지)"를 검사.
+
+| 멤버 | 뜻 |
+|---|---|
+| `static create(preset, overrides, seed) -> {experiment, error}` · `static from_snapshot(path) -> {experiment, error, status}` | 만들기 |
+| `world`, `recorder`, `preset`, `overrides`, `seed_value`, `snapshot_path`, `label`, `tag`("A"/"B"/"") | 상태(읽기 전용) |
+| `step() -> bool`(이번에 기록했으면 true) · `step_n(n)` | 진행(LabMain 만 부름) |
+| `rows() -> Array` | 기록한 시계열 줄(`SimRecorder.TIMESERIES_COLUMNS` 키 사전). **읽기 전용** |
+| `display_name()` | "A · 기본 · 씨앗 1"(혼자면 label) |
+| `export_dir(dir, with_lineage := true) -> PackedStringArray` | summary.json(`source = "lab"`)·timeseries·chronicle·lineage·final.snapshot.json, 실패한 파일 이름 |
+| `save_snapshot(path) -> String` | 스냅숏 저장 |
+
+## LabMain 4단계 API (LabMain 담당이 비교 모드를 채움)
+
+| 멤버 | 뜻 | 상태 |
+|---|---|---|
+| `var experiments: Array[Experiment]` · `experiment(index)` | 진행 중인 실험(혼자 1개, 비교 2개 [A, B]). `world` = `experiments[0].world`, `map_view` = A 의 지도 | 됨 |
+| `signal experiments_changed(list: Array)` | 실험 목록이 바뀜(새 실험·스냅숏·비교 시작/끝) — 패널은 처음부터 다시 읽음 | 됨 |
+| `signal recorded(index: int, row: Dictionary)` | index 번째 실험이 한 줄 기록 | 됨 |
+| `signal events_tagged(index: int, list: Array)` | index 번째 실험의 새 사건(사본). `events(list)` 는 A 만(3단계 호환) | A 만 됨 → 비교 때 B 도 |
+| `signal cursor_tick_requested(tick: int)` · `func request_cursor(tick)` | 그래프 시점 표시 요청(연대기 → 그래프), -1 = 지움 | 됨 |
+| `func new_experiment(preset, overrides, seed) -> String` · `open_snapshot(path)` | 혼자 모드로 바꿔 시작 | 됨 |
+| `func start_compare(a: Dictionary, b: Dictionary) -> String` | a·b = `{preset, overrides, seed}`. 지도 둘을 나란히(A 왼쪽 · B 오른쪽, 사이 `ui.compare.gap_px`), 같은 배속으로 틱마다 A 다음 B 를 진행(예산은 둘 몫을 합쳐 셈), 사건 알림 앞에 "A · "/"B · " | **뼈대 → LabMain 담당** |
+| `func stop_compare()` · `func is_comparing() -> bool` | 비교 끝(A 만 남김) | **뼈대 → LabMain 담당** |
+| `func select_slime(id, index := 0)` | 비교 모드에서 어느 실험의 개체인지(정보 창 머리에 A/B 표시, 그 지도에만 고리) | **LabMain 담당** |
+| `func save_snapshot(path, index := 0) -> String` | 스냅숏 저장 + 알림 | 됨 |
+| `func export_csv(dir) -> String` | 결과 폴더 내보내기(비교면 `dir/A`·`dir/B`) + 알림(절대 경로) | 됨 |
+| `func default_export_dir() -> String` | `user://experiments/<날짜-시각>-seed<N>` | 됨 |
+| `func step_ticks(n)` | 프레임 없이 모든 실험 n틱(기록·`recorded` 포함, 검사·캡처용) | 됨 |
+| 자리 채우기 | `_ready` 에서 `ParamPanel` → `left_dock`, `GraphPanel`(늘어남) + `ChroniclePanel`(폭 `ui.chronicle.width`) → `bottom_dock`, `LabSound` → 자식. 각각 `bind_lab(self)` | **LabMain 담당** |
+
+## ParamPanel — `scripts/ui/param_panel.gd` (`class_name ParamPanel`, VBoxContainer, 왼쪽 자리)
+
+- `func bind_lab(lab: LabMain)` — `experiments_changed` 를 받아 "지금 실험" 값을 표시.
+- 칸: 예설정(OptionButton, `label`) · 씨앗(SpinBox, 0~`ui.param.seed_max`, "무작위" 단추 — 화면 쪽 시각에서 고름, 시뮬레이션 난수와 무관) · **돌연변이율**(`mutation.rate`, 슬라이더+숫자) · **자원량**(`resources.scale`) · **초기 개체 수**(`population.initial`) · "고급 설정"(접힘: `sim-defaults.json` 의 수·참거짓 잎 키를 절별로, 바꾼 값은 강조) — 값의 기본은 고른 예설정이 적용된 값. 값을 바꿔도 지금 실험에는 적용되지 않고 "새 실험을 눌러 적용 · 바꾼 값 N개" 표시.
+- 단추: **새 실험**(AccentButton) → `lab.new_experiment(...)`(오류는 패널 안 빨간 글 + 알림) · 되돌리기(예설정 값으로) · **비교 모드**(켜면 B 칸이 나타남: 예설정·씨앗·세 값, "나란히 시작" → `lab.start_compare(a, b)`, 끄면 `lab.stop_compare()`) · **CSV 내보내기**(`lab.export_csv(lab.default_export_dir())`) · **스냅숏 저장 / 열기**(FileDialog, 파일 시스템, 시작 폴더 `user://experiments`, `.json`) · 소리 켜기(`LabSound.enabled`, 있을 때).
+- `func current_settings(which := 0) -> Dictionary` = `{preset, overrides, seed}`(which 1 = B 칸) · `func set_value(key: String, value, which := 0)` · `func apply() -> String`(새 실험 단추와 같음) — 검사용.
+- 수치(범위·폭·간격)는 `ui.param`.
+
+## GraphPanel — `scripts/ui/graph_panel.gd` (`class_name GraphPanel`, HBoxContainer, 아래 자리) + `GraphView`(`scripts/ui/graph_view.gd`)
+
+- `func bind_lab(lab)` — `experiments_changed` → 지우고 `rows()` 를 처음부터, `recorded(index, row)` → 덧붙임, `cursor_tick_requested(tick)` → 세로 표시선.
+- 그래프 3개(가로로 나란히, 각 제목·축·범례):
+  1. **개체 수**: `population` 선(+ `births`·`deaths` 얇은 선, 켜고 끔).
+  2. **평균 특성**: 고르기(OptionButton) — `mean_size`·`mean_sense`·`mean_energy`·`mean_age`·`mean_gen`.
+  3. **기술 단계**: `civ_stage` 계단선(세로축에 `SimWorld.STAGE_NAMES`) + `storehouses`·`farms` 수(보조 축), 발견 시점 세로선과 이름.
+- 가로축: 틱 ↔ 평균 세대(한 단추로 셋 모두). 비교 모드: A 실선(`ui.graph.series_a`), B 점선(`series_b`), 범례에 `display_name()`.
+- 마우스를 올리면 세로선 + 가장 가까운 기록 줄의 값(A·B 함께).
+- 성능: 줄이 수천 개여도 다시 그리기는 `ui.graph.redraw_hz` 이하, 그릴 때 화면 폭(픽셀 열)에 맞춰 줄임(열마다 최소·최대).
+- `func graph_count() -> int`(3) · `func series_points(graph: int, index: int) -> int`(검사용: 그 그래프·실험의 점 수) · `func set_x_axis(mode: String)`("tick"/"gen").
+
+## ChroniclePanel — `scripts/ui/chronicle_panel.gd` (`class_name ChroniclePanel`, VBoxContainer, 아래 자리 오른쪽)
+
+- `func bind_lab(lab)` — `experiments_changed` → 각 실험의 `world.chronicle` 로 다시 채움, `events_tagged(index, list)` → 덧붙임(최신이 위). 비교 모드면 줄 앞에 A/B.
+- 줄: "틱 N · 평균 G세대 · 문장"(종류 색 띠). 거르기(OptionButton): 전체·발견·건물(저장고·첫 밭)·밭 잃음·세대·멸종. 최대 `ui.chronicle.max_items` 줄(넘치면 "더 오래된 K개" 표시).
+- 줄을 누르면 `lab.request_cursor(tick)`, 행위자(`actor ≥ 0`)가 있으면 `lab.select_slime(actor, index)`.
+- `func item_count() -> int` · `func item_text(i) -> String`(검사용).
+
+## LabSound — `scripts/ui/lab_sound.gd` (`class_name LabSound`, Node)
+
+- 실행 중 파형 합성(사인·삼각, 감쇠 포락선, 16비트 `AudioStreamWAV`) — 외부 음원 없음, CC0 로 CREDITS 에.
+- 소리: 발견(두세 음 차임), 멸종(낮은 음), 저장고 건설(짧은 톡). `func play_event(kind) -> bool`, `var enabled`(`ui.sound.enabled`), 음량 `ui.sound.volume_db`, 같은 소리 최소 간격 `ui.sound.min_interval_s`(빨리 감기에서 몰려도 시끄럽지 않게).
+- `func bind_lab(lab)` — `events_tagged` 를 받아 재생. `static func synth(kind: String) -> AudioStreamWAV`(검사: 길이·최댓값·NaN 없음·같은 입력이면 같은 바이트).

@@ -1,7 +1,7 @@
 extends SceneTree
 ## 지도 관찰 창 캡처(가상 디스플레이에서):
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/map_capture.gd -- --out=폴더
-## 예설정 fast_civ·씨앗 1 을 농사 단계(약 1,700틱)까지 돌린 뒤 MapView 를 1600×900 SubViewport 에 띄워
+## 예설정 demo_fast·씨앗 1 을 농사 단계(약 1,700틱)까지 돌린 뒤 MapView 를 1600×900 SubViewport 에 띄워
 ## 전경(map-overview)·저장고 부근 가까이(map-closeup)·밤(map-night)을 JPG(품질 0.85)로 찍는다.
 ## 선택 인자: --ticks=N(시작 틱, 기본 1764), --size=WxH
 
@@ -50,7 +50,7 @@ func _run() -> void:
 	_mv = MapView.new()
 	_sv.add_child(_mv)
 
-	var b := SimConfig.build("fast_civ", {})
+	var b := SimConfig.build("demo_fast", {})
 	_world = SimWorld.new()
 	_world.setup(b.config, 1)
 	var t0 := Time.get_ticks_msec()

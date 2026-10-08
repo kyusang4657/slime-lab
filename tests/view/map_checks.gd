@@ -430,7 +430,7 @@ func _check_timing(t, mv: MapView) -> void:
 # ── 건물 ──
 
 func _check_buildings(t, mv: MapView) -> void:
-	var w: SimWorld = t.make_world({}, 1, "fast_civ")
+	var w: SimWorld = t.make_world({}, 1, "demo_fast")
 	w.step_n(1750)
 	mv.bind(w)
 	var stores_mi := t.node(mv, "Stores") as MultiMeshInstance3D

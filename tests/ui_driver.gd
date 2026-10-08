@@ -2,7 +2,7 @@ extends SceneTree
 ## 실험실 화면 캡처·동작 확인(가상 디스플레이 필요). 계약: docs/VIEW-API.md "캡처".
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd -- --out=폴더 [--copy=폴더]
 ## scenes/lab.tscn 을 뿌리 창(1600×900)에 띄우고 프레임은 LabMain.advance_frame 으로 직접 몬다.
-## 시나리오: ① 전경(기본·씨앗 1, 8배로 약 10초) ② fast_civ 농사 단계 낮, 밭 가까이 자식 있는 개체 선택·카메라 맞춤
+## 시나리오: ① 전경(기본·씨앗 1, 8배로 약 10초) ② demo_fast 농사 단계 낮, 밭 가까이 자식 있는 개체 선택·카메라 맞춤
 ## ③ 같은 자리의 밤(멈춤) ④ 64배와 실제 배속 표시.
 ## 동작: 지도 클릭(실제 마우스 입력) → pick_slime → 정보 창 id, 빈 곳 클릭 → 선택 해제, 속도·멈춤 단추 클릭, 단축키,
 ## 화면으로 진행해도 역사 해시가 헤드리스와 같음. 그림은 lab-*.jpg(품질 0.85, 600KB 이하 확인). 끝에 RESULT 줄.
@@ -97,7 +97,7 @@ func _overview() -> void:
 
 
 func _farm() -> void:
-	check(lab.new_experiment("fast_civ", {}, 1) == "", "fast_civ·씨앗 1 실험")
+	check(lab.new_experiment("demo_fast", {}, 1) == "", "demo_fast·씨앗 1 실험")
 	var w := lab.world
 	var t0 := Time.get_ticks_msec()
 	var k := 0
@@ -110,7 +110,7 @@ func _farm() -> void:
 		extra += 1
 	print("  농사: %d틱(%.1f초), 인구 %d, 저장고 %d, 밭 %d, 평균 %.1f세대" % [w.tick, float(Time.get_ticks_msec() - t0) / 1000.0,
 			w.population(), w.store_tiles.size(), w.farms.size(), w.mean_generation()])
-	check(w.stage == SimWorld.STAGE_FARM, "fast_civ 가 농사 단계에 도달(틱 %d)" % w.tick)
+	check(w.stage == SimWorld.STAGE_FARM, "demo_fast 가 농사 단계에 도달(틱 %d)" % w.tick)
 	# 낮에 찍는다(밤 장면 lab-03 과 같은 자리를 낮·밤으로 견주도록): 해가 다 뜰 때까지 + 조금 더
 	var dawn := 0
 	while w.light < 1.0 and dawn < DAY_WAIT_MAX:

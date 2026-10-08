@@ -280,7 +280,7 @@ func _key(t, code: Key) -> void:
 
 
 func _events(t, lab: LabMain) -> void:
-	t.check(lab.new_experiment("fast_civ", {}, 1) == "", "fast_civ 실험")
+	t.check(lab.new_experiment("demo_fast", {}, 1) == "", "demo_fast 실험")
 	var got: Array = []
 	# 청취자가 사건 사전을 고쳐 써도(4단계 연대기 창이 꾸미는 경우 등) 세계의 연대기는 그대로여야 한다
 	var spoil := func(list: Array) -> void:
@@ -294,7 +294,7 @@ func _events(t, lab: LabMain) -> void:
 	while lab.world.stage == s0 and k < 5000:
 		lab.world.step()
 		k += 1
-	t.check(lab.world.stage != s0, "fast_civ 가 %d틱 안에 단계가 바뀜" % k)
+	t.check(lab.world.stage != s0, "demo_fast 가 %d틱 안에 단계가 바뀜" % k)
 	lab.set_paused(true)
 	lab.advance_frame(DT)
 	var disc := false
@@ -303,7 +303,7 @@ func _events(t, lab: LabMain) -> void:
 			disc = true
 	t.check(disc, "events 신호에 발견 사건(%d건)" % got.size())
 	lab.events.disconnect(spoil)
-	var ref: SimWorld = t.make_world({}, 1, "fast_civ")
+	var ref: SimWorld = t.make_world({}, 1, "demo_fast")
 	ref.step_n(lab.world.tick)
 	t.check(SimRecorder.chronicle_csv(lab.world) == SimRecorder.chronicle_csv(ref), "events 청취자가 사건을 고쳐 써도 연대기(chronicle.csv)가 헤드리스와 같음")
 	var toast_disc := false
@@ -371,8 +371,8 @@ func _args(t, lab: LabMain) -> void:
 	t.check(int(changed.n) >= 1, "world_changed 신호")
 	err = lab.apply_args(PackedStringArray(["--seed=abc"]))
 	t.check(err != "" and lab.world.seed_value == UiConfig.integer("lab.default_seed"), "잘못된 --seed → 기본 씨앗")
-	err = lab.apply_args(PackedStringArray(["--preset=fast_civ", "--seed=9"]))
-	t.check(err == "" and lab.world.seed_value == 9 and SimConfig.deep_equal(lab.world.cfg, SimConfig.build("fast_civ", {}).config), "--preset=fast_civ --seed=9")
+	err = lab.apply_args(PackedStringArray(["--preset=demo_fast", "--seed=9"]))
+	t.check(err == "" and lab.world.seed_value == 9 and SimConfig.deep_equal(lab.world.cfg, SimConfig.build("demo_fast", {}).config), "--preset=demo_fast --seed=9")
 	err = lab.apply_args(PackedStringArray(["--snapshot=user://없는_스냅숏.json"]))
 	t.check(err != "" and lab.world != null and lab.world.tick == 0, "없는 --snapshot → 새 실험으로 엶")
 	# 스냅숏 열기: 같은 틱·해시, 선택·누적 초기화

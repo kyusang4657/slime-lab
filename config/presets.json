@@ -6,18 +6,43 @@
 	},
 	"abundant": {
 		"label": "풍요",
-		"set": {"resources.scale": 1.6}
+		"set": {
+			"resources.scale": 1.6
+		}
 	},
 	"harsh_winter": {
 		"label": "혹독한 겨울",
-		"set": {"seasons.growth": [1.0, 1.2, 0.8, 0.0], "time.season_days": 5}
+		"set": {
+			"seasons.growth": [
+				1.0,
+				1.2,
+				0.8,
+				0.0
+			],
+			"time.season_days": 5
+		}
 	},
 	"fast_civ": {
 		"label": "빠른 문명",
-		"set": {"discovery.forage_threshold": 120, "discovery.store_threshold": 30.0, "discovery.farm_threshold": 8}
+		"set": {
+			"discovery.forage_threshold": 120,
+			"discovery.store_threshold": 30.0,
+			"discovery.farm_threshold": 8
+		}
+	},
+	"demo_fast": {
+		"label": "시연·검사용(아주 빠른 발견)",
+		"set": {
+			"discovery.forage_threshold": 120,
+			"discovery.store_threshold": 30.0,
+			"discovery.farm_threshold": 8
+		}
 	},
 	"no_resources": {
 		"label": "자원 없음",
-		"set": {"resources.scale": 0.0, "plants.initial_fill": 0.0}
+		"set": {
+			"resources.scale": 0.0,
+			"plants.initial_fill": 0.0
+		}
 	}
 }

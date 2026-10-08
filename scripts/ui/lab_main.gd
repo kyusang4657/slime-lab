@@ -8,6 +8,14 @@ signal ticked(world: SimWorld)
 signal events(list: Array)
 ## 새 실험을 만들었거나 스냅숏을 열어 세계가 바뀌었을 때(4단계 그래프·연대기가 지난 기록을 비움)
 signal world_changed(world: SimWorld)
+## 실험 목록이 바뀌었을 때(새 실험·스냅숏·비교 시작/끝). 4단계 그래프·연대기·파라미터 패널이 처음부터 다시 읽음
+signal experiments_changed(list: Array)
+## index 번째 실험이 시계열 한 줄을 기록했을 때(Experiment.step 이 record.every 마다)
+signal recorded(index: int, row: Dictionary)
+## index 번째 실험의 drain_events() 결과(비어 있지 않을 때). events(list) 는 첫째 실험만(3단계 호환)
+signal events_tagged(index: int, list: Array)
+## 그래프에 시점 표시를 요청(연대기 줄을 눌렀을 때 등). tick < 0 = 표시 지움
+signal cursor_tick_requested(tick: int)
 
 const SEASON_NAMES: Array[String] = ["봄", "여름", "가을", "겨울"]
 const NO_SEASON := "계절 없음"
@@ -27,6 +35,8 @@ const MAP_HINT := "끌기 이동 · 휠 확대 · 오른쪽 끌기 회전 · 클
 const FIT_TEXT := "전체 보기"
 
 var world: SimWorld
+## 진행 중인 실험들(혼자면 1개, 비교 모드면 2개: [A, B]). world = experiments[0].world
+var experiments: Array[Experiment] = []
 var map_view: MapView
 var info_panel: InfoPanel
 var left_dock: VBoxContainer
@@ -126,40 +136,92 @@ func _process(delta: float) -> void:
 
 # ════════════════════════════ 실험 ════════════════════════════
 
-## 새 세계를 만들어 붙인다. 성공 "", 실패면 오류 문장(지금 세계는 그대로).
+## 새 세계를 만들어 붙인다(비교 모드면 끝내고 하나만). 성공 "", 실패면 오류 문장(지금 세계는 그대로).
 func new_experiment(preset: String, overrides: Dictionary, seed_value: int) -> String:
-	var b := SimConfig.build(preset, overrides)
-	var err: String = b.error
-	if err != "":
+	var r := Experiment.create(preset, overrides, seed_value)
+	if r.experiment == null:
+		var err: String = r.error
 		return err
-	var w := SimWorld.new()
-	err = w.setup(b.config, seed_value)
-	if err != "":
-		return err
-	var label := preset
-	var ps := SimConfig.presets()
-	if ps.has(preset):
-		label = str(ps[preset].get("label", preset))
-	_title = "%s · 씨앗 %d" % [label, seed_value]
-	if not overrides.is_empty():
-		_title += " · 바꾼 값 %d개" % overrides.size()
-	_adopt(w)
+	_adopt_list([r.experiment])
 	return ""
 
 
 ## 스냅숏 파일을 열어 붙인다. 성공 "", 실패면 오류 문장(지금 세계는 그대로). 백업에서 살렸으면 알림.
 func open_snapshot(path: String) -> String:
-	var r := SimSnapshot.load_file(path)
-	var w: SimWorld = r.world
-	if w == null:
-		var e: String = r.error
-		return e if e != "" else "스냅숏을 열 수 없습니다"
-	_title = "스냅숏 %s · 씨앗 %d" % [path.get_file(), w.seed_value]
-	_adopt(w)
+	var r := Experiment.from_snapshot(path)
+	if r.experiment == null:
+		var err: String = r.error
+		return err
+	_adopt_list([r.experiment])
 	# 세계를 바꾸면 앞 세계의 알림을 지우므로 백업 경고는 바꾼 뒤에 띄운다
 	if str(r.status) == "backup":
 		show_toast("원본이 깨져 백업에서 열었습니다: %s" % str(r.error), "warn")
 	return ""
+
+
+## 두 실험을 나란히(A | B) 시작한다. a·b = {preset, overrides, seed}. 성공 "", 실패면 오류 문장(지금 실험 그대로).
+## (뼈대: 4단계 LabMain 담당이 지도 둘·번갈아 진행·선택을 구현)
+func start_compare(_a: Dictionary, _b: Dictionary) -> String:
+	return "비교 모드는 아직 준비 중입니다"
+
+
+## 비교를 끝내고 A 만 남긴다.
+func stop_compare() -> void:
+	pass
+
+
+func is_comparing() -> bool:
+	return experiments.size() > 1
+
+
+func experiment(index: int = 0) -> Experiment:
+	return experiments[index] if index >= 0 and index < experiments.size() else null
+
+
+## 스냅숏 저장(index 번째 실험). 성공 "", 실패면 오류 문장. 성공하면 알림.
+func save_snapshot(path: String, index: int = 0) -> String:
+	var x := experiment(index)
+	if x == null:
+		return "저장할 실험이 없습니다"
+	var e := x.save_snapshot(path)
+	if e == "":
+		show_toast("스냅숏을 저장했습니다: %s" % ProjectSettings.globalize_path(path), "info")
+	return e
+
+
+## 결과 폴더 내보내기(CSV·요약·연대기·계통·스냅숏). 비교 모드면 dir/A, dir/B. 성공 "", 실패면 오류 문장. 결과는 알림으로.
+func export_csv(dir: String) -> String:
+	if experiments.is_empty():
+		return "내보낼 실험이 없습니다"
+	var failed := PackedStringArray()
+	for x in experiments:
+		var d := dir if experiments.size() == 1 else dir.path_join(x.tag)
+		failed.append_array(x.export_dir(d))
+	if not failed.is_empty():
+		var msg := "내보내기 실패: %s" % ", ".join(failed)
+		show_toast(msg, "error")
+		return msg
+	show_toast("결과를 내보냈습니다: %s" % ProjectSettings.globalize_path(dir), "info")
+	return ""
+
+
+## 기본 내보내기 폴더 user://experiments/<날짜-시각>-seed<N>(시각은 화면 쪽 이름에만 씀 — 시뮬레이션과 무관)
+func default_export_dir() -> String:
+	var t := Time.get_datetime_dict_from_system()
+	var stamp := "%04d%02d%02d-%02d%02d%02d" % [t.year, t.month, t.day, t.hour, t.minute, t.second]
+	var sd := experiments[0].seed_value if not experiments.is_empty() else 0
+	return "user://experiments/%s-seed%d" % [stamp, sd]
+
+
+## 프레임 없이 모든 실험을 n틱 진행(기록·recorded 신호 포함, 검사·캡처용). 사건은 다음 프레임에 알림.
+func step_ticks(n: int) -> void:
+	for i in n:
+		_step_once()
+
+
+## 그래프에 시점 표시를 요청한다(연대기 → 그래프).
+func request_cursor(tick: int) -> void:
+	cursor_tick_requested.emit(tick)
 
 
 ## 명령줄 인자(-- 뒤)로 첫 실험을 연다: --seed=N, --preset=이름, --snapshot=경로.
@@ -206,7 +268,19 @@ func apply_args(args: PackedStringArray) -> String:
 	return "\n".join(errors)
 
 
-## 세계를 바꿔 끼우고 선택·누적·측정·알림을 처음으로 되돌린다.
+## 실험 목록을 바꿔 끼우고 선택·누적·측정·알림을 처음으로 되돌린다.
+func _adopt_list(list: Array) -> void:
+	experiments.clear()
+	for k in list.size():
+		var x: Experiment = list[k]
+		x.tag = Experiment.TAGS[k] if list.size() > 1 else ""
+		experiments.append(x)
+	_title = experiments[0].label if experiments.size() == 1 else "비교 모드"
+	_adopt(experiments[0].world)
+	experiments_changed.emit(experiments)
+
+
+## 세계를 바꿔 끼우고 선택·누적·측정·알림을 처음으로 되돌린다(_adopt_list 가 부름).
 func _adopt(w: SimWorld) -> void:
 	# 앞 세계의 알림(멸종·발견 등)이 새 세계 위에 남지 않게
 	_clear_toasts()
@@ -372,6 +446,7 @@ func advance_frame(delta: float) -> int:
 	var ev := world.drain_events()
 	if not ev.is_empty():
 		events.emit(ev)
+		events_tagged.emit(0, ev)
 		for e in ev:
 			_show_event(e)
 	if world.extinct_tick >= 0 and not _extinct_seen:
@@ -389,7 +464,9 @@ func advance_frame(delta: float) -> int:
 func _step_once() -> void:
 	map_view.before_steps()
 	var s0 := Time.get_ticks_usec()
-	world.step()
+	for k in experiments.size():
+		if experiments[k].step():
+			recorded.emit(k, experiments[k].rows().back())
 	var us := float(Time.get_ticks_usec() - s0)
 	_step_us_est = us if _step_us_est <= 0.0 else lerpf(_step_us_est, us, _est_alpha)
 

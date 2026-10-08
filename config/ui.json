@@ -2,7 +2,15 @@
 	"_comment": "화면 수치의 단일 기준(색·크기·속도·예산). 시뮬레이션 규칙 수치는 sim-defaults.json. 각 구성 요소는 자기 절(section)에만 키를 더한다.",
 	"speed": {
 		"ticks_per_second_1x": 6.0,
-		"steps": [1, 2, 4, 8, 16, 32, 64],
+		"steps": [
+			1,
+			2,
+			4,
+			8,
+			16,
+			32,
+			64
+		],
 		"sim_budget_ms": 10.0,
 		"fast_forward_budget_ms": 14.0,
 		"actual_speed_window_s": 1.0,
@@ -43,7 +51,9 @@
 		"toast_gap": 10,
 		"toast_max_width": 640,
 		"toast_error_seconds": 10.0,
-		"toast_coalesce_kinds": ["farm_lost"],
+		"toast_coalesce_kinds": [
+			"farm_lost"
+		],
 		"pause_on_extinction": true
 	},
 	"theme": {
@@ -102,7 +112,12 @@
 		"rock_side_shade": 0.72,
 		"food_tint_strength": 0.3,
 		"tile_jitter": 0.06,
-		"season_tints": ["#ffffff", "#f2ffe6", "#ffdc9a", "#e2e8ee"],
+		"season_tints": [
+			"#ffffff",
+			"#f2ffe6",
+			"#ffdc9a",
+			"#e2e8ee"
+		],
 		"season_tint_strength": 0.35,
 		"terrain_min_frames": 2,
 		"plant_refresh_ticks": 2,
@@ -254,5 +269,28 @@
 		"relative_hover_lighten": 0.16,
 		"relative_dead_darken": 0.1,
 		"min_vertical_slack": 8
+	},
+	"param": {
+		"mutation_rate_max": 0.5,
+		"resource_scale_max": 3.0,
+		"initial_max": 400,
+		"seed_max": 2147483647
+	},
+	"graph": {
+		"redraw_hz": 5.0,
+		"series_a": "#7fd1b9",
+		"series_b": "#e8a05a"
+	},
+	"chronicle": {
+		"max_items": 300,
+		"width": 420
+	},
+	"sound": {
+		"enabled": true,
+		"volume_db": -8.0,
+		"min_interval_s": 0.5
+	},
+	"compare": {
+		"gap_px": 4
 	}
 }
