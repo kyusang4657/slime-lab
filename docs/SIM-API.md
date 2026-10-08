@@ -40,7 +40,7 @@
 | `drain_events() -> Array` | | 지난 호출 이후 새 사건(알림·소리용). 사건 사전은 `chronicle` 항목의 **사본**이라 받는 쪽이 고쳐 써도 연대기·기록이 바뀌지 않음 |
 | `history_hash` | String | 역사 해시(같은 씨앗·설정이면 같음) |
 | `is_extinct()`, `extinct_tick`, `peak_population` | | 멸종·최고 인구 |
-| `cfg` | Dictionary | 이 세계의 실험 설정(`SimConfig.build` 결과). **읽기 전용 — 화면은 절대 쓰지 않음**(시뮬레이션이 매 틱 읽는 살아 있는 사전). 화면이 읽는 키: `cfg.time.day_ticks`(날 표시, LabMain), `cfg.brain.weight_clamp`(두뇌 열지도 색 상한, InfoPanel), `cfg.hash.every`(검사만) |
+| `cfg` | Dictionary | 이 세계의 실험 설정(`SimConfig.build` 결과). **읽기 전용 — 화면은 절대 쓰지 않음**(시뮬레이션이 매 틱 읽는 살아 있는 사전). 화면이 읽는 키: `cfg.time.day_ticks`(날 표시, LabMain), `cfg.brain.weight_clamp`(두뇌 열지도 색 상한, InfoPanel), `cfg.hash.every`(검사만), **모든 잎 키**(ParamPanel — `cfg` 를 깊은 사본으로 떠서 다음 실험 조건과 견주고 "지금 실험" 요약에만 씀). ParamPanel 은 스냅숏 저장 파일 이름에 `tick` 도 읽음 |
 
 사건 `kind`: `discovery`(+`stage`), `store_built`(+`tile`), `first_farm`, `farm_lost`, `milestone`, `extinction`.
 

@@ -6,9 +6,10 @@
 | 격자 BFS·설정 로더·저장 검증·검사 실행기 구조 | `scripts/sim/sim_grid.gd`, `sim_config.gd`, `sim_snapshot.gd`, `tests/run_tests.gd` | 같은 저작권자의 이전 프로젝트 [little-monster-village](https://github.com/kyusang4657/little-monster-village) (`grid_logic.gd`, `game_config.gd`, `save_manager.gd`, `run_tests.gd`)에서 가져와 고침 | MIT |
 | 절차적 메시 조립기·궤도 카메라·화면 동작 확인 입력·아이콘 가장자리 칠하기 | `scripts/view/proc_geo.gd`, `scripts/view/orbit_camera.gd`, `tests/ui_driver.gd`(`_click`), `scripts/ui/ui_theme.gd`(`icon()` 의 부호 거리 칠하기) | 같은 이전 프로젝트 little-monster-village 의 `scripts/world/char_geo.gd`·`scripts/world/chars/demon_geo.gd`(조각 구 `sculpt`·회전체 `lathe`·자동 감김), `scripts/world/world_view.gd`(카메라·땅 점), `tests/integration_driver.gd`(입력 흉내), `ui_skin.gd`(`_sd`)에서 가져와 고침 | MIT |
 | 글꼴 나눔고딕 보통·굵게 | `assets/fonts/NanumGothic-Regular.ttf`, `assets/fonts/NanumGothic-Bold.ttf` | © 2010 NHN Corporation(네이버 나눔 글꼴, Reserved Font Name "Nanum"·"NanumGothic"), [google/fonts](https://github.com/google/fonts/tree/main/ofl/nanumgothic) `ofl/nanumgothic` 에서 받음. 프로젝트 기본 글꼴(`project.godot`)이자 분석 도구 그림 글꼴(`tools/analyze.py`) | [SIL OFL 1.1](assets/fonts/OFL-NanumGothic.txt) (전문: `assets/fonts/OFL-NanumGothic.txt`) |
+| 효과음(발견 차임·멸종 낮은 음·저장고 톡) | `scripts/ui/lab_sound.gd`(실행 중 합성, 설정 `config/ui.json` 의 `sound` 절) | 이 프로젝트에서 코드로 직접 합성(사인 + 약한 배음, 감쇠 포락선, 16비트 모노 22050 Hz — 음원 파일 없음) | CC0 1.0 (퍼블릭 도메인 헌정) |
 | 게임 엔진 | — | [Godot Engine](https://godotengine.org) 4.4.1 | MIT |
 | 분석 도구 파이썬 의존(앱에 들어가지 않음) | `tools/requirements.txt` | [numpy](https://numpy.org)·[pandas](https://pandas.pydata.org)·[matplotlib](https://matplotlib.org) | BSD 3-Clause(numpy·pandas), matplotlib 라이선스(PSF 기반) |
 
-외부 모델·음원·이미지 파일은 쓰지 않습니다. 슬라임·풀포기·열매·저장고·밭·선택 고리는 코드로 만든 절차적 메시(`scripts/view/slime_geo.gd`·`proc_geo.gd`)이고, 아이콘도 코드로 그립니다. 소리는 아직 없습니다(설계상 실행 중 파형 합성 — 4단계). `assets/` 아래 파일은 위 글꼴 둘과 그 라이선스 전문뿐입니다.
+외부 모델·음원·이미지 파일은 쓰지 않습니다. 슬라임·풀포기·열매·저장고·밭·선택 고리는 코드로 만든 절차적 메시(`scripts/view/slime_geo.gd`·`proc_geo.gd`)이고, 아이콘도 코드로 그립니다. 소리는 실행 중에 코드로 합성합니다(`scripts/ui/lab_sound.gd`, CC0) — 음원 파일은 없습니다. 들어 보기용 WAV 는 `godot --headless --path . --script res://tools/render_sounds.gd -- --out=폴더` 로 만들 수 있습니다(저장소에는 넣지 않음). `assets/` 아래 파일은 위 글꼴 둘과 그 라이선스 전문뿐입니다.
 
 배포(1단계 5/5 의 Linux·Windows 내보내기)에는 글꼴과 함께 `assets/fonts/OFL-NanumGothic.txt` 를 넣어야 합니다(OFL 조건). Godot 은 리소스가 아닌 `.txt` 를 기본으로 묶지 않으므로 내보내기 설정의 포함 필터에 넣습니다.

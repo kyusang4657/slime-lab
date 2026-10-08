@@ -313,7 +313,7 @@ func now_text() -> String:
 	var out: Array[String] = []
 	for ch in _now_box.get_children():
 		for l in _labels_in(ch):
-			out.append(l.text)
+			out.append(UiTheme.plain_text(l.text))
 	return "\n".join(out)
 
 
@@ -672,7 +672,8 @@ func _fill_now() -> void:
 		if _running.size() > 1:
 			head.add_child(_chip(k))
 		var name_l := Label.new()
-		name_l.text = ("%s · %s" % [str(r.tag), str(r.label)]) if str(r.tag) != "" else str(r.label)
+		# 낱말 단위로 줄바꿈(한글 음절 사이 "발/견" 에서 끊지 않게 — 통합 때 고침)
+		name_l.text = UiTheme.keep_words(("%s · %s" % [str(r.tag), str(r.label)]) if str(r.tag) != "" else str(r.label))
 		name_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_l.theme_type_variation = UiTheme.VALUE
@@ -680,7 +681,7 @@ func _fill_now() -> void:
 		var parts: Array[String] = []
 		for key in MAIN_KEYS:
 			parts.append("%s %s" % [str(MAIN_SHORT[key]), format_value(key, SimConfig.get_value(r.cfg, key))])
-		var vals := _dim_label(" · ".join(parts))
+		var vals := _dim_label(UiTheme.keep_words(" · ".join(parts)))
 		vals.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		item.add_child(vals)
 

@@ -6,6 +6,8 @@ config_version=5
 config/name="슬라임 인공생명 실험실"
 config/description="슬라임 무리의 생태·진화·문명 발견을 관찰하는 연구용 시뮬레이션"
 config/version="0.1.0"
+config/use_custom_user_dir=true
+config/custom_user_dir_name="slime-lab"
 run/main_scene="res://scenes/lab.tscn"
 config/features=PackedStringArray("4.4", "GL Compatibility")
 

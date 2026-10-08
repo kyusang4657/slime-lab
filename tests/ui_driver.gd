@@ -103,16 +103,17 @@ func _overview() -> void:
 
 
 func _farm() -> void:
+	# 세계를 직접 돌리지 않고 lab.step_ticks 로(기록·recorded 가 따라가 그래프·연대기가 세계와 맞음 — 통합 때 고침)
 	check(lab.new_experiment("demo_fast", {}, 1) == "", "demo_fast·씨앗 1 실험")
 	var w := lab.world
 	var t0 := Time.get_ticks_msec()
 	var k := 0
 	while w.stage < SimWorld.STAGE_FARM and k < STAGE_MAX_TICKS:
-		w.step()
+		lab.step_ticks(1)
 		k += 1
 	var extra := 0
 	while w.farms.size() < FARM_WANT and extra < FARM_EXTRA_MAX:
-		w.step()
+		lab.step_ticks(1)
 		extra += 1
 	print("  농사: %d틱(%.1f초), 인구 %d, 저장고 %d, 밭 %d, 평균 %.1f세대" % [w.tick, float(Time.get_ticks_msec() - t0) / 1000.0,
 			w.population(), w.store_tiles.size(), w.farms.size(), w.mean_generation()])
@@ -120,9 +121,9 @@ func _farm() -> void:
 	# 낮에 찍는다(밤 장면 lab-03 과 같은 자리를 낮·밤으로 견주도록): 해가 다 뜰 때까지 + 조금 더
 	var dawn := 0
 	while w.light < 1.0 and dawn < DAY_WAIT_MAX:
-		w.step()
+		lab.step_ticks(1)
 		dawn += 1
-	w.step_n(DAY_SETTLE_TICKS)
+	lab.step_ticks(DAY_SETTLE_TICKS)
 	# 밭 가까이(FARM_NEAR 의 칸 수 안, 가까운 것부터)에 있는 개체 가운데 자식이 가장 많은 개체. 없으면 전체에서.
 	# 밭이 화면 가운데 근처에 와야 위쪽 알림에 가리지 않는다.
 	var best := -1
@@ -150,6 +151,12 @@ func _farm() -> void:
 		var over := lab.info_panel.content_overflow()
 		check(over <= -UiConfig.num("info.min_vertical_slack"), "V07 정보 창 스크롤 없음(여유 %.0fpx)" % -over)
 	check(lab._lbl_stage.text == SimWorld.STAGE_NAMES[SimWorld.STAGE_FARM], "문명 단계 표시: " + lab._lbl_stage.text)
+	# 그래프·연대기가 세계와 맞음(세계를 직접 돌리면 기록이 첫 줄에 멈춘 채 찍힘 — 통합 때 고침)
+	var x := lab.experiment(0)
+	var last_tick := int(x.rows().back().tick)
+	check(lab.graph_panel.series_points(0, 0) == x.rows().size() and w.tick - last_tick < int(w.cfg.record.every)
+			and lab.chronicle_panel.item_count() == w.chronicle.size(),
+			"그래프 %d줄(마지막 틱 %d / 세계 %d)·연대기 %d건이 세계와 맞음" % [x.rows().size(), last_tick, w.tick, lab.chronicle_panel.item_count()])
 	await _shot("lab-02-farm-selected")
 
 
@@ -161,9 +168,9 @@ func _night() -> void:
 	var w := lab.world
 	var k := 0
 	while w.light > 0.0 and k < 400:
-		w.step()
+		lab.step_ticks(1)
 		k += 1
-	w.step_n(6)
+	lab.step_ticks(6)
 	# 낮 장면에서 고른 개체를 다시 화면 가운데로(밤에도 선택 고리가 보이게). 지도를 먼저 한 번 갱신해
 	# (멈춘 채라 진행은 없음) 위에서 직접 돌린 틱 뒤의 위치로 맞춘다.
 	await _render(1)

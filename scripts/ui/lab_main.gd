@@ -36,6 +36,9 @@ const HINT_MOUSE := "끌기 이동 · 휠 확대 · 오른쪽 끌기 회전 · �
 const HINT_KEYS := "스페이스 멈춤 · 1~7 속도 · F 따라가기 · Home 전체 보기 · Esc 선택 해제"
 const HINT_SEP := "   │   "
 const MAP_HINT := HINT_MOUSE + HINT_SEP + HINT_KEYS
+## 더 좁을 때(1280 창 비교 모드의 A 칸) 키 줄을 둘로 나눈 세 줄 도움말(통합 때 더함)
+const HINT_KEYS_A := "스페이스 멈춤 · 1~7 속도 · F 따라가기"
+const HINT_KEYS_B := "Home 전체 보기 · Esc 선택 해제"
 const FIT_TEXT := "전체 보기"
 ## 자리 접기 단추(지도 오른쪽 아래). 눌림 = 자리가 보임
 const DOCK_LEFT := "left"
@@ -762,7 +765,7 @@ func show_toast(text: String, kind: String = "info", tick: int = -1, group: Stri
 				continue
 			old.count = int(old.count) + 1
 			old.text = text
-			(old.body as Label).text = text
+			(old.body as Label).text = UiTheme.keep_words(text)
 			var cl := old.count_label as Label
 			cl.text = "×%d" % int(old.count)
 			cl.visible = true
@@ -805,7 +808,8 @@ func show_toast(text: String, kind: String = "info", tick: int = -1, group: Stri
 		t.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 		row.add_child(t)
 	var body := Label.new()
-	body.text = text
+	# 낱말 단위 줄바꿈(한글 음절 사이에서 끊지 않게, 통합 때 고침). 빈칸 없는 긴 경로는 WORD_SMART 가 글자 단위로 끊음
+	body.text = UiTheme.keep_words(text)
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _is_highlight(kind):
@@ -1159,9 +1163,10 @@ func _place_panels() -> void:
 	bottom_dock.add_child(graph_panel)
 	chronicle_panel = ChroniclePanel.new()
 	chronicle_panel.name = "ChroniclePanel"
-	chronicle_panel.custom_minimum_size.x = UiConfig.num("chronicle.width")
 	chronicle_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	bottom_dock.add_child(chronicle_panel)
+	_fit_bottom_dock()
+	resized.connect(_fit_bottom_dock)
 	lab_sound = LabSound.new()
 	lab_sound.name = "LabSound"
 	add_child(lab_sound)
@@ -1169,6 +1174,26 @@ func _place_panels() -> void:
 	graph_panel.bind_lab(self)
 	chronicle_panel.bind_lab(self)
 	lab_sound.bind_lab(self)
+
+
+## 아래 자리 나누기(통합 때 더함): 연대기 폭 = 아래 자리 안쪽 폭 × chronicle.dock_frac 을
+## [chronicle.min_width, chronicle.width] 로 자르고, 그래프 최소 폭이 들어가도록 더 줄인다(min_width 아래로는 안 줄임).
+## 폭은 창 폭에서 정보 창을 뺀 값으로 센다(자리 크기로 세면 넘친 폭이 다시 들어와 돌고 돈다). 최소 창 1280 에서
+## 연대기 420 + 그래프 최소 540 이 아래 자리(920)를 넘어 정보 창이 창 밖으로 밀리던 것을 고침(검사).
+func _fit_bottom_dock() -> void:
+	if chronicle_panel == null or not is_instance_valid(chronicle_panel) or info_panel == null:
+		return
+	var inner := size.x - info_panel.custom_minimum_size.x
+	var sb := _bottom_wrap.get_theme_stylebox("panel")
+	if sb != null:
+		inner -= sb.get_margin(SIDE_LEFT) + sb.get_margin(SIDE_RIGHT)
+	var w_min := UiConfig.num("chronicle.min_width")
+	var w := clampf(roundf(inner * UiConfig.num("chronicle.dock_frac")), w_min, UiConfig.num("chronicle.width"))
+	if graph_panel != null and is_instance_valid(graph_panel) and graph_panel.get_parent() == bottom_dock:
+		var room := inner - float(bottom_dock.get_theme_constant("separation")) - graph_panel.get_combined_minimum_size().x
+		w = maxf(w_min, minf(w, floorf(room)))
+	if not is_equal_approx(chronicle_panel.custom_minimum_size.x, w):
+		chronicle_panel.custom_minimum_size.x = w
 
 
 ## 자리 보이기: 자식이 있고 접지 않았으면 보임. 접기 단추는 자식이 있는 자리만.
@@ -1364,9 +1389,9 @@ func _fit_title(p: MapPane) -> void:
 	p.head.reset_size()
 
 
-## 조작 도움말(왼쪽 아래): 접기 단추 옆에 한 줄이 들어가면 한 줄, 아니면 마우스·키 두 줄(그래도 넘치면 잘라 냄).
-## 비교 모드에서는 A 지도 칸 안에 들어가면 그 안에(두 지도 사이를 걸치지 않게), 아니면 지도 자리 전체 폭으로.
-## 자리 접기 단추는 오른쪽 아래.
+## 조작 도움말(왼쪽 아래): 접기 단추 옆에 한 줄이 들어가면 한 줄, 아니면 마우스·키 두 줄, 그래도 넘치면 키 줄을 나눈
+## 세 줄(그래도 넘치면 잘라 냄). 비교 모드에서는 A 지도 칸 안에 들어가는 가장 적은 줄로(두 지도 사이를 걸치지 않게 —
+## 1280 창·자리 펼침에서는 세 줄), A 칸에 어느 것도 안 들어가면 지도 자리 전체 폭으로. 자리 접기 단추는 오른쪽 아래.
 func _fit_hint(area: Vector2) -> void:
 	var m := UiConfig.num("lab.map_overlay_margin")
 	var room := area.x - 2.0 * m
@@ -1376,19 +1401,30 @@ func _fit_hint(area: Vector2) -> void:
 		room -= _dock_toggles.size.x + m
 	var font := _hint_label.get_theme_font("font")
 	var fs := _hint_label.get_theme_font_size("font_size")
-	var one := font.get_string_size(MAP_HINT, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-	var two := maxf(font.get_string_size(HINT_MOUSE, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x,
-			font.get_string_size(HINT_KEYS, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
+	var forms: Array[String] = [MAP_HINT, HINT_MOUSE + "\n" + HINT_KEYS, HINT_MOUSE + "\n" + HINT_KEYS_A + "\n" + HINT_KEYS_B]
+	var widths: Array[float] = []
+	for f in forms:
+		var w := 0.0
+		for line in f.split("\n"):
+			w = maxf(w, font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
+		widths.append(w)
 	var chrome := _hint.get_combined_minimum_size().x - _hint_label.get_combined_minimum_size().x
+	var pick := -1
 	if _panes.size() > 1:
 		var room_a := minf(room, _panes[0].width - 2.0 * m)
-		if two + chrome <= room_a:
-			room = room_a
-	var text := MAP_HINT
-	var natural := one
-	if one + chrome > room:
-		text = HINT_MOUSE + "\n" + HINT_KEYS
-		natural = two
+		for i in forms.size():
+			if widths[i] + chrome <= room_a:
+				pick = i
+				room = room_a
+				break
+	if pick < 0:
+		pick = forms.size() - 1
+		for i in forms.size():
+			if widths[i] + chrome <= room:
+				pick = i
+				break
+	var text := forms[pick]
+	var natural := widths[pick]
 	if _hint_label.text != text:
 		_hint_label.text = text
 	_hint_label.custom_minimum_size.x = maxf(0.0, minf(ceilf(natural) + 1.0, room - chrome))

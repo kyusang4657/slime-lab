@@ -650,6 +650,9 @@ func _draw_x_axis(labels: bool) -> void:
 	# 이름이 겹치지 않는 가장 작은 간격 배수
 	var widest := _font.get_string_size(fmt_num(_x1, 0) + "0", HORIZONTAL_ALIGNMENT_LEFT, -1, _fs).x
 	var need := maxf(_x_label_min, widest + 8.0)
+	# 좁은 그림(1280 창의 아래 자리, 통합 때 더함): 넉넉한 간격이면 이름이 "0" 하나만 남으므로 겹치지 않을 만큼만 띄움
+	if plot.size.x < need * 2.5:
+		need = widest + 8.0
 	var ls := _xstep
 	for m in LABEL_STEP_MULTS:
 		ls = _xstep * m

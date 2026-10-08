@@ -7,7 +7,7 @@ const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 190
+const MIN_CHECKS := 194
 ## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
 const B_MUTATION := 0.07
 ## 최소 창(1280×720)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기
@@ -72,8 +72,20 @@ func _layout(t, lab: LabMain) -> void:
 			"GraphPanel(왼쪽)·ChroniclePanel(오른쪽) → 아래 자리")
 	t.check(snd is LabSound and snd == lab.lab_sound, "LabSound → 실험실 자식")
 	if gp != null and cp != null:
-		t.check((gp as Control).size_flags_horizontal & Control.SIZE_EXPAND != 0 and is_equal_approx((cp as Control).custom_minimum_size.x, UiConfig.num("chronicle.width")),
-				"그래프는 늘어나고 연대기 폭 = chronicle.width")
+		# 연대기 폭: 넓은 창에서는 chronicle.width, 최소 창에서는 그래프 최소 폭이 들어가게 줄임(min_width 아래로는 안 줄임)
+		var cw := (cp as Control).custom_minimum_size.x
+		t.check((gp as Control).size_flags_horizontal & Control.SIZE_EXPAND != 0 and cw >= UiConfig.num("chronicle.min_width")
+				and cw <= UiConfig.num("chronicle.width") and is_equal_approx((cp as Control).size.x, cw),
+				"그래프는 늘어나고 연대기 폭 %.0f ∈ [chronicle.min_width, chronicle.width]" % cw)
+		t.check(_fits_window(lab), "최소 창(%s)·자리 모두 펼침: 아래 자리 최소 폭이 넘치지 않고 정보 창이 창 안(오른쪽 끝 %.0f ≤ %.0f)"
+				% [str(t.root.size), lab.info_panel.get_global_rect().end.x, lab.size.x])
+		var small: Vector2i = t.root.size
+		t.root.size = Vector2i(1600, 900)
+		await t.frames(2)
+		t.check(is_equal_approx((cp as Control).custom_minimum_size.x, UiConfig.num("chronicle.width")) and _fits_window(lab),
+				"1600×900 에서는 연대기 폭 = chronicle.width(%.0f), 창 안" % (cp as Control).custom_minimum_size.x)
+		t.root.size = small
+		await t.frames(2)
 	t.check(lab._left_wrap.visible and lab._bottom_wrap.visible, "패널을 넣은 자리는 보임")
 	t.check(is_equal_approx(lab.info_panel.size.y, lab.size.y - lab._top_bar.size.y) and is_equal_approx(lab._bottom_wrap.size.x, lab._left_wrap.size.x + lab._map_area.size.x),
 			"정보 창은 아래 자리 옆까지 세로 전체(%.0f), 아래 자리 = 왼쪽 자리 + 지도 폭(%.0f)" % [lab.info_panel.size.y, lab._bottom_wrap.size.x])
@@ -830,6 +842,9 @@ func _compare(t, lab: LabMain) -> void:
 		t.check(_rect(ca).encloses(_rect(ha)) and _rect(cb).encloses(_rect(hb)), "표지가 자기 지도 칸 안")
 	# 왼쪽 자리를 접어 지도가 넓어지면 조작 도움말(두 줄)은 A 지도 칸 안에(두 지도 사이를 걸치지 않게)
 	t.check(_overlays_ok(lab), "비교 모드 도움말·접기 단추가 지도 안, 서로 안 겹침")
+	# 최소 창·자리 펼침(A 칸 약 338px): 두 줄도 안 들어가면 키 줄을 나눈 세 줄로 A 칸 안에(통합 때 더함 — 두 지도 사이를 걸치던 것)
+	t.check(_rect(ca).encloses(_rect(lab._hint)) and lab._hint_label.text.count("\n") == 2,
+			"좁은 비교 모드(A 칸 %.0f): 도움말 세 줄로 A 칸 안(%s)" % [ca.size.x, _rect(lab._hint)])
 	lab.set_dock_open(LabMain.DOCK_LEFT, false)
 	await t.frames(2)
 	t.check(_rect(ca).encloses(_rect(lab._hint)) and _overlays_ok(lab), "넓어진 비교 모드: 도움말이 A 지도 칸 안(%s ⊂ %s)" % [_rect(lab._hint), _rect(ca)])
@@ -1091,7 +1106,8 @@ func _compare_layout(t, lab: LabMain) -> void:
 	var cb := lab._map_area.get_node_or_null("MapContainerB") as Control
 	t.check(cb != null and ca.size.x >= MIN_COMPARE_MAP.x and ca.size.y >= MIN_COMPARE_MAP.y and cb.size.x >= MIN_COMPARE_MAP.x and cb.size.y >= MIN_COMPARE_MAP.y,
 			"최소 창에서 비교 지도 한 칸 %s ≥ %s(창 %s)" % [str(ca.size), str(MIN_COMPARE_MAP), str(t.root.size)])
-	var ha := lab._map_area.get_node_or_null("MapTitle") as Control
+	t.check(_fits_window(lab), "비교 모드(파라미터 B 칸·범례 둘)에서도 배치가 창 안(정보 창 오른쪽 끝 %.0f)" % lab.info_panel.get_global_rect().end.x)
+	var ha :=lab._map_area.get_node_or_null("MapTitle") as Control
 	var title := ha.find_child("Title", true, false) as Label
 	var natural := title.get_theme_font("font").get_string_size(title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, title.get_theme_font_size("font_size")).x
 	var hb := lab._map_area.get_node_or_null("MapTitleB") as Control
@@ -1116,6 +1132,16 @@ func _compare_layout(t, lab: LabMain) -> void:
 	t.check(w2 <= UiConfig.num("lab.min_width"), "하루 길이가 다른 가장 긴 표시에서도 위쪽 막대 %.0f ≤ 최소 창 폭" % w2)
 	lab.new_experiment("default", {}, 1)
 	t.check(lab._day_chip.visible and not lab._lbl_season.text.contains("/"), "혼자로 돌아오면 날 다시 보임")
+
+
+## 배치가 창 안에 들어가는지: 본문 최소 폭 ≤ 창 폭, 정보 창 오른쪽 끝 = 창 오른쪽 끝, 아래 자리 = 왼쪽 자리 + 지도 폭(넘친 폭 없음).
+## (통합 때 더함: 연대기 420 + 그래프 최소 540 이 1280 창의 아래 자리를 넘어 정보 창이 46px 밖으로 밀렸던 것)
+func _fits_window(lab: LabMain) -> bool:
+	var body := lab.info_panel.get_parent() as Control
+	var ip := lab.info_panel.get_global_rect()
+	var lab_r := lab.get_global_rect()
+	var bottom_ok := not lab._bottom_wrap.visible or absf(lab._bottom_wrap.size.x - (lab._left_wrap.size.x if lab._left_wrap.visible else 0.0) - lab._map_area.size.x) < 0.5
+	return body.get_combined_minimum_size().x <= lab.size.x + 0.5 and absf(ip.end.x - lab_r.end.x) < 0.5 and bottom_ok
 
 
 ## 비교 모드 상태 글자를 가장 길게 바꿔 위쪽 막대 최소 폭을 잰다(다음 프레임에 제자리로).

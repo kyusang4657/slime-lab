@@ -94,6 +94,33 @@ static func color(key: String) -> Color:
 	return UiConfig.color("theme." + key)
 
 
+## 낱말 잇개(U+2060, 폭 0 — 그 자리에서 줄을 바꾸지 않음)
+const WORD_JOINER := "\u2060"
+
+
+## 한국어 낱말 단위 줄바꿈(keep-all, 통합 때 더함): Godot 의 ICU 줄바꿈은 한글 음절 사이("발/견")에서도 끊으므로
+## 빈칸이 아닌 글자 사이마다 낱말 잇개를 넣어 빈칸에서만 줄이 바뀌게 한다. 폭은 그대로(검사). 한 낱말이 줄보다 길면
+## AUTOWRAP_WORD_SMART 가 글자 단위로 끊는다. 읽어 견줄 글자는 plain_text() 로 되돌린다.
+static func keep_words(text: String) -> String:
+	var out := PackedStringArray()
+	var n := text.length()
+	for i in n:
+		var c := text[i]
+		out.append(c)
+		if i + 1 < n and not _is_break_space(c) and not _is_break_space(text[i + 1]):
+			out.append(WORD_JOINER)
+	return "".join(out)
+
+
+## keep_words 로 넣은 낱말 잇개를 뺀 글자
+static func plain_text(text: String) -> String:
+	return text.replace(WORD_JOINER, "")
+
+
+static func _is_break_space(c: String) -> bool:
+	return c == " " or c == "\n" or c == "\t"
+
+
 ## 글자가 모두 기본 글꼴에 있으면 true(없는 기호 대신 한국어 글자를 쓰려고 확인).
 static func has_glyphs(text: String) -> bool:
 	var f := regular_font()
