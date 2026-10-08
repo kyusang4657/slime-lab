@@ -276,7 +276,21 @@
 		"mutation_rate_max": 0.5,
 		"resource_scale_max": 3.0,
 		"initial_max": 400,
-		"seed_max": 2147483647
+		"seed_max": 2147483647,
+		"mutation_rate_step": 0.005,
+		"resource_scale_step": 0.05,
+		"initial_min": 1,
+		"initial_step": 1,
+		"label_width": 52,
+		"value_field_width": 66,
+		"seed_field_min_width": 70,
+		"advanced_field_width": 70,
+		"group_gap": 8,
+		"row_gap": 2,
+		"changed_stripe_width": 3,
+		"chip_size": 10,
+		"dialog_width": 760,
+		"dialog_height": 520
 	},
 	"graph": {
 		"redraw_hz": 5.0,

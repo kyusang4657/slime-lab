@@ -303,6 +303,40 @@ func run(t) -> void:
 - `func current_settings(which := 0) -> Dictionary` = `{preset, overrides, seed}`(which 1 = B 칸) · `func set_value(key: String, value, which := 0)` · `func apply() -> String`(새 실험 단추와 같음) — 검사용.
 - 수치(범위·폭·간격)는 `ui.param`.
 
+**구현 메모(4단계, ParamPanel 담당이 덧붙임)**
+
+- 더한 멤버(검사·캡처·통합용):
+
+  | 멤버 | 뜻 |
+  |---|---|
+  | `set_value(key, value, which := 0) -> String` | 돌려주는 값 = 이 값의 오류 또는 그 칸 조건의 오류(`""` = 문제 없음). 특별 키 `"preset"`(예설정 이름)·`"seed"`. 글자 값은 칸에 적은 것처럼 해석 |
+  | `apply_compare() -> String` | "나란히 시작" 단추와 같음: `lab.start_compare(current_settings(0), current_settings(1))`, 오류는 패널 안 빨간 글 + 알림 |
+  | `revert()` · `set_compare_mode(on)` · `is_compare_mode()` | 되돌리기·비교 모드 단추와 같음 |
+  | `export_to(dir) -> String` | CSV 내보내기 단추가 `lab.default_export_dir()` 로 부르는 함수(검사는 임시 폴더로) |
+  | `open_snapshot_dialog(save) -> FileDialog` · `save_snapshot_to(path)` · `open_snapshot_from(path)` | 스냅숏 대화 상자 띄우기, 고른 파일로 저장·열기(대화 상자의 `file_selected` 가 부름) |
+  | `random_seed(which := 0) -> int` | "무작위" 단추와 같음 |
+  | `set_advanced_open(on)` · `set_advanced_target(which)` | 고급 설정 펼치기, 비교 모드에서 고급 설정이 보여 줄 칸(A/B) |
+  | `status_text()` · `error_text()` · `now_text()` · `field_text(key, which)` · `is_highlighted(key, which, advanced)` · `row_error(key, which, advanced)` · `control(id)` | 상태 줄·오류 글·"지금 실험" 글·칸 글자·강조·줄 아래 오류·노드 찾기(`"apply"`, `"slider:<키>:0"`, `"adv:<키>"` 등 — 주석 참고) |
+  | `static leaf_kind(key)` · `leaf_keys()` · `format_value(key, v)` | 설정 잎 키 종류(`int`·`float`·`bool`·`other`)·목록·값 글자 |
+  | `TEXT_SAME`·`TEXT_PENDING`·`TEXT_PENDING_COMPARE`·`TEXT_COMPARE_IDLE`·`MAIN_KEYS`·`KIND_*`·`SNAPSHOT_DIR` | 상태 줄 문구·세 주요 키·종류·스냅숏 시작 폴더(`user://experiments`) |
+
+- **칸 = 다음 실험 조건.** 칸마다(A, 비교 모드면 B) `{preset, seed, overrides}` 를 들고, `overrides` 에는 고른 예설정과 **다른 값만** 넣는다(예설정과 같은 값을 적으면 빠짐). 예설정을 고르면 바꾼 값을 지우고 그 예설정 값으로(씨앗은 그대로). 되돌리기는 보이는 칸의 바꾼 값을 지운다(씨앗은 그대로).
+- **검사:** 값이 바뀔 때마다 `SimConfig.build(preset, overrides)` 그대로 + 패널 규칙 하나(초기 개체 수 ≤ `population.cap` — 넘으면 처음부터 번식이 막힘). 오류 문장이 가리키는 키의 줄(없으면 마지막으로 바꾼 줄) 바로 아래에 빨간 글, 이름은 위험 색. 칸에 해석할 수 없는 글자(수가 아님, 정수 키에 소수, 배열 키)는 그 줄 아래 오류를 보이고 값은 그대로 둔다. 오류가 있으면 새 실험·나란히 시작 단추를 못 쓰고, `apply()` 도 실험실에 넘기지 않는다(지금 실험 그대로, 오류 알림).
+- **강조 = 지금 실험과 다른 값**(왼쪽 강조 색 띠 + 강조 색 값; 띠는 꺼져도 자리를 지켜 이름이 흔들리지 않음). 견주는 기준은 칸과 같은 자리의 지금 실험(비교 중이 아니면 B 칸도 A 실험과 견줌 — B 에서 바꾼 변인만 강조). 상태 줄: `지금 실험과 같음` / `바꾼 값 N개 · 새 실험을 눌러 적용`(비교 중이면 `… 나란히 시작을 눌러 적용`, 비교 전이면 `나란히 시작을 누르면 A·B 를 함께 시작`, 오류면 위험 색 `설정 오류 — …`). N = 설정 잎 키 가운데 다른 것 + 씨앗이 다르면 1. 고급 설정 머리에는 따로 "예설정과 다른 값 K개".
+- **지금 실험:** `experiments_changed` 마다 실험별 `label`(A/B 이름표 + `ui.graph.series_a`·`series_b` 색 점)과 세 값(`world.cfg` 를 깊은 사본으로 떠서 읽기만 함)을 다시 쓰고, **칸도 그 실험의 조건으로 맞춘다**(만든 실험 = 그 조건 그대로, 스냅숏 = 다른 값이 가장 적은 예설정 + 다른 값 — 그래서 스냅숏을 열어도 "지금 실험과 같음", 새 실험을 누르면 그 설정·씨앗으로 0틱부터 다시). 실험이 둘이 되면 비교 모드 단추가 켜지고, 둘에서 하나로 줄면 꺼진다.
+- **세 주요 값:** 슬라이더(마우스 휠로는 안 바뀜) + 오른쪽 숫자 칸. 범위 `ui.param.mutation_rate_max`·`resource_scale_max`, 초기 개체 수는 `ui.param.initial_min` ~ min(`ui.param.initial_max`, 그 칸 조건의 `population.cap`). 눈금 `ui.param.mutation_rate_step`·`resource_scale_step`·`initial_step` — 슬라이더 값은 눈금 자릿수 글자로 바꿨다 다시 읽어 넣는다(0.30000000000000004 같은 값이 `SimConfig.validate` 의 JSON 왕복 검사에 걸리지 않게). 숫자 칸에는 슬라이더 범위 밖 값도 적을 수 있다(설정 검사 범위 안이면 됨, 슬라이더는 끝에 붙음). 화면을 상태에 맞추는 동안(슬라이더 끝을 줄이면 Range 가 값을 잘라 신호를 냄) 들어오는 신호는 무시한다 — 상한을 낮춰도 초기 개체 수가 몰래 바뀌지 않고 오류로 알린다(검사).
+- **고급 설정:** `sim-defaults.json` 의 잎 키 전부를 절별로(절 이름 "지도 · map" 등). 수 → 오른쪽 맞춤 글 칸, 참거짓 → 확인 상자, 배열·글자(`seasons.growth`·`brain.policy`) → 읽기 전용 칸(보이기만). JSON 을 읽으면 수가 모두 실수가 되므로 **정수 키는 파일 글자로 가린다**(소수점 없는 수). 값 글자는 Godot 기본 표기(정수 키는 정수). 줄 이름 말풍선 = 키·예설정 값·지금 실험 값. 비교 모드에서는 머리의 A/B 단추로 고급 설정이 보여 줄 칸을 고른다. 펼쳤을 때만 줄을 갱신한다.
+- **입력:** 단추는 초점을 받지 않는다(스페이스 = 멈춤과 겹치지 않게). 글 칸(숫자 칸·씨앗 칸)에 초점이 있으면 LabMain 이 단축키를 무시한다(SpinBox 안의 LineEdit 도 — 검사: 씨앗 칸에 "42 f", 숫자 칸에 "0.07" 을 쳐도 멈춤·배속·따라가기 그대로). Enter = 확정 + 초점 풀기(지도로 돌아가면 단축키가 바로 동작), Esc = 적던 글자 버리고 초점 풀기(선택 해제 아님), 초점이 빠지면 확정. 단추 동작(새 실험·나란히 시작·비교·스냅숏) 전에 입력 중인 칸을 먼저 확정한다.
+- **씨앗:** SpinBox 0~`ui.param.seed_max`(정수, 밖이면 자름). "무작위" = 화면 쪽 시각으로 씨앗을 준 **따로 만든** `RandomNumberGenerator` 에서 고름 — 시뮬레이션 난수(SimRng)·Godot 전역 난수와 무관(검사: 전역 `randi()` 순서·세계 해시 그대로).
+- **비교 모드:** 켜면(비교 중이 아니면) B 칸 = A 조건 사본, 새 실험 단추 자리에 "나란히 시작"(AccentButton). 끄면 B 칸을 숨기고 `lab.stop_compare()` 를 **늘** 부른다(비교 중이 아니면 LabMain 이 아무것도 하지 않아야 함). 뼈대 `start_compare` 의 오류 문장은 패널 안 빨간 글 + 알림.
+- **파일:** CSV 내보내기 = `lab.export_csv(lab.default_export_dir())`(성공·실패 알림은 LabMain). 스냅숏 저장/열기 = 패널 자식 FileDialog 두 개(처음 누를 때 만듦, `FILE_MODE_SAVE_FILE`/`OPEN_FILE`, `ACCESS_FILESYSTEM`, `*.json`, 시작 폴더 `user://experiments` 의 실제 경로 — 없으면 만듦, 크기 `ui.param.dialog_width × dialog_height`, 저장 기본 이름 `snapshot-<날짜-시각>-seed<N>-tick<T>.json`, `use_native_dialog` — 운영 체제 대화 상자를 쓸 수 있으면 그것, 못 쓰면(헤드리스·포털 없는 Linux) 엔진 대화 상자). 비교 중 저장은 `<이름>-A.json`·`<이름>-B.json` 두 파일. 열기 실패는 패널 안 빨간 글 + 알림(지금 실험 그대로).
+- **소리:** "소리" 확인 상자 = 실험실 자식 가운데 `LabSound`(종류로 찾음)의 `enabled`. 실험실 자식이 바뀔 때마다 다시 찾고, 없으면 못 씀(말풍선 "소리 장치(LabSound)가 없습니다").
+- **배치:** 패널(VBox) ⊃ `Scroll`(세로만) ⊃ 제목 "실험 조건" · 지금 실험(CardPanel) · "다음 실험 …" · A 칸·B 칸(CardPanel, 비교 모드에서 머리에 색 점 + A/B + 왼쪽/오른쪽 지도) · 상태 줄 · 오류 글 · 새 실험/나란히 시작 · [되돌리기][비교 모드] · ─ · CSV 내보내기 · [스냅숏 저장][스냅숏 열기] · 소리 · ─ · ▶ 고급 설정. 가로: 글 칸은 기본 "글자 4개" 최소 폭을 끄고 `ui.param.value_field_width`·`advanced_field_width`·`seed_field_min_width` 만, 예설정 단추는 긴 이름을 말줄임(전체 이름은 말풍선), 긴 문장은 줄바꿈 — 최소 폭 + 스크롤 막대 ≤ `lab.left_panel_width` − 양쪽 여백(검사, 보통·비교 + 고급 설정 둘 다, 왼쪽 자리가 넓어지지 않음·가로로 넘치는 칸 없음). 간격 `ui.param.group_gap`·`row_gap`·`label_width`·`changed_stripe_width`·`chip_size`.
+- 시뮬레이션 쪽 쓰는 것: `SimConfig.defaults()`·`presets()`·`preset_names()`·`build()`·`get_value()`·`deep_equal()`·`DEFAULTS_PATH`(정수 키 가리기), `Experiment` 의 만든 조건(`preset`·`overrides`·`seed_value`·`label`·`tag`·`snapshot_path`)과 `world.cfg`(깊은 사본으로 견주기만)·`world.tick`(저장 파일 이름). 세계를 진행하거나 고치지 않는다.
+- 검사 `tests/view/param_checks.gd`(119개): 기본값 = 기본 예설정, 예설정 → 세 칸, 슬라이더 눈금·상한, set_value + apply → 새 실험의 cfg·씨앗·개체 수, 범위 밖 값 → 칸 아래 오류·단추 꺼짐·지금 실험 그대로·알림, 글자 오류·정수 키·배열 키, 참거짓 칸, 초기 개체 수 > 상한, 되돌리기, 씨앗 범위·무작위(전역 난수·세계 그대로), 글 칸 입력 중 단축키 무시·Enter/Esc, 내보내기(`export_to(임시 폴더)` + 알림, 단추 → `lab.default_export_dir()` 는 가짜 실험실이 임시 폴더로 돌려 확인 — 공용 `user://experiments` 에 쓰지 않음, 검사 뒤 지움), 스냅숏 대화 상자 설정·저장·열기·없는 파일, 소리 상자, 1280×720 폭, 비교 모드(진짜 실험실: 뼈대면 오류 글 / 통합 뒤면 실험 둘, 가짜 실험실 `FakeLab`: `start_compare` 인자 = 두 칸 조건, 끄면 `stop_compare`).
+- 캡처: `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/param_capture.gd -- --out=폴더 [--extra]` → `param-panel.png`(실제 폭·실제 높이(창 − 위쪽 막대 − 아래 자리)의 세 장면: 값을 바꾼 혼자 모드 · 비교 모드 · 고급 설정(바꾼 값·칸 아래 오류)), `--extra` 면 장면별·1280×720 높이 그림도.
+- 알려진 한계(엔진 대화 상자로 열릴 때): 안의 엔진 글(경로·폴더 만들기·Save 등)은 엔진 번역이 내보내기에 없어 영어로 보이고(제목·취소 단추만 한국어), 프로젝트 이름이 한글이라 `user://` 실제 경로에 한글이 들어가면 Godot 4.4 의 FileDialog 가 목록은 보여 주면서도 "You don't have permission to access contents of this folder." 를 잘못 띄운다(엔진 `DirAccessUnix::is_readable` 이 경로를 UTF-8 로 넘기지 않음 — 영문 경로에서는 안 뜸, 캡처로 확인). 프로젝트 설정 `application/config/use_custom_user_dir` + 영문 `custom_user_dir_name` 으로 피할 수 있다(통합 담당에게 요청).
+
 ## GraphPanel — `scripts/ui/graph_panel.gd` (`class_name GraphPanel`, HBoxContainer, 아래 자리) + `GraphView`(`scripts/ui/graph_view.gd`)
 
 - `func bind_lab(lab)` — `experiments_changed` → 지우고 `rows()` 를 처음부터, `recorded(index, row)` → 덧붙임, `cursor_tick_requested(tick)` → 세로 표시선.
