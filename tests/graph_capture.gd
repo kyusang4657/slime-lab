@@ -4,7 +4,8 @@ extends SceneTree
 ## 실험실 아래 자리와 같은 바탕(DockPanel) 위에 GraphPanel 만 띄워, 1600×260 과 1000×220 두 크기를 위아래로 붙여 찍는다.
 ##   graphs-single.png   시연용(demo_fast)·씨앗 1 을 TICKS 틱. 위: 출생·사망 켬 + 개체 수 그래프에 마우스 값,
 ##                       아래: 가로축 평균 세대 + 평균 에너지 + 시점 표시(채집 발견 틱)
-##   graphs-compare.png  A 기본 · B 시연용(씨앗 1, 각 TICKS 틱). 위: 기술 단계 그래프에 마우스 값, 아래: 기본 상태
+##   graphs-compare.png  A 기본 · B 시연용(씨앗 1, 각 TICKS 틱). 위: 기술 단계 그래프에 마우스 값, 아래: 가로축 평균 세대 +
+##                       출생·사망 + B 의 농사 발견 시점(실험마다 자기 세대에) + 개체 수 그래프 오른쪽(A 가 이르지 못한 세대)에 마우스 값
 ## --extra 를 주면 참고용도 찍는다(문서에는 넣지 않음): graphs-1280.png(1280×720 창의 아래 자리 폭 ≈ 834, 비교),
 ##   graphs-edge.png(멸종한 자원 없음 세계 + 평균 특성에 마우스 값 / 줄 하나뿐인 새 실험 / 실험 없음)
 ## 인자: --out=폴더(기본 res://docs/screenshots/v0.1), --ticks=N, --seed=N, --copy=폴더(그림을 그곳에도 복사), --extra
@@ -19,6 +20,7 @@ const SMALL := Vector2i(1000, 220)
 ## 마우스 값을 보일 가로 위치(그림 영역 폭에 대한 비)
 const HOVER_FRAC_SINGLE := 0.66
 const HOVER_FRAC_COMPARE := 0.55
+const HOVER_FRAC_GEN := 0.9
 const MAX_BYTES := 250 * 1024
 
 var _out := "res://docs/screenshots/v0.1"
@@ -95,7 +97,13 @@ func _run() -> void:
 	_panel.set_trait(0)
 	_panel.load_experiments([xa, xb])
 	var ctop := await _grab(BIG, GraphPanel.GRAPH_CIV, HOVER_FRAC_COMPARE)
-	var cbottom := await _grab(SMALL, -1, 0.0)
+	# 아래: 세대 축 + B 의 농사 발견 시점(실험마다 자기 세대에 세로선) + A 가 이르지 못한 세대에 마우스 값
+	_panel.set_x_axis(GraphPanel.X_GEN)
+	_panel.set_show_flows(true)
+	_panel.set_cursor_tick(xb.world.discovery_tick[SimWorld.STAGE_FARM])
+	var cbottom := await _grab(SMALL, GraphPanel.GRAPH_POP, HOVER_FRAC_GEN)
+	_panel.set_show_flows(false)
+	_panel.set_x_axis(GraphPanel.X_TICK)
 	_save(_stack(ctop, cbottom), "graphs-compare.png")
 	if _extra:
 		await _extras(xa, xb)
