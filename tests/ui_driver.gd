@@ -273,13 +273,19 @@ func _compare() -> void:
 	await _click_slime_on(1, false)
 	check(lab.selected_index() == 1 and lab.info_panel.current_tag() == "B" and lab.map_view_of(1).ring_info().visible and not lab.map_view.ring_info().visible,
 			"B 지도 클릭 → 정보 창 이름표 \"%s\", 고리는 B 지도에만" % lab.info_panel.current_tag())
-	# 1,500틱 동안 쌓인 알림은 확인했으니 흘려보내고(멈춘 채 시간만) 두 지도를 가리지 않게 찍는다
-	lab.set_paused(true)
-	for i in int(ceil(UiConfig.num("lab.toast_seconds") / 0.25)) + 1:
-		lab.advance_frame(0.25)
-	lab.set_paused(false)
+	# 실험 알림은 자기 지도 칸 안(두 지도 사이를 걸쳐 다른 지도를 가리지 않음) — 쌓인 알림을 그대로 둔 채 찍는다
 	await _park_mouse()
 	await _render(FARM_RENDER_FRAMES)
+	var placed := 0
+	var inside := true
+	for e: Dictionary in lab._toasts:
+		var g := Experiment.TAGS.find(str(e.group))
+		if g < 0:
+			continue
+		placed += 1
+		inside = inside and lab._panes[g].container.get_global_rect().encloses((e.panel as Control).get_global_rect())
+	check(inside, "비교 모드 실험 알림 %d개가 모두 자기 지도 칸 안" % placed)
+	check(lab.view_turns(0) == lab.view_turns(1), "두 지도가 같은 방향(화면이 북쪽 위에서 %d번 돎)" % lab.view_turns(0))
 	check(lab._cmp_box.visible and lab._top_bar.get_combined_minimum_size().x <= float(root.size.x), "위쪽 막대 비교 모드 표시가 창 폭 안")
 	check(lab.selected_index() == 1 and lab.experiment(1).world.index_of_id(lab.selected_id()) >= 0 and lab.map_view_of(1).ring_info().visible,
 			"찍을 때도 B 의 #%d 가 살아 있고 고리가 보임" % lab.selected_id())

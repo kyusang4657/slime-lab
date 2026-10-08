@@ -10,7 +10,8 @@ extends Node
 ##   멸종(extinction)   = 낮게 내려가는 긴 음
 ##   저장고(store_built) = 짧고 부드러운 "톡"(첫 밭 first_farm 도 같은 소리)
 ## 같은 소리는 ui.sound.min_interval_s 안에 다시 내지 않는다(빨리 감기에서 사건이 몰려도 시끄럽지 않게).
-## 한 묶음(한 프레임의 사건)에서는 가장 중요한 소리 하나만 낸다(멸종 > 발견 > 저장고).
+## 한 묶음(한 프레임의 사건)에서는 가장 중요한 소리 하나만 낸다(멸종 > 발견 > 저장고). 실험실에 붙으면 한 프레임에 오는
+## events_tagged(비교 모드면 A·B 둘)를 모아 프레임 끝(지연 호출)에 한 묶음으로 — 비교 모드에서도 한 프레임에 소리 하나.
 
 ## 사건 종류 → 소리 이름(없는 종류는 소리 없음: 밭 잃음·세대 이정표는 자주 나서 조용히)
 const SOUND_OF := {"discovery": "discovery", "extinction": "extinction", "store_built": "store_built", "first_farm": "store_built"}
@@ -48,6 +49,9 @@ var _streams := {}
 var _last := {}
 var _min_interval := 0.5
 var _next := 0
+# 실험실 사건을 프레임 끝까지 모으는 묶음(events_tagged 가 실험마다 따로 와도 소리는 하나)
+var _pending: Array = []
+var _flush_queued := false
 
 
 func _init() -> void:
@@ -72,7 +76,7 @@ func _exit_tree() -> void:
 	stop_all()
 
 
-## 실험실에 붙인다: events_tagged(어느 실험이든) → 그 묶음에서 가장 중요한 소리 하나.
+## 실험실에 붙인다: events_tagged(어느 실험이든)를 프레임 끝까지 모아 → 그 프레임의 사건에서 가장 중요한 소리 하나.
 func bind_lab(lab: LabMain) -> void:
 	if _lab != null and _lab.events_tagged.is_connected(_on_events):
 		_lab.events_tagged.disconnect(_on_events)
@@ -82,6 +86,17 @@ func bind_lab(lab: LabMain) -> void:
 
 
 func _on_events(_index: int, list: Array) -> void:
+	_pending.append_array(list)
+	if not _flush_queued:
+		_flush_queued = true
+		_flush_pending.call_deferred()
+
+
+## 이 프레임에 모인 사건(A·B 모두)에서 소리 하나(play_events). 받은 배열은 읽기만 한다(LabMain 의 사본을 청취자끼리 나눠 씀).
+func _flush_pending() -> void:
+	_flush_queued = false
+	var list := _pending
+	_pending = []
 	play_events(list)
 
 

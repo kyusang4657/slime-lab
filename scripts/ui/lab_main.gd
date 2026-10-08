@@ -12,7 +12,8 @@ signal world_changed(world: SimWorld)
 signal experiments_changed(list: Array)
 ## index 번째 실험이 시계열 한 줄을 기록했을 때(Experiment.step 이 record.every 마다)
 signal recorded(index: int, row: Dictionary)
-## index 번째 실험의 drain_events() 결과(비어 있지 않을 때, 사본). events(list) 는 첫째 실험만(3단계 호환)
+## index 번째 실험의 drain_events() 결과(비어 있지 않을 때, 깊은 사본). events(list) 는 첫째 실험만(3단계 호환).
+## 사본은 signal 마다 하나다 — 같은 signal 의 청취자끼리는 같은 배열을 받으므로 고쳐 쓰지 말 것(꾸미려면 먼저 복사)
 signal events_tagged(index: int, list: Array)
 ## 그래프에 시점 표시를 요청(연대기 줄을 눌렀을 때 등). tick < 0 = 표시 지움
 signal cursor_tick_requested(tick: int)
@@ -31,6 +32,8 @@ const TOAST_TAGS := {discovery = "새 발견", error = "오류"}
 const TOAST_HIGHLIGHT_ALPHA := 0.85
 # 오래 보이는 알림(오류·경고: 경로 등을 읽을 시간)
 const TOAST_LONG_KINDS: Array[String] = ["error", "warn"]
+# _trim_toasts: 모든 칸의 알림을 셈
+const ALL_PANES := -2
 # 조작 도움말: 지도가 넓으면 한 줄, 좁으면(1280 창·비교 모드) 두 줄
 const HINT_MOUSE := "끌기 이동 · 휠 확대 · 오른쪽 끌기 회전 · 클릭 고르기"
 const HINT_KEYS := "스페이스 멈춤 · 1~7 속도 · F 따라가기 · Home 전체 보기 · Esc 선택 해제"
@@ -43,10 +46,14 @@ const FIT_TEXT := "전체 보기"
 ## 자리 접기 단추(지도 오른쪽 아래). 눌림 = 자리가 보임
 const DOCK_LEFT := "left"
 const DOCK_BOTTOM := "bottom"
-const LEFT_TOGGLE_TEXT := "설정"
+const LEFT_TOGGLE_TEXT := "실험 조건"
 const BOTTOM_TOGGLE_TEXT := "그래프·연대기"
 ## 비교 모드 실험 색(이름표 바탕): 그래프 계열 색과 같게(A 실선·B 점선과 한눈에 맞도록)
 const TAG_COLOR_KEYS: Array[String] = ["graph.series_a", "graph.series_b"]
+## 화면 방향 화살표(카메라가 북쪽 위에서 90° 씩 돈 수만큼 밀어 씀 — 0 북 1 동 2 남 3 서 순서). 지도 나침반·정보 창 방향
+const ARROWS: Array[String] = ["↑", "→", "↓", "←"]
+## 글 칸 밖을 누르면 초점을 푸는 마우스 단추(휠은 아님 — 칸에 적는 중에 패널을 굴려도 초점 그대로)
+const RELEASE_BUTTONS: Array[MouseButton] = [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE]
 
 
 ## 지도 한 칸(혼자면 하나, 비교 모드면 A·B 둘): SubViewportContainer ⊃ SubViewport ⊃ MapView + 왼쪽 위 표지.
@@ -60,7 +67,11 @@ class MapPane:
 	var title: Label
 	var paused: Label
 	var extinct: Label
+	## 나침반 "북 →"(카메라가 북쪽 위가 아닐 때만 — 비교 모드의 세로 칸에서 지도를 돌렸을 때 등)
+	var north: Label
 	var fit: Button
+	## 이 지도의 실험 알림(비교 모드, 칸 가운데 위 — 혼자 모드·이름표 없는 알림은 공용 Toasts)
+	var toasts: VBoxContainer
 	## 표지 폭을 마지막으로 맞춘 조건(바뀔 때만 다시 잼)
 	var fit_key := ""
 	var width := 0.0
@@ -108,8 +119,11 @@ var _behind_fill := 0.5
 # 실험마다 멸종을 이미 보았는지(멸종하는 순간 한 번만 알리려고), 모두 멸종해 저절로 멈췄는지(새 세계에서는 다시 재생)
 var _extinct_seen: Array[bool] = []
 var _extinct_paused := false
-# 알림: {panel, left(남은 초), kind, group(비교 모드 이름표), text, body, count_label, when, count}
+# 알림: {panel, left(남은 초), kind, group(비교 모드 이름표), text, body, count_label, when, count,
+# pane(알림을 띄운 지도 칸 번호, -1 = 공용 Toasts), box(알림이 든 VBox)}
 var _toasts: Array[Dictionary] = []
+# 알림 묶음이 시작하는 높이(지도 표지 줄 아래, _layout_maps 가 정함)
+var _toast_top := 0.0
 var _coalesce: Array[String] = []
 # 자리 접기(lab.left_dock_open·bottom_dock_open 이 처음 값)
 var _left_open := true
@@ -241,12 +255,17 @@ func stop_compare() -> void:
 	var keep := _selected if _selected_index == 0 else -1
 	experiments.clear()
 	a.tag = ""
+	# 이름은 혼자 모드 순서로(비교 때는 B 와 다른 값을 먼저 적었음)
+	if a.snapshot_path == "":
+		a.label = Experiment.default_label(a.preset, a.overrides, a.seed_value)
 	experiments.append(a)
 	_extinct_seen.resize(1)
+	# 이름표가 붙은 알림(A · / B ·, 비교 모드 F 키 알림)만 지운다 — 이름표 없는 알림(내보내기 실패 경로 등)은 남김.
+	# B 지도 칸(과 그 알림 묶음)을 지우기 전에.
+	_clear_toasts(true)
 	_set_pane_count(1)
 	_title = a.label
-	# 이름표가 붙은 알림(A · / B ·)은 지운다. 한 틱 비용이 B 몫만큼 줄었으니 다시 잰다
-	_clear_toasts()
+	# 한 틱 비용이 B 몫만큼 줄었으니 다시 잰다
 	_step_us_est = 0.0
 	_reset_speed_window()
 	_skip_record = true
@@ -289,15 +308,26 @@ func save_snapshot(path: String, index: int = 0) -> String:
 
 
 ## 결과 폴더 내보내기(CSV·요약·연대기·계통·스냅숏). 비교 모드면 dir/A, dir/B. 성공 "", 실패면 오류 문장. 결과는 알림으로.
+## 비교 모드의 실패는 "B/timeseries.csv" 처럼 어느 실험의 파일인지 적고, 다 쓴 쪽은 "A 는 저장됨: 경로" 로 알린다.
 func export_csv(dir: String) -> String:
 	if experiments.is_empty():
 		return "내보낼 실험이 없습니다"
 	var failed := PackedStringArray()
+	var saved: Array[String] = []
 	for x in experiments:
 		var d := dir if experiments.size() == 1 else dir.path_join(x.tag)
-		failed.append_array(x.export_dir(d))
+		var bad := x.export_dir(d)
+		if experiments.size() == 1:
+			failed.append_array(bad)
+			continue
+		for f in bad:
+			failed.append("%s/%s" % [x.tag, f])
+		if bad.is_empty():
+			saved.append("%s 는 저장됨: %s" % [x.tag, ProjectSettings.globalize_path(d)])
 	if not failed.is_empty():
 		var msg := "내보내기 실패: %s" % ", ".join(failed)
+		if not saved.is_empty():
+			msg += " (%s)" % ", ".join(saved)
 		show_toast(msg, "error")
 		return msg
 	show_toast("결과를 내보냈습니다: %s" % ProjectSettings.globalize_path(dir), "info")
@@ -314,18 +344,25 @@ static func is_web() -> bool:
 
 
 ## 결과 폴더(export_csv 와 같은 파일, 비교면 A/·B/ 아래)를 zip 바이트로. 실패하면 빈 배열.
+## 임시 폴더 user://web_export/<프로세스>-<µs> 와 zip 은 끝나면(실패해도) 지운다(숨은 .gdignore 까지 — 남던 것을 고침, 검사).
 func results_zip_bytes() -> PackedByteArray:
-	var dir := "user://web_export/%d" % Time.get_ticks_usec()
 	if experiments.is_empty():
 		return PackedByteArray()
+	var dir := "%s/%d-%d" % [WEB_EXPORT_DIR, OS.get_process_id(), Time.get_ticks_usec()]
+	last_zip_tmp_dir = dir
+	var abs_dir := ProjectSettings.globalize_path(dir)
+	var abs_zip := abs_dir + ".zip"
+	var bytes := PackedByteArray()
+	var ok := true
 	for x in experiments:
 		var d := dir if experiments.size() == 1 else dir.path_join(x.tag)
-		if not x.export_dir(d).is_empty():
-			return PackedByteArray()
-	var zip_path := dir + ".zip"
-	var bytes := _zip_dir(ProjectSettings.globalize_path(dir), ProjectSettings.globalize_path(zip_path))
-	_remove_tree(ProjectSettings.globalize_path(dir))
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(zip_path))
+		ok = ok and x.export_dir(d).is_empty()
+	if ok:
+		bytes = _zip_dir(abs_dir, abs_zip)
+	_remove_tree(abs_dir)
+	DirAccess.remove_absolute(abs_zip)
+	# 다른 것이 없으면 web_export 폴더도(다른 실험실이 쓰는 중이면 비어 있지 않아 그대로)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(WEB_EXPORT_DIR))
 	return bytes
 
 
@@ -341,17 +378,21 @@ func download_results() -> String:
 
 
 ## index 번째 실험의 스냅숏 JSON 내려받기(웹). 데스크톱에서는 user://downloads/ 에 저장. 성공 "".
+## 파일 이름 snapshot-<날짜-시각>-seed<그 실험의 씨앗>-tick<T>[-A/-B].json.
 func download_snapshot(index: int = 0) -> String:
 	var x := experiment(index)
 	if x == null:
 		return "저장할 실험이 없습니다"
 	var text := SimSnapshot.to_text(x.world)
-	var fname := "snapshot-%s-tick%d%s.json" % [default_export_dir().get_file(), x.world.tick, "" if x.tag == "" else "-" + x.tag]
+	var fname := "snapshot-%s-seed%d-tick%d%s.json" % [_stamp(), x.seed_value, x.world.tick, "" if x.tag == "" else "-" + x.tag]
 	return _deliver(text.to_utf8_buffer(), fname, "application/json", "스냅숏")
 
 
 ## 마지막으로 넘긴 내려받기 파일 이름(검사용)
 var last_download_name := ""
+## 마지막 results_zip_bytes 의 임시 폴더(검사용 — 끝나면 지워져 있어야 함)
+var last_zip_tmp_dir := ""
+const WEB_EXPORT_DIR := "user://web_export"
 
 
 func _deliver(bytes: PackedByteArray, fname: String, mime: String, what: String) -> String:
@@ -393,20 +434,34 @@ static func _zip_add(z: ZIPPacker, abs_dir: String, rel: String) -> void:
 		_zip_add(z, abs_dir, rel.path_join(d) if rel != "" else d)
 
 
+## 폴더를 통째로 지운다(숨은 파일 — 결과 폴더의 .gdignore — 까지. get_files_at 은 숨은 파일을 빼서 폴더가 남았었음).
 static func _remove_tree(abs_dir: String) -> void:
-	for f in DirAccess.get_files_at(abs_dir):
+	var da := DirAccess.open(abs_dir)
+	if da == null:
+		return
+	da.include_hidden = true
+	for f in da.get_files():
 		DirAccess.remove_absolute(abs_dir.path_join(f))
-	for d in DirAccess.get_directories_at(abs_dir):
+	for d in da.get_directories():
 		_remove_tree(abs_dir.path_join(d))
 	DirAccess.remove_absolute(abs_dir)
 
 
-## 기본 내보내기 폴더 user://experiments/<날짜-시각>-seed<N>(시각은 화면 쪽 이름에만 씀 — 시뮬레이션과 무관)
+## 기본 내보내기 폴더 user://experiments/<날짜-시각>-seed<N>(비교 모드면 -seed<A>-vs-seed<B>).
+## 시각은 화면 쪽 이름에만 씀 — 시뮬레이션과 무관.
 func default_export_dir() -> String:
+	var seeds: Array[String] = []
+	for x in experiments:
+		seeds.append("seed%d" % x.seed_value)
+	if seeds.is_empty():
+		seeds.append("seed0")
+	return "user://experiments/%s-%s" % [_stamp(), "-vs-".join(seeds)]
+
+
+## 화면 쪽 시각 "날짜-시각"(내보내기·내려받기 이름용)
+static func _stamp() -> String:
 	var t := Time.get_datetime_dict_from_system()
-	var stamp := "%04d%02d%02d-%02d%02d%02d" % [t.year, t.month, t.day, t.hour, t.minute, t.second]
-	var sd := experiments[0].seed_value if not experiments.is_empty() else 0
-	return "user://experiments/%s-seed%d" % [stamp, sd]
+	return "%04d%02d%02d-%02d%02d%02d" % [t.year, t.month, t.day, t.hour, t.minute, t.second]
 
 
 ## 프레임 없이 모든 실험을 n틱 진행(기록·recorded 신호 포함, 검사·캡처용). 사건은 다음 프레임에 알림.
@@ -483,6 +538,12 @@ func _adopt_list(list: Array) -> void:
 		var x: Experiment = list[k]
 		x.tag = Experiment.TAGS[k] if list.size() > 1 else ""
 		experiments.append(x)
+	# 비교 모드 이름: A·B 의 바꾼 값 가운데 서로 다른 키를 먼저 적는다(같은 예설정·씨앗에서 값만 다른 비교도 이름이 갈리게)
+	if experiments.size() > 1:
+		var diff := Experiment.differing_keys(experiments[0].overrides, experiments[1].overrides)
+		for x in experiments:
+			if x.snapshot_path == "":
+				x.label = Experiment.default_label(x.preset, x.overrides, x.seed_value, diff)
 	if experiments.size() == 1:
 		_title = experiments[0].label
 	else:
@@ -692,7 +753,8 @@ func advance_frame(delta: float) -> int:
 		_record_speed(minf(raw, _window_s), progress)
 	if n > 0:
 		ticked.emit(world)
-	# 사건: 실험마다 비우고, 받는 쪽마다 사본(고쳐 써도 알림·다른 청취자·연대기가 바뀌지 않게)
+	# 사건: 실험마다 비우고, signal 마다 깊은 사본 하나(청취자가 고쳐 써도 알림·연대기·다른 signal 의 청취자는 그대로.
+	# 같은 signal 의 청취자끼리는 같은 배열을 받으므로 고쳐 쓰지 않는다 — ChroniclePanel·LabSound 는 읽기만)
 	for k in experiments.size():
 		var ev := experiments[k].world.drain_events()
 		if ev.is_empty():
@@ -754,12 +816,13 @@ func _empty_text() -> String:
 			dead.append(k)
 	if dead.is_empty():
 		return ""
+	# 두 줄로(정보 창 폭 안에서 문장 가운데 낱말이 갈라지지 않게 — 줄은 정보 창이 여백 안에서 바꿈)
 	if not is_comparing():
-		return "멸종했습니다 (틱 %s) — 고를 개체가 없습니다" % _commas(experiments[0].world.extinct_tick)
+		return "멸종했습니다 (틱 %s)\n고를 개체가 없습니다" % _commas(experiments[0].world.extinct_tick)
 	if dead.size() == experiments.size():
-		return "A·B 모두 멸종했습니다 — 고를 개체가 없습니다"
+		return "A·B 모두 멸종했습니다\n고를 개체가 없습니다"
 	var k := dead[0]
-	return "%s 는 멸종했습니다 (틱 %s) — %s 지도에서 고르세요" % [experiments[k].tag, _commas(experiments[k].world.extinct_tick),
+	return "%s 는 멸종했습니다 (틱 %s)\n%s 지도에서 고르세요" % [experiments[k].tag, _commas(experiments[k].world.extinct_tick),
 			experiments[1 - k].tag]
 
 
@@ -777,7 +840,13 @@ func _record_speed(dt: float, progress: float) -> void:
 # ════════════════════════════ 입력 ════════════════════════════
 
 ## 단축키. 글 입력 칸(4단계 씨앗 칸 등)에 초점이 있거나 대화 상자가 떠 있으면 건드리지 않는다.
+## 마우스 단추를 누르면 그 자리가 초점을 가진 글 칸 밖인지 먼저 본다(_release_text_focus).
 func _input(event: InputEvent) -> void:
+	var mb := event as InputEventMouseButton
+	if mb != null:
+		if mb.pressed and mb.button_index in RELEASE_BUTTONS:
+			_release_text_focus(mb.position)
+		return
 	var k := event as InputEventKey
 	if k == null or not k.pressed or k.echo:
 		return
@@ -790,9 +859,35 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+## 글자를 적을 수 있는 칸에 초점이 있는가(읽기 전용 칸 — 고급 설정의 배열·글자 값 — 은 글자를 받지 않으므로 아님).
 func _text_has_focus() -> bool:
 	var f := get_viewport().gui_get_focus_owner()
-	return f is LineEdit or f is TextEdit
+	if f is LineEdit:
+		return (f as LineEdit).editable
+	if f is TextEdit:
+		return (f as TextEdit).editable
+	return false
+
+
+## 글 칸(파라미터 패널의 숫자·씨앗 칸)에 초점이 있을 때 그 칸 밖(지도·단추·다른 패널)을 누르면 초점을 푼다.
+## 단추·지도는 초점을 받지 않아(FOCUS_NONE — 스페이스가 단추를 누르지 않게) Godot 가 초점을 풀지 않으므로, 풀지 않으면
+## 단축키가 계속 꺼진 채 스페이스·숫자가 칸에 들어가 다음 새 실험에 확정됐다(씨앗 42 → 423). 초점이 빠지면 ParamPanel 이
+## 그 칸을 확정한다. SpinBox 안의 글 칸이면 SpinBox 전체(위·아래 화살표 포함)를 칸 안으로 본다. 대화 상자가 떠 있으면 그대로.
+## pos = 뿌리 뷰포트 좌표(_input 의 사건 위치).
+func _release_text_focus(pos: Vector2) -> void:
+	var f := get_viewport().gui_get_focus_owner()
+	if not (f is LineEdit or f is TextEdit) or _dialog_open():
+		return
+	var host: Control = f
+	if f.get_parent() is SpinBox:
+		host = f.get_parent() as Control
+	var p := get_viewport().get_canvas_transform().affine_inverse() * pos
+	if host.get_global_rect().has_point(p):
+		return
+	# SpinBox 는 초점이 빠질 때 글자를 지연 호출로 확정한다 — 같은 누름의 단추(새 실험)가 옛 값을 쓰지 않게 지금 확정
+	if host is SpinBox:
+		(host as SpinBox).apply()
+	f.release_focus()
 
 
 ## 초점을 가진(또는 배타적인) 창 안 대화 상자·차림표가 떠 있는가(말풍선은 초점이 없어 해당 없음).
@@ -829,8 +924,10 @@ func _handle_key(code: Key) -> bool:
 			info_panel.set_follow(mv.follow_selected)
 			if mv.follow_selected and _selected >= 0:
 				mv.focus_on(_selected)
-			var where := "%s 지도 " % experiments[_selected_index].tag if is_comparing() else ""
-			show_toast(where + ("따라가기 켬" if mv.follow_selected else "따라가기 끔"), "info")
+			# 비교 모드면 그 실험의 알림(이름표 group — 그 지도 칸에 뜨고 비교를 끝내면 함께 지워짐)
+			var tag := experiments[_selected_index].tag if is_comparing() else ""
+			var where := "%s 지도 " % tag if tag != "" else ""
+			show_toast(where + ("따라가기 켬" if mv.follow_selected else "따라가기 끔"), "info", -1, tag)
 			return true
 		KEY_HOME, KEY_0, KEY_KP_0:
 			fit_map()
@@ -854,6 +951,9 @@ func _handle_key(code: Key) -> bool:
 ## lab.toast_coalesce_kinds 의 종류(밭 잃음 등)는 이미 보이는 같은 종류·같은 group(비교 모드 이름표) 알림을 새 문장으로
 ## 고쳐 쓰고 "×N" 을 붙인다. 최대 lab.toast_max 개: 넘치면 (방금 띄운 것을 빼고) 강조 알림이 아닌 것 가운데 오래된 것부터
 ## 지운다(모두 강조면 가장 오래된 것).
+## 비교 모드에서 group("A"/"B") 이 있는 알림은 그 실험의 지도 칸 가운데 위에(칸 폭 안에서 줄바꿈 — 두 지도 사이를 걸쳐
+## 다른 지도를 가리지 않게), 앞머리 "A · " 는 지도 표지와 같은 실험 색 이름표로 그린다(text·visible_toasts() 는 "A · …" 그대로).
+## group 이 없는 알림(저장·내보내기·오류)은 공용 묶음(지도 자리 가운데, 비교 모드면 칸 알림 아래).
 func show_toast(text: String, kind: String = "info", tick: int = -1, group: String = "") -> void:
 	if kind in _coalesce:
 		for idx in range(_toasts.size() - 1, -1, -1):
@@ -862,7 +962,7 @@ func show_toast(text: String, kind: String = "info", tick: int = -1, group: Stri
 				continue
 			old.count = int(old.count) + 1
 			old.text = text
-			(old.body as Label).text = UiTheme.keep_words(text)
+			(old.body as Label).text = UiTheme.keep_words(_toast_body_text(text, group))
 			var cl := old.count_label as Label
 			cl.text = "×%d" % int(old.count)
 			cl.visible = true
@@ -875,9 +975,10 @@ func show_toast(text: String, kind: String = "info", tick: int = -1, group: Stri
 			# 가장 새 알림 자리(맨 아래)로
 			_toasts.remove_at(idx)
 			_toasts.append(old)
-			_toast_box.move_child(old.panel, -1)
+			(old.box as Node).move_child(old.panel as Node, -1)
 			return
 	var col := _kind_color(kind)
+	var pane := _toast_pane(group)
 	var p := PanelContainer.new()
 	p.theme_type_variation = UiTheme.TOAST
 	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -894,9 +995,17 @@ func show_toast(text: String, kind: String = "info", tick: int = -1, group: Stri
 	stripe.custom_minimum_size.x = UiConfig.num("lab.toast_stripe_width")
 	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(stripe)
+	# 비교 모드 실험 이름표(지도 표지와 같은 색 상자) — 본문에서는 "A · " 를 뺌
+	var gi := Experiment.TAGS.find(group)
+	if gi >= 0 and text.begins_with(group + " · "):
+		var chip := _tag_chip(group, tag_color(gi))
+		chip.name = "Tag"
+		chip.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		row.add_child(chip)
 	var tag := str(TOAST_TAGS.get(kind, ""))
 	if kind == "discovery" and UiTheme.has_glyphs(GLYPH_DISCOVERY):
-		tag = GLYPH_DISCOVERY + " " + tag
+		# 좁은 비교 칸에서는 "★" 만(문장이 이미 "… 발견" — 머리 글자 몫만큼 본문이 덜 접힘)
+		tag = GLYPH_DISCOVERY if pane >= 0 else GLYPH_DISCOVERY + " " + tag
 	if tag != "":
 		var t := Label.new()
 		t.text = tag
@@ -906,7 +1015,7 @@ func show_toast(text: String, kind: String = "info", tick: int = -1, group: Stri
 		row.add_child(t)
 	var body := Label.new()
 	# 낱말 단위 줄바꿈(한글 음절 사이에서 끊지 않게, 통합 때 고침). 빈칸 없는 긴 경로는 WORD_SMART 가 글자 단위로 끊음
-	body.text = UiTheme.keep_words(text)
+	body.text = UiTheme.keep_words(_toast_body_text(text, group))
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _is_highlight(kind):
@@ -923,18 +1032,34 @@ func show_toast(text: String, kind: String = "info", tick: int = -1, group: Stri
 	when.visible = tick >= 0
 	when.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	row.add_child(when)
-	_toast_box.add_child(p)
+	var box: VBoxContainer = _toast_box if pane < 0 else _panes[pane].toasts
+	box.add_child(p)
 	var entry := {panel = p, left = _toast_life(kind), kind = kind, group = group, text = text, body = body, count_label = count,
-			when = when, count = 1}
+			when = when, count = 1, pane = pane, box = box}
 	_toasts.append(entry)
 	_fit_toast(entry)
 	var cap := maxi(1, UiConfig.integer("lab.toast_max"))
-	# 방금 띄운 알림(맨 뒤)은 지우지 않는다 — 강조 알림으로 꽉 차 있어도 단축키 반응 같은 새 알림이 보이게
-	while _toasts.size() > cap:
-		var drop := 0
-		for k in _toasts.size() - 1:
-			if not _is_highlight(str(_toasts[k].kind)):
-				drop = k
+	# 비교 모드 칸 알림은 칸마다 lab.toast_max ÷ 칸 수 개까지(좁은 칸에서 줄바꿈해 길어진 알림이 그 지도를 다 덮지 않게)
+	if pane >= 0:
+		_trim_toasts(maxi(1, cap / _panes.size()), pane)
+	_trim_toasts(cap)
+
+
+## 알림을 limit 개로 줄인다(pane >= 0 이면 그 칸의 알림만 셈, ALL_PANES = 모두). 방금 띄운 알림(맨 뒤)은 지우지 않는다 —
+## 강조 알림으로 꽉 차 있어도 단축키 반응 같은 새 알림이 보이게. 강조 알림이 아닌 것 가운데 오래된 것부터, 모두 강조면
+## 가장 오래된 것.
+func _trim_toasts(limit: int, pane: int = ALL_PANES) -> void:
+	while true:
+		var idx: Array[int] = []
+		for k in _toasts.size():
+			if pane == ALL_PANES or int(_toasts[k].pane) == pane:
+				idx.append(k)
+		if idx.size() <= limit:
+			return
+		var drop := idx[0]
+		for j in idx.size() - 1:
+			if not _is_highlight(str(_toasts[idx[j]].kind)):
+				drop = idx[j]
 				break
 		var gone: Dictionary = _toasts[drop]
 		_toasts.remove_at(drop)
@@ -946,8 +1071,24 @@ static func _toast_life(kind: String) -> float:
 	return UiConfig.num("lab.toast_error_seconds" if kind in TOAST_LONG_KINDS else "lab.toast_seconds")
 
 
+## 알림이 뜰 지도 칸: 비교 모드에서 group 이 실험 이름표("A"/"B")면 그 칸 번호, 아니면 -1(공용 묶음).
+func _toast_pane(group: String) -> int:
+	if _panes.size() < 2 or group == "":
+		return -1
+	var k := Experiment.TAGS.find(group)
+	return k if k >= 0 and k < _panes.size() else -1
+
+
+## 알림 본문 글자: 실험 이름표 상자를 그리는 알림("A · …")은 앞머리를 뺀다.
+static func _toast_body_text(text: String, group: String) -> String:
+	if group != "" and Experiment.TAGS.has(group) and text.begins_with(group + " · "):
+		return text.substr(group.length() + 3)
+	return text
+
+
 ## 알림 본문 폭: 한 줄 폭과 (lab.toast_max_width 와 지도 폭 − 양쪽 여백 중 작은 것 − 띠·머리·틱 몫) 중 작은 것.
-## 넘치면 줄을 바꾼다(AUTOWRAP_WORD_SMART — 빈칸 없는 긴 경로도 끊음). 지도 크기가 바뀌면 다시 맞춘다.
+## 비교 모드 칸 알림은 지도 폭 대신 그 칸 폭. 넘치면 줄을 바꾼다(AUTOWRAP_WORD_SMART — 빈칸 없는 긴 경로도 끊음).
+## 지도 크기가 바뀌면 다시 맞춘다.
 func _fit_toast(entry: Dictionary) -> void:
 	var body := entry.body as Label
 	var p := entry.panel as Control
@@ -959,8 +1100,12 @@ func _fit_toast(entry: Dictionary) -> void:
 	body.custom_minimum_size.x = 0.0
 	var chrome := p.get_combined_minimum_size().x - body.get_combined_minimum_size().x
 	var room := UiConfig.num("lab.toast_max_width")
-	if _map_area != null and _map_area.size.x > 0.0:
-		room = minf(room, _map_area.size.x - 2.0 * UiConfig.num("lab.map_overlay_margin"))
+	var width := _map_area.size.x if _map_area != null else 0.0
+	var pane := int(entry.get("pane", -1))
+	if pane >= 0 and pane < _panes.size():
+		width = _panes[pane].width
+	if width > 0.0:
+		room = minf(room, width - 2.0 * UiConfig.num("lab.map_overlay_margin"))
 	body.custom_minimum_size.x = maxf(1.0, minf(natural, room - chrome))
 
 
@@ -969,18 +1114,38 @@ func _refit_toasts() -> void:
 		_fit_toast(t)
 
 
-## 알림을 모두 지운다(세계가 바뀔 때).
-func _clear_toasts() -> void:
-	for t in _toasts:
+## 알림을 지운다: 모두(세계가 바뀔 때) 또는 only_tagged 면 이름표(group)가 붙은 것만(비교를 끝낼 때 — 오류 등은 남김).
+func _clear_toasts(only_tagged: bool = false) -> void:
+	for i in range(_toasts.size() - 1, -1, -1):
+		var t: Dictionary = _toasts[i]
+		if only_tagged and str(t.group) == "":
+			continue
 		(t.panel as Node).queue_free()
-	_toasts.clear()
+		_toasts.remove_at(i)
 
 
-## 지금 보이는 알림 [{kind, text, left, count}] (검사·캡처용). 비교 모드 사건 알림의 text 는 "A · …"/"B · …".
+## 공용 알림 묶음의 높이: 표지 줄 아래, 비교 모드에서 칸 알림이 있으면 그 아래(겹치지 않게). 칸 알림 묶음 크기가 바뀔 때마다.
+func _place_shared_toasts() -> void:
+	if _toast_box == null:
+		return
+	var top := _toast_top
+	if _panes.size() > 1:
+		var deepest := 0.0
+		for p in _panes:
+			if p.toasts != null and p.toasts.get_child_count() > 0:
+				deepest = maxf(deepest, p.toasts.size.y)
+		if deepest > 0.0:
+			top += deepest + float(_toast_box.get_theme_constant("separation"))
+	_toast_box.offset_top = top
+	_toast_box.offset_bottom = top
+
+
+## 지금 보이는 알림 [{kind, text, left, count, group}] (검사·캡처용). 비교 모드 사건 알림의 text 는 "A · …"/"B · …",
+## group = 그 실험 이름표("" = 이름표 없음).
 func visible_toasts() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for t in _toasts:
-		out.append({kind = t.kind, text = t.text, left = t.left, count = t.count})
+		out.append({kind = t.kind, text = t.text, left = t.left, count = t.count, group = t.group})
 	return out
 
 
@@ -1081,7 +1246,24 @@ func _refresh_status(with_speed: bool) -> void:
 		p.extinct.visible = w.extinct_tick >= 0
 		if p.extinct.visible:
 			p.extinct.text = "멸종 · 틱 %s" % _commas(w.extinct_tick)
+		# 나침반: 화면 위가 북쪽이 아니면(비교 모드에서 세로 칸에 맞춰 돌렸거나 사용자가 돌림) 북쪽 방향 화살표
+		var turns := view_turns(k)
+		p.north.visible = turns != 0
+		var nt := "북 " + ARROWS[turns]
+		if p.north.text != nt:
+			p.north.text = nt
 		_fit_title(p)
+	# 정보 창의 방향 화살표도 선택한 지도의 화면 방향으로
+	if not _panes.is_empty():
+		info_panel.set_view_turns(view_turns(_selected_index))
+
+
+## k 번째 지도의 화면이 북쪽 위에서 90° 씩 몇 번 돌아 있는지(0~3, 0 = 북쪽 위). 없는 지도면 0.
+func view_turns(k: int) -> int:
+	if k < 0 or k >= _panes.size():
+		return 0
+	var cam := _panes[k].map.get_camera() as MapView.OrbitCamera
+	return cam.view_turns() if cam != null else 0
 
 
 ## 개체 수(0 이면 "멸종", 위험 색)와 문명 단계(0 단계는 흐리게).
@@ -1330,15 +1512,25 @@ static func _live_children(n: Node) -> int:
 	return c
 
 
-## 지도 수를 n 으로(비교 모드 B 지도는 필요할 때 만들고, 끝나면 트리에서 바로 빼서 지움). 배치를 다시 맞춘다.
+## 지도 수를 n 으로(비교 모드 B 지도는 필요할 때 만들고, 끝나면 트리에서 바로 빼서 지움 — 그 칸의 알림도). 배치를 다시 맞춘다.
+## 비교 모드 지도는 세로로 긴 칸이면 돌려서 맞출 수 있게(ui.compare.portrait_yaw_deg — OrbitCamera.portrait_yaw), 혼자면 북쪽 위.
 func _set_pane_count(n: int) -> void:
 	while _panes.size() < n:
 		_panes.append(_make_pane(_panes.size()))
 	while _panes.size() > maxi(1, n):
 		var p: MapPane = _panes.pop_back()
-		for node: Node in [p.container, p.head]:
+		for i in range(_toasts.size() - 1, -1, -1):
+			if _toasts[i].box == p.toasts:
+				_toasts.remove_at(i)
+		for node: Node in [p.container, p.head, p.toasts]:
 			_map_area.remove_child(node)
 			node.queue_free()
+	var turn := deg_to_rad(UiConfig.num("compare.portrait_yaw_deg")) if _panes.size() > 1 else 0.0
+	for p in _panes:
+		var cam := p.map.get_camera() as MapView.OrbitCamera
+		if cam != null:
+			cam.portrait_yaw = turn
+			cam.portrait_gain = UiConfig.num("compare.portrait_gain_min")
 	_layout_maps()
 
 
@@ -1364,6 +1556,10 @@ func _make_pane(k: int) -> MapPane:
 	p.viewport.add_child(p.map)
 	p.map.slime_clicked.connect(select_slime.bind(k))
 	_build_pane_head(p, k)
+	# 이 칸의 실험 알림 묶음(비교 모드): 칸 가운데 위, 표지·지도 위에
+	p.toasts = _make_toast_box("Toasts" + Experiment.TAGS[k])
+	_map_area.add_child(p.toasts)
+	p.toasts.resized.connect(_place_shared_toasts)
 	return p
 
 
@@ -1402,6 +1598,11 @@ func _build_pane_head(p: MapPane, k: int) -> void:
 	p.extinct.add_theme_color_override("font_color", UiTheme.color("danger"))
 	p.extinct.visible = false
 	hrow.add_child(p.extinct)
+	p.north = Label.new()
+	p.north.name = "North"
+	p.north.theme_type_variation = UiTheme.DIM
+	p.north.visible = false
+	hrow.add_child(p.north)
 	p.fit = Button.new()
 	p.fit.name = "FitButton"
 	p.fit.text = FIT_TEXT
@@ -1464,15 +1665,24 @@ func _layout_maps() -> void:
 		head_bottom = maxf(head_bottom, m + p.head.size.y)
 		x += w + gap
 	_fit_hint(area)
-	# 알림은 지도 표지 줄 아래에서 시작(좁은 지도·비교 모드에서 표지를 가리지 않게)
-	_toast_box.offset_top = head_bottom + UiConfig.num("lab.toast_margin_top")
-	_toast_box.offset_bottom = _toast_box.offset_top
+	# 알림은 지도 표지 줄 아래에서 시작(좁은 지도·비교 모드에서 표지를 가리지 않게). 비교 모드 칸 알림은 그 칸 가운데.
+	_toast_top = head_bottom + UiConfig.num("lab.toast_margin_top")
+	x = 0.0
+	for k in n:
+		var p := _panes[k]
+		p.toasts.offset_left = roundf(x + p.width * 0.5)
+		p.toasts.offset_right = p.toasts.offset_left
+		p.toasts.offset_top = _toast_top
+		p.toasts.offset_bottom = _toast_top
+		x += p.width + gap
+	_place_shared_toasts()
 	_refit_toasts()
 
 
 ## 표지 폭 맞춤: 실험 이름 = min(한 줄 폭, 지도 폭 − 양쪽 여백 − 이름표·표지·단추 몫), 넘치면 "…". 조건이 바뀔 때만 잰다.
 func _fit_title(p: MapPane) -> void:
-	var key := "%s|%s|%s|%s|%s|%.0f" % [p.title.text, p.tag.visible, p.paused.visible, p.extinct.visible, p.extinct.text, p.width]
+	var key := "%s|%s|%s|%s|%s|%s|%s|%.0f" % [p.title.text, p.tag.visible, p.paused.visible, p.extinct.visible, p.extinct.text,
+			p.north.visible, p.north.text, p.width]
 	if key == p.fit_key or not p.title.is_inside_tree():
 		return
 	p.fit_key = key
@@ -1622,19 +1832,26 @@ func _build_map_overlay() -> void:
 	_dock_toggles.name = "DockToggles"
 	_dock_toggles.visible = false
 	_map_area.add_child(_dock_toggles)
-	_left_toggle = _dock_toggle("LeftToggle", LEFT_TOGGLE_TEXT, "왼쪽 실험 설정 패널 보이기·숨기기", DOCK_LEFT)
+	_left_toggle = _dock_toggle("LeftToggle", LEFT_TOGGLE_TEXT, "왼쪽 실험 조건 패널 보이기·숨기기", DOCK_LEFT)
 	_bottom_toggle = _dock_toggle("BottomToggle", BOTTOM_TOGGLE_TEXT, "아래 그래프·연대기 보이기·숨기기", DOCK_BOTTOM)
 
-	_toast_box = VBoxContainer.new()
-	_toast_box.name = "Toasts"
-	_toast_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 공용 알림 묶음(지도 자리 가운데 위). 비교 모드의 실험 알림은 칸마다의 묶음(_make_pane)
+	_toast_box = _make_toast_box("Toasts")
 	_toast_box.anchor_left = 0.5
 	_toast_box.anchor_right = 0.5
-	_toast_box.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_toast_box.offset_top = UiConfig.num("lab.toast_margin_top")
 	_toast_box.offset_bottom = _toast_box.offset_top
-	_toast_box.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_map_area.add_child(_toast_box)
+
+
+## 알림 묶음(VBox): 마우스 통과, 가운데에서 양쪽으로 자람(위치는 _layout_maps 가 정함).
+func _make_toast_box(node_name: String) -> VBoxContainer:
+	var b := VBoxContainer.new()
+	b.name = node_name
+	b.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	b.alignment = BoxContainer.ALIGNMENT_BEGIN
+	return b
 
 
 ## 자리 접기 단추(눌림 = 보임). 작은 글자, 초점 없음.

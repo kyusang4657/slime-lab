@@ -7,16 +7,20 @@ const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 194
+const MIN_CHECKS := 230
 ## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
 const B_MUTATION := 0.07
 ## 최소 창(1280×720)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기
 const MIN_COMPARE_MAP := Vector2(320, 400)
+## 그 칸(세로로 긴 칸)에서 지도가 차지하는 칸 높이 몫의 하한(돌려 맞춤 — 북쪽 위 그대로면 약 0.39)
+const MIN_COMPARE_HEIGHT_SHARE := 0.55
 ## 예산 측정 프레임 수, 평균 시뮬레이션 시간이 예산을 넘어도 되는 몫(ms)
 const BUDGET_FRAMES := 60
 const BUDGET_SLACK_MS := 0.5
 ## 16배(프레임당 1.6틱)에서 혼자 있는 개체가 한 프레임에 그려지는 거리 상한(칸): 1.6틱 × smoothstep 기울기 여유
 const MULTI_TICK_MAX_STEP := 1.9
+## 실제 시계 예산을 끈 셈의 값(ms) — 결정적으로 재야 하는 검사 동안
+const BUDGET_OFF_MS := 1.0e9
 const SNAP_PATH := "user://lab_checks_snapshot.json"
 
 
@@ -48,6 +52,7 @@ func run(t) -> void:
 	await _compare_stop(t, lab)
 	_compare_extinction(t, lab)
 	await _compare_layout(t, lab)
+	_export_fail(t, lab)
 	await _dock_empty(t, lab)
 	lab.queue_free()
 	await t.frames(1)
@@ -71,6 +76,9 @@ func _layout(t, lab: LabMain) -> void:
 	t.check(gp is GraphPanel and gp == lab.graph_panel and cp is ChroniclePanel and cp == lab.chronicle_panel and gp.get_index() < cp.get_index(),
 			"GraphPanel(왼쪽)·ChroniclePanel(오른쪽) → 아래 자리")
 	t.check(snd is LabSound and snd == lab.lab_sound, "LabSound → 실험실 자식")
+	t.check(snd != null and lab.events_tagged.is_connected((snd as LabSound)._on_events), "실험실의 LabSound 가 events_tagged 에 붙음(bind_lab)")
+	t.check(lab._left_toggle.text == "실험 조건" and lab.left_dock.get_node_or_null("ParamPanel") != null,
+			"왼쪽 자리 접기 단추 이름 = 그 패널 제목 \"%s\"" % lab._left_toggle.text)
 	if gp != null and cp != null:
 		# 연대기 폭: 넓은 창에서는 chronicle.width, 최소 창에서는 그래프 최소 폭이 들어가게 줄임(min_width 아래로는 안 줄임)
 		var cw := (cp as Control).custom_minimum_size.x
@@ -284,11 +292,18 @@ func _keys(t, lab: LabMain) -> void:
 	_key(t, KEY_SPACE)
 	_key(t, KEY_1)
 	t.check(le.has_focus() and not lab.is_paused() and lab.target_speed() == sp, "글 입력 칸에 초점이 있으면 단축키 무시")
+	# 읽기 전용 칸(고급 설정의 배열·글자 값)은 글자를 받지 않으므로 초점이 있어도 단축키 동작
+	le.editable = false
+	_key(t, KEY_SPACE)
+	t.check(le.has_focus() and lab.is_paused(), "읽기 전용 칸에 초점이 있어도 단축키 동작(스페이스 → 멈춤)")
+	lab.set_paused(false)
+	le.editable = true
 	le.release_focus()
 	le.queue_free()
 	await t.frames(2)
 	_key(t, KEY_1)
 	t.check(lab.target_speed() == int(steps[0]), "초점이 풀리면 단축키 다시 동작")
+	await _focus_release(t, lab)
 	# 배타적인 대화 상자(4단계 파일 대화 상자 등)가 떠 있으면 무시
 	var dlg := AcceptDialog.new()
 	dlg.exclusive = true
@@ -317,6 +332,107 @@ func _key(t, code: Key) -> void:
 		t.root.push_input(e)
 
 
+## 글자를 실제 키 입력으로(숫자·점·빈칸).
+func _type(t, text: String) -> void:
+	for ch in text:
+		var c := ch.unicode_at(0)
+		var code: Key = KEY_PERIOD if ch == "." else KEY_SPACE if ch == " " else (KEY_0 + (c - 48)) as Key
+		for pressed in [true, false]:
+			var e := InputEventKey.new()
+			e.keycode = code
+			e.physical_keycode = code
+			e.unicode = c if pressed else 0
+			e.pressed = pressed
+			t.root.push_input(e)
+
+
+## 뿌리 창에 실제 마우스 입력(움직임 → 왼쪽 누름 → 뗌).
+func _click(t, pos: Vector2) -> void:
+	var mm := InputEventMouseMotion.new()
+	mm.position = pos
+	mm.global_position = pos
+	t.root.push_input(mm)
+	for pressed in [true, false]:
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_LEFT
+		mb.pressed = pressed
+		mb.position = pos
+		mb.global_position = pos
+		t.root.push_input(mb)
+
+
+## 파라미터 패널 글 칸에 적은 뒤 칸 밖(새 실험 단추·지도)을 누르면 초점이 풀려 단축키가 바로 동작하고, 친 키가 칸에
+## 들어가 다음 실험에 확정되지 않는다(고치기 전: 씨앗 "42" + 스페이스·"4" → "42 4", 멈춤·배속 그대로).
+## 씨앗 위·아래 화살표를 눌러도 같음. 초점을 가진 칸 자체를 누르면 초점 그대로.
+func _focus_release(t, lab: LabMain) -> void:
+	var pp := lab.param_panel
+	var spin := pp.control("seed:0") as SpinBox
+	var field := pp.control("field:mutation.rate:0") as LineEdit
+	var apply_btn := pp.control("apply") as Control
+	t.check(spin != null and field != null and apply_btn != null, "파라미터 패널의 씨앗 칸·돌연변이율 칸·새 실험 단추")
+	if spin == null or field == null or apply_btn == null:
+		return
+	var steps: Array = UiConfig.value("speed.steps")
+	lab.set_paused(false)
+	lab.set_speed(int(steps[0]))
+	var map_mid := lab._map_container.get_global_rect().get_center()
+	var sle := spin.get_line_edit()
+	(pp.control("scroll") as ScrollContainer).ensure_control_visible(spin)
+	await t.frames(2)
+	_click(t, sle.get_global_rect().get_center())
+	await t.frames(1)
+	_type(t, "42")
+	await t.frames(1)
+	t.check(sle.has_focus() and sle.text == "42", "씨앗 칸을 눌러 \"%s\" 입력(초점 %s)" % [sle.text, str(sle.has_focus())])
+	(pp.control("scroll") as ScrollContainer).ensure_control_visible(apply_btn)
+	await t.frames(2)
+	_click(t, apply_btn.get_global_rect().get_center())
+	await t.frames(1)
+	t.check(not sle.has_focus() and lab.world.seed_value == 42, "새 실험 단추를 누르면 칸 초점이 풀리고 씨앗 42 로 새 실험(씨앗 %d)" % lab.world.seed_value)
+	_click(t, map_mid)
+	await t.frames(1)
+	lab.set_paused(false)
+	_key(t, KEY_SPACE)
+	_key(t, KEY_4)
+	t.check(lab.is_paused() and lab.target_speed() == int(steps[3]) and sle.text == "42",
+			"그 뒤 스페이스 → 멈춤, 4 → %d배, 씨앗 칸 글자 그대로 \"%s\"" % [lab.target_speed(), sle.text])
+	t.check(int(pp.current_settings(0).seed) == 42, "다음 실험 씨앗도 42 그대로(%s)" % str(pp.current_settings(0).seed))
+	# 씨앗 위 화살표 → 칸에 초점(엔진) → 지도를 누르면 풀림
+	(pp.control("scroll") as ScrollContainer).ensure_control_visible(spin)
+	await t.frames(2)
+	var sr := spin.get_global_rect()
+	_click(t, Vector2(sr.end.x - 4.0, sr.position.y + sr.size.y * 0.25))
+	await t.frames(1)
+	var after_arrow := int(spin.value)
+	_click(t, map_mid)
+	await t.frames(1)
+	var paused0 := lab.is_paused()
+	_key(t, KEY_SPACE)
+	t.check(after_arrow == 43 and not sle.has_focus() and lab.is_paused() != paused0,
+			"씨앗 화살표(%d) 뒤 지도를 누르면 초점이 풀려 스페이스가 동작" % after_arrow)
+	# 돌연변이율 칸: 칸 안을 다시 눌러도 초점 그대로, 지도를 누르면 그 값이 확정되고 단축키 동작
+	(pp.control("scroll") as ScrollContainer).ensure_control_visible(field)
+	await t.frames(2)
+	_click(t, field.get_global_rect().get_center())
+	await t.frames(1)
+	field.select_all()
+	_type(t, "0.07")
+	_click(t, field.get_global_rect().get_center())
+	await t.frames(1)
+	t.check(field.has_focus() and field.text == "0.07", "초점을 가진 칸 자체를 누르면 초점 그대로(\"%s\")" % field.text)
+	_click(t, map_mid)
+	await t.frames(1)
+	lab.set_paused(false)
+	_key(t, KEY_SPACE)
+	_key(t, KEY_2)
+	var ov: Dictionary = pp.current_settings(0).overrides
+	t.check(not field.has_focus() and lab.is_paused() and lab.target_speed() == int(steps[1]) and field.text == "0.07"
+			and is_equal_approx(float(ov.get("mutation.rate", -1.0)), 0.07),
+			"돌연변이율 0.07 → 지도 누름: 값 확정(%s), 스페이스·2 동작(배속 %d), 칸 \"%s\"" % [str(ov.get("mutation.rate")), lab.target_speed(), field.text])
+	pp.revert()
+	lab.set_paused(false)
+	await t.frames(1)
+
 func _events(t, lab: LabMain) -> void:
 	t.check(lab.new_experiment("demo_fast", {}, 1) == "", "demo_fast 실험")
 	var got: Array = []
@@ -326,6 +442,12 @@ func _events(t, lab: LabMain) -> void:
 		for e in list:
 			e["text"] = "★ " + str(e.get("text", ""))
 	lab.events.connect(spoil)
+	# events_tagged 는 따로 깊은 사본(signal 마다 사본 하나): events 청취자가 고쳐 써도 events_tagged 청취자는 원래 문장
+	var tagged_texts: Array[String] = []
+	var keep_tagged := func(_i: int, list: Array) -> void:
+		for e in list:
+			tagged_texts.append(str(e.get("text", "")))
+	lab.events_tagged.connect(keep_tagged)
 	var s0 := lab.world.stage
 	var k := 0
 	# 검사가 세계를 직접 진행(화면이 아님) → 다음 프레임에 LabMain 이 사건을 소비
@@ -341,6 +463,12 @@ func _events(t, lab: LabMain) -> void:
 			disc = true
 	t.check(disc, "events 신호에 발견 사건(%d건)" % got.size())
 	lab.events.disconnect(spoil)
+	lab.events_tagged.disconnect(keep_tagged)
+	var spoiled := false
+	for s in tagged_texts:
+		spoiled = spoiled or s.begins_with("★ ")
+	t.check(not tagged_texts.is_empty() and tagged_texts.size() == got.size() and not spoiled,
+			"events 청취자가 고쳐 써도 events_tagged 청취자의 사본은 그대로(signal 마다 사본, %d건)" % tagged_texts.size())
 	var ref: SimWorld = t.make_world({}, 1, "demo_fast")
 	ref.step_n(lab.world.tick)
 	t.check(SimRecorder.chronicle_csv(lab.world) == SimRecorder.chronicle_csv(ref), "events 청취자가 사건을 고쳐 써도 연대기(chronicle.csv)가 헤드리스와 같음")
@@ -364,6 +492,14 @@ func _events(t, lab: LabMain) -> void:
 		lab.advance_frame(0.2)
 	t.check(lab.visible_toasts().is_empty(), "알림은 toast_seconds 뒤 사라짐")
 	lab.set_paused(false)
+
+
+## 보이는 알림 가운데 group 이 같은 첫 알림(없으면 {}).
+func _toast_of(vt: Array[Dictionary], group: String) -> Dictionary:
+	for v in vt:
+		if str(v.get("group", "?")) == group:
+			return v
+	return {}
 
 
 func _border(p: PanelContainer) -> Color:
@@ -494,6 +630,10 @@ func _multi_tick_motion(t, lab: LabMain) -> void:
 	var seen := 0
 	var multi := 0
 	var budget_frames := 0
+	# 실제 시계 예산(sim_budget_ms)은 이 동안 끈다: 기계가 바쁘면 예산에 걸린 프레임이 틱·프레임 짝을 바꿔 잰 값이
+	# 실행마다 달라졌다(부하가 큰 때 1.92칸으로 한 번 실패). 끄면 프레임마다 틱 수가 정해져 어느 기계에서나 같은 값.
+	var keep_budget := lab._budget_ms
+	lab._budget_ms = BUDGET_OFF_MS
 	for f in 120:
 		var n := lab.advance_frame(DT)
 		# 예산에 걸린 프레임은 밀린 틱을 버리므로(F18) 한 프레임 이동이 원래 길다 — 기계 부하에 따라 생기므로 재지 않는다
@@ -517,7 +657,8 @@ func _multi_tick_motion(t, lab: LabMain) -> void:
 				worst = maxf(worst, (now[w.s_id[i]] as Vector2).distance_to(last[w.s_id[i]]) / tl)
 				seen += 1
 		last = now
-	t.check(multi > 0 and seen > 0 and worst <= MULTI_TICK_MAX_STEP and budget_frames < 60,
+	lab._budget_ms = keep_budget
+	t.check(multi > 0 and seen > 0 and worst <= MULTI_TICK_MAX_STEP and budget_frames == 0,
 			"16배: 2틱 프레임 %d번(예산 걸린 프레임 %d번 제외), 혼자 있는 개체의 한 프레임 이동 최대 %.2f칸 ≤ %.1f(고치기 전 2.6칸)" % [multi, budget_frames, worst, MULTI_TICK_MAX_STEP])
 
 
@@ -624,6 +765,22 @@ func _toast_rules(t, lab: LabMain) -> void:
 		lab.show_toast("버려진 밭 1곳이 풀밭으로 돌아감 (남은 밭 %d)" % (20 - i), "farm_lost", 100 + i)
 	var vt := lab.visible_toasts()
 	t.check(vt.size() == 1 and int(vt[0].count) == 10 and str(vt[0].text).contains("남은 밭 11"), "밭 잃음 10번 → 알림 하나(×%d)" % (int(vt[0].count) if not vt.is_empty() else 0))
+	# 비교 모드 이름표(group)가 다르면 따로 묶음: A·B 번갈아 4번씩 → 알림 둘(각 ×4), A 한 번 더 → A 만 ×5, 이름표 없음은 셋째
+	lab._clear_toasts()
+	for i in 4:
+		lab.show_toast("A · 버려진 밭 %d" % i, "farm_lost", 400 + i, "A")
+		lab.show_toast("B · 버려진 밭 %d" % i, "farm_lost", 400 + i, "B")
+	vt = lab.visible_toasts()
+	t.check(vt.size() == 2 and _toast_of(vt, "A").get("count", 0) == 4 and _toast_of(vt, "B").get("count", 0) == 4
+			and str(_toast_of(vt, "A").get("text", "")) == "A · 버려진 밭 3" and str(_toast_of(vt, "B").get("text", "")) == "B · 버려진 밭 3",
+			"밭 잃음 묶기는 이름표(group)마다: A ×%s · B ×%s" % [str(_toast_of(vt, "A").get("count")), str(_toast_of(vt, "B").get("count"))])
+	lab.show_toast("A · 버려진 밭 9", "farm_lost", 409, "A")
+	vt = lab.visible_toasts()
+	t.check(vt.size() == 2 and _toast_of(vt, "A").get("count", 0) == 5 and _toast_of(vt, "B").get("count", 0) == 4 and str(vt.back().group) == "A",
+			"A 한 번 더 → A 만 ×5(맨 아래로), B ×4 그대로")
+	lab.show_toast("버려진 밭", "farm_lost", 410)
+	vt = lab.visible_toasts()
+	t.check(vt.size() == 3 and _toast_of(vt, "").get("count", 0) == 1, "이름표 없는 밭 잃음은 따로(알림 셋)")
 	# 강조 알림(멸종)은 일상 알림 묶음에 밀려나지 않음
 	lab._clear_toasts()
 	lab.show_toast("멸종 — 마지막 개체가 사라짐", "extinction", 300)
@@ -855,6 +1012,9 @@ func _compare(t, lab: LabMain) -> void:
 			and lab._cmp_pop[1].text == LabMain._commas(xb.world.population()) and lab._cmp_stage[1].text == SimWorld.STAGE_NAMES[xb.world.stage],
 			"위쪽 막대: [A] %s · %s │ [B] %s · %s" % [lab._cmp_pop[0].text, lab._cmp_stage[0].text, lab._cmp_pop[1].text, lab._cmp_stage[1].text])
 	t.check(lab._top_bar.get_combined_minimum_size().x <= UiConfig.num("lab.min_width"), "비교 모드 위쪽 막대도 최소 창 폭 안")
+	t.check(lab.default_export_dir().get_file().ends_with("-seed1-vs-seed2"), "비교 모드 기본 내보내기 폴더에 두 씨앗: %s" % lab.default_export_dir().get_file())
+	_compare_portrait(t, lab)
+	await _compare_toasts(t, lab)
 	# 진행: 프레임마다 A·B 가 같은 틱 수
 	lab.set_paused(false)
 	lab.set_speed(8)
@@ -920,6 +1080,90 @@ func _compare(t, lab: LabMain) -> void:
 	lab.events.disconnect(on_ev)
 
 
+## 비교 모드 지도 칸(1280 창 약 338×456 — 세로로 긴 칸): 지도를 돌려(ui.compare.portrait_yaw_deg) 칸 높이를 더 씀
+## (고치기 전 약 39%), 두 지도가 같은 방향, 지도 위 나침반 "북 →"·정보 창 방향 화살표가 화면 방향.
+func _compare_portrait(t, lab: LabMain) -> void:
+	var share := [0.0, 0.0]
+	for k in 2:
+		var mv := lab.map_view_of(k)
+		var w := lab.experiment(k).world
+		var cam := mv.get_camera()
+		var vs := Vector2((mv.get_viewport() as SubViewport).size)
+		var tl := UiConfig.num("map.tile_size")
+		var lo := Vector2(INF, INF)
+		var hi := Vector2(-INF, -INF)
+		for c in [Vector3.ZERO, Vector3(w.w * tl, 0, 0), Vector3(w.w * tl, 0, w.h * tl), Vector3(0, 0, w.h * tl)]:
+			var sp := cam.unproject_position(c)
+			lo = lo.min(sp)
+			hi = hi.max(sp)
+		share[k] = (hi.y - lo.y) / maxf(vs.y, 1.0)
+		t.check(lo.x >= -1.0 and lo.y >= -1.0 and hi.x <= vs.x + 1.0 and hi.y <= vs.y + 1.0, "지도 %d 전체가 칸 안(%s ~ %s, 칸 %s)" % [k, str(lo), str(hi), str(vs)])
+	t.check(share[0] >= MIN_COMPARE_HEIGHT_SHARE and share[1] >= MIN_COMPARE_HEIGHT_SHARE,
+			"세로로 긴 비교 칸: 지도가 칸 높이의 %.0f%% · %.0f%% ≥ %.0f%%(돌려 맞춤 — 고치기 전 약 39%%)" % [share[0] * 100.0, share[1] * 100.0, MIN_COMPARE_HEIGHT_SHARE * 100.0])
+	var turns := lab.view_turns(0)
+	var hb := lab._map_area.get_node_or_null("MapTitleB")
+	var nb := hb.find_child("North", true, false) as Label if hb != null else null
+	t.check(turns != 0 and lab.view_turns(1) == turns and lab._panes[0].north.visible and nb != null and nb.visible
+			and nb.text == "북 " + LabMain.ARROWS[turns], "두 지도 같은 방향(%d), 나침반 \"%s\"" % [turns, nb.text if nb != null else ""])
+	# 정보 창 방향: 낱말은 그대로, 화살표는 화면 방향
+	var wb := lab.experiment(1).world
+	var id := wb.s_id[0]
+	lab.select_slime(id, 1)
+	lab.advance_frame(DT)
+	var hd := int(wb.slime_info(id).heading)
+	t.check(lab.info_panel._v_head.text == "%s %s" % [InfoPanel.HEADING_WORDS[hd], InfoPanel.HEADING_ARROWS[(hd + turns) % 4]],
+			"정보 창 방향 \"%s\"(화면 기준 화살표)" % lab.info_panel._v_head.text)
+	lab.select_slime(-1)
+
+
+## 비교 모드 알림: 실험 알림(group A/B)은 그 지도 칸 안(칸 폭 안에서 줄바꿈 — 고치기 전에는 두 지도 사이 가운데에 걸침),
+## 앞에 실험 색 이름표 상자. 이름표 없는 알림은 칸 알림 아래 공용 묶음. _show_event 가 실험 이름표를 group 으로.
+func _compare_toasts(t, lab: LabMain) -> void:
+	lab._clear_toasts()
+	var long := "B 의 아주 긴 알림 문장 — 저장고 근처의 밭이 버려져 풀밭으로 돌아갔고 남은 밭은 하나뿐입니다"
+	lab.show_toast("B · " + long, "discovery", 10, "B")
+	lab.show_toast("A · 첫 밭 일굼", "first_farm", 11, "A")
+	lab.show_toast("결과를 내보냈습니다: /긴/경로/아무데나", "info")
+	await t.frames(2)
+	var inside := true
+	var chips := true
+	var shared_top := INF
+	var pane_bottom := 0.0
+	for e: Dictionary in lab._toasts:
+		var r := (e.panel as Control).get_global_rect()
+		var g := str(e.group)
+		if g == "":
+			shared_top = minf(shared_top, r.position.y)
+			continue
+		var c := lab._panes[Experiment.TAGS.find(g)].container.get_global_rect()
+		inside = inside and c.encloses(r)
+		pane_bottom = maxf(pane_bottom, r.end.y)
+		chips = chips and (e.panel as Node).find_child("Tag", true, false) != null and not str((e.body as Label).text).begins_with(g + " ·")
+	t.check(lab._toasts.size() == 3 and inside, "실험 알림은 자기 지도 칸 안(긴 B 알림도 칸 폭 안에서 줄바꿈)")
+	t.check(chips, "실험 알림 앞에 실험 색 이름표 상자(본문에서는 \"A · \" 를 뺌, visible_toasts 의 text 는 그대로)")
+	t.check(shared_top >= pane_bottom, "이름표 없는 알림은 칸 알림 아래(%.0f ≥ %.0f) — 겹치지 않음" % [shared_top, pane_bottom])
+	# 칸마다 lab.toast_max ÷ 칸 수 개까지(좁은 칸에서 길어진 알림이 그 지도를 다 덮지 않게), 가장 새 것은 남음
+	lab._clear_toasts()
+	for i in 4:
+		lab.show_toast("A · 알림 %d" % i, "info", i, "A")
+	lab.show_toast("B · 알림", "info", 9, "B")
+	var per := maxi(1, UiConfig.integer("lab.toast_max") / 2)
+	var na := 0
+	for v in lab.visible_toasts():
+		na += 1 if str(v.group) == "A" else 0
+	t.check(na == per and str(_toast_of(lab.visible_toasts(), "A").get("text", "")) == "A · 알림 %d" % (4 - per) and _toast_of(lab.visible_toasts(), "B").size() > 0,
+			"비교 칸마다 알림 %d개까지(A %d개, 오래된 것부터 지움), B 칸은 따로" % [per, na])
+	lab._clear_toasts()
+	lab._show_event({kind = "farm_lost", text = "버려진 밭", tick = 1}, 0)
+	lab._show_event({kind = "farm_lost", text = "버려진 밭", tick = 2}, 1)
+	lab._show_event({kind = "farm_lost", text = "버려진 밭", tick = 3}, 0)
+	var vt := lab.visible_toasts()
+	t.check(vt.size() == 2 and _toast_of(vt, "A").get("count", 0) == 2 and _toast_of(vt, "B").get("count", 0) == 1
+			and str(_toast_of(vt, "A").get("text", "")) == "A · 버려진 밭",
+			"사건 알림(_show_event)은 실험 이름표가 group — 밭 잃음도 실험마다 따로 묶음")
+	lab._clear_toasts()
+
+
 ## 표지 글자 "이름표|실험 이름"(이름표가 숨었으면 "|이름").
 func _title_text(head: Node) -> String:
 	if head == null:
@@ -983,6 +1227,7 @@ func _compare_select(t, lab: LabMain) -> void:
 	_key(t, KEY_ESCAPE)
 	t.check(lab.selected_id() == -1 and lab.selected_index() == -1 and lab.info_panel.current_id() == -1 and not lab.map_view.ring_info().visible
 			and not lab.map_view_of(1).ring_info().visible, "Esc → 선택 해제(두 지도 모두 고리 없음)")
+	t.check(lab.info_panel.current_tag() == "", "B 개체를 고른 뒤 Esc → 정보 창 이름표도 없음(\"%s\")" % lab.info_panel.current_tag())
 	lab.select_slime(idb, 1)
 	lab.map_view_of(1).slime_clicked.emit(-1)
 	t.check(lab.selected_id() == -1, "B 지도 빈 곳 → 해제")
@@ -1016,8 +1261,22 @@ func _compare_stop(t, lab: LabMain) -> void:
 	var on_changed := func(list: Array) -> void: lists.append(list.size())
 	lab.experiments_changed.connect(on_changed)
 	var tick := wa.tick
+	# 이름표 없는 오류 알림은 비교를 끝내도 남고, 이름표 붙은 알림(사건·F 키)만 지워짐
+	lab.show_toast("내보내기 실패: B/timeseries.csv", "error")
+	lab._show_event({kind = "discovery", text = "시험 발견", tick = tick}, 1)
+	lab.select_slime(ida, 0)
+	_key(t, KEY_F)
+	_key(t, KEY_F)
+	# (F 가 카메라를 그 개체로 옮겼으니 전체 보기로 되돌림 — 사용자가 움직인 카메라는 비교를 끝내도 그대로 두므로)
+	lab.fit_map()
 	lab.stop_compare()
 	await t.frames(2)
+	var texts: Array[String] = []
+	for v in lab.visible_toasts():
+		texts.append(str(v.text))
+	t.check(texts.has("내보내기 실패: B/timeseries.csv") and texts.size() == 2 and texts.back().begins_with("비교를 끝냈습니다"),
+			"비교 끝: 이름표 없는 오류 알림은 남고 A·B 알림·\"A 지도 따라가기\" 알림만 지움 %s" % [texts])
+	t.check(lab.view_turns(0) == 0 and not lab._panes[0].north.visible, "혼자 모드 지도는 다시 북쪽 위(나침반 숨김)")
 	t.check(not lab.is_comparing() and lab.experiments.size() == 1 and lab.experiment(0) == xa and lab.world == wa and wa.tick == tick
 			and xa.tag == "" and lists == [1], "비교 끝 → A 만(같은 세계·틱 %d), 이름표 없음, experiments_changed(1) %s" % [wa.tick, lists])
 	t.check(lab._map_area.get_node_or_null("MapContainerB") == null and lab._map_area.get_node_or_null("MapTitleB") == null and lab.map_view_of(1) == null,
@@ -1041,6 +1300,13 @@ func _compare_stop(t, lab: LabMain) -> void:
 	lab.experiments_changed.disconnect(on_changed)
 	# 새 실험·스냅숏 열기도 비교를 끝낸다
 	t.check(lab.start_compare({preset = "default", seed = 3}, {preset = "default", seed = 4}) == "" and lab.is_comparing(), "다시 비교 시작")
+	# B 개체를 고른 채 비교를 끝내면 선택·이름표 모두 없음
+	lab.select_slime(lab.experiment(1).world.s_id[0], 1)
+	var had_b := lab.info_panel.current_tag() == "B"
+	lab.stop_compare()
+	t.check(had_b and lab.selected_id() == -1 and lab.info_panel.current_id() == -1 and lab.info_panel.current_tag() == "",
+			"B 를 고른 채 비교 끝 → 선택 해제, 정보 창 이름표 없음(\"%s\")" % lab.info_panel.current_tag())
+	lab.start_compare({preset = "default", seed = 3}, {preset = "default", seed = 4})
 	lab.new_experiment("default", {}, 5)
 	t.check(not lab.is_comparing() and lab._map_area.get_node_or_null("MapContainerB") == null and lab.world.seed_value == 5 and lab.experiment(0).tag == "",
 			"새 실험 → 비교 끝(지도 하나)")
@@ -1078,6 +1344,8 @@ func _compare_extinction(t, lab: LabMain) -> void:
 			"멸종 표지는 A 지도에만(\"%s\")" % lab._extinct_badge.text)
 	t.check(saw, "멸종 알림 \"A · …\"")
 	t.check(lab.info_panel.summary_text().contains("A 는 멸종") and lab.info_panel.summary_text().contains("B 지도"), "정보 창 안내: " + lab.info_panel.summary_text())
+	t.check(_empty_inside(lab), "정보 창 멸종 안내가 창 여백(info.padding) 안에서 줄을 바꿈(%s ⊂ %s)"
+			% [str(lab.info_panel._empty_label.get_global_rect()), str(lab.info_panel.get_global_rect())])
 	lab.start_compare({preset = "no_resources", seed = 1}, {preset = "no_resources", seed = 2})
 	xa = lab.experiment(0)
 	xb = lab.experiment(1)
@@ -1095,6 +1363,13 @@ func _compare_extinction(t, lab: LabMain) -> void:
 	lab.new_experiment("default", {}, 1)
 	t.check(not lab.is_paused() and not lab._extinct_badge.visible, "모두 멸종으로 멈춘 뒤 새 실험 → 다시 재생")
 	lab.set_paused(true)
+
+
+## 정보 창 빈 안내 글이 창 안쪽 여백(info.padding) 안(고치기 전: 창 폭 전체를 써 양쪽 끝에 닿음).
+func _empty_inside(lab: LabMain) -> bool:
+	var pad := UiConfig.num("info.padding")
+	var pr := lab.info_panel.get_global_rect().grow(-pad + 0.5)
+	return lab.info_panel._empty_label.is_visible_in_tree() and pr.encloses(lab.info_panel._empty_label.get_global_rect())
 
 
 ## 최소 창(1280×720)·자리 모두 펼침에서 비교 모드: 지도 칸 ≥ MIN_COMPARE_MAP, 긴 실험 이름은 "…"(표지가 칸 안),
@@ -1153,6 +1428,41 @@ func _longest_bar(lab: LabMain) -> float:
 		lab._cmp_stage[k].text = "농사"
 	lab._lbl_speed.text = "빨리 감기 / 실제 1,234배"
 	return lab._top_bar.get_combined_minimum_size().x
+
+
+## 내보내기에서 지정한 파일을 실패로 돌려주는 실험(실제 디스크 오류 없이 — 엔진 ERROR 줄 없이 — 실패 길을 검사).
+class FailingExperiment extends Experiment:
+	var fail := false
+
+	func export_dir(dir: String, with_lineage: bool = true) -> PackedStringArray:
+		if fail:
+			return PackedStringArray(["summary.json", "timeseries.csv"])
+		return super(dir, with_lineage)
+
+
+## 비교 모드 내보내기 실패: 어느 실험의 어느 파일인지("B/timeseries.csv" — 고치기 전에는 파일 이름만이라 A 인지 B 인지
+## 몰랐음), 다 쓴 쪽은 "A 는 저장됨: 경로".
+func _export_fail(t, lab: LabMain) -> void:
+	var list: Array = []
+	for k in 2:
+		var fx := FailingExperiment.new()
+		fx.preset = "default"
+		fx.seed_value = k + 1
+		fx.label = Experiment.default_label("default", {}, k + 1)
+		fx._adopt(t.make_world({}, k + 1))
+		fx.fail = k == 1
+		list.append(fx)
+	lab._adopt_list(list)
+	var dir := "user://lab_checks_export-%d" % OS.get_process_id()
+	var abs_dir := ProjectSettings.globalize_path(dir)
+	var msg := lab.export_csv(dir)
+	var a_dir := abs_dir.path_join("A")
+	t.check(msg.begins_with("내보내기 실패: ") and msg.contains("B/summary.json") and msg.contains("B/timeseries.csv") and not msg.contains("A/summary.json")
+			and not msg.contains("A/timeseries.csv") and msg.contains("A 는 저장됨: " + a_dir), "비교 모드 내보내기 실패 = 어느 실험의 파일인지: %s" % msg)
+	t.check(FileAccess.file_exists(a_dir.path_join("timeseries.csv")) and _has_toast(lab, "error"), "A 의 결과는 쓰였고 오류 알림")
+	LabMain._remove_tree(abs_dir)
+	t.check(not DirAccess.dir_exists_absolute(abs_dir), "임시 내보내기 폴더를 지움(숨은 .gdignore 까지)")
+	lab.new_experiment("default", {}, 1)
 
 
 ## 패널을 모두 빼면 자리째 숨고(접기 단추도), 다시 넣으면 보인다.

@@ -19,6 +19,11 @@ var pitch := 0.9
 var distance := 60.0
 ## 목표점이 머무를 땅 범위(x, z). 크기 0 이면 제한 없음.
 var bounds := Rect2()
+## 세로로 긴 칸(비교 모드의 지도 한 칸)에서 지도를 더 크게 보려고 돌려 볼 방위 차(라디안, 0 = 끔).
+## fit_rect 가 지금 방위와 이만큼 돌린 방위로 각각 맞춰 보고, 돌린 쪽 거리가 portrait_gain 배 이상 가까우면(지도가 그만큼
+## 크게 보이면) 돌린 방위를 쓴다. LabMain 이 비교 모드 지도에 ui.compare.portrait_yaw_deg·portrait_gain_min 을 넣는다.
+var portrait_yaw := 0.0
+var portrait_gain := 1.15
 
 var _d_min := 5.0
 ## 설정의 최대 거리(camera.distance_max)와 실제로 쓰는 최대 거리. 지도 전체를 맞추는 데 더 멀어야 하면(큰 지도)
@@ -60,6 +65,12 @@ func reset_orientation() -> void:
 	pitch = clampf(deg_to_rad(UiConfig.num("camera.pitch_deg")), _p_min, _p_max)
 
 
+## 화면이 북쪽 위(방위 0)에서 몇 번 90° 돌아 있는지(가장 가까운 것, 0~3). 1 = 화면 위가 서쪽(북쪽은 오른쪽).
+## 지도 위 나침반·정보 창 방향 화살표가 쓴다.
+func view_turns() -> int:
+	return posmod(roundi(yaw / (PI * HALF)), 4)
+
+
 func distance_min() -> float:
 	return _d_min
 
@@ -87,7 +98,22 @@ func apply() -> void:
 ## 네 모서리를 투영해 화면 가운데로 옮기고(목표점 이동) 넘치거나 남는 만큼 거리를 고치기를 몇 번 되풀이한다.
 ## 맞추는 동안은 최대 거리로 자르지 않고, 끝나면 최대 거리를 max(설정값, 맞춘 거리 × fit_zoom_out_factor)로,
 ## 먼 자르기 면을 그 거리 + 지도 대각선 이상으로 늘린다(설정 최대 거리보다 큰 지도도 처음에 다 보이게).
+## portrait_yaw 가 0 이 아니면 그만큼 돌린 방위로도 맞춰 보고 더 크게 보이는 쪽(위 설명)을 남긴다.
 func fit_rect(rect: Rect2, aspect: float) -> void:
+	var yaw0 := yaw
+	_fit_at(rect, aspect)
+	if is_zero_approx(portrait_yaw):
+		return
+	var d0 := distance
+	yaw = yaw0 + portrait_yaw
+	_fit_at(rect, aspect)
+	if distance * maxf(portrait_gain, 1.0) > d0:
+		yaw = yaw0
+		_fit_at(rect, aspect)
+
+
+## 지금 방위·고각으로 fit_rect 의 맞추기(목표점·거리·최대 거리·먼 자르기 면).
+func _fit_at(rect: Rect2, aspect: float) -> void:
 	bounds = rect
 	_d_max = INF
 	target = Vector3(rect.get_center().x, 0.0, rect.get_center().y)

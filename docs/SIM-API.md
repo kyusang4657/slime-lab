@@ -12,6 +12,7 @@
 | `world.step()` / `world.step_n(n)` | 1틱 / n틱 진행 |
 | `SimSnapshot.save_file(world, path) -> String` | 저장(성공 `""`) |
 | `SimSnapshot.load_file(path) -> {world, status, error}` | 불러오기(`status`: loaded·backup·failed) |
+| `SimSnapshot.to_text(world) -> String` · `SimSnapshot.from_text(text) -> {world, error}` | 스냅숏 글(웹 내려받기)과 그 글에서 만든 세계 **사본**(화면이 내보낼 끝 줄을 사본의 `sample()` 로 — 진행 중 세계는 그대로) |
 | `SimRecorder.new()`, `rec.record(world)`, `rec.write_all(dir, world, extra, with_lineage)` | 시계열 기록과 결과 폴더 쓰기(헤드리스와 같은 형식) |
 
 ## 읽기 전용 질의
