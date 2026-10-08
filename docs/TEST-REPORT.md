@@ -2,6 +2,39 @@
 
 판정은 `통과 / 실패 / 미검증` 중 하나만 씁니다. 자동 검사로 확인한 것과 확인하지 못한 것을 구분합니다.
 
+# 1단계 5/5: 빌드·배포·마무리 (v0.1.0)
+
+## 1. 대상 기록
+
+| 항목 | 기록 |
+| --- | --- |
+| 검수 일시 / 담당 | 2026-10-08 / 제작 AI(Claude Code) |
+| 엔진·템플릿 | Godot 4.4.1-stable, 공식 내보내기 템플릿(linux_release.x86_64, windows_release_x86_64.exe, web_nothreads_release.zip) |
+| 실행 환경 | 클라우드 리눅스 컨테이너(4코어, GPU 없음). 화면은 xvfb + llvmpipe, 웹은 Playwright 헤드리스 Chromium(SwiftShader WebGL2) |
+| 범위 | `export_presets.cfg`, `.github/workflows/build.yml`(test → export → pages / release), 웹 체험판 내려받기, 앱 아이콘, 타임랩스, 문서 |
+
+## 2. 결과
+
+| ID | 확인 내용 | 판정 | 근거 |
+| --- | --- | --- | --- |
+| B01 | Linux 내보내기(실행 파일 하나, pck 포함) | 통과 | `slime-lab.x86_64` 72.2MB |
+| B02 | Linux 실행 파일을 띄워 오류 없이 돎 | 통과 | xvfb 1600×900 300프레임, 헤드리스 200프레임: SCRIPT ERROR 없음(ALSA 오류는 이 컨테이너에 음향 장치가 없어서) |
+| B03 | Windows 내보내기 | 통과 | `slime-lab.exe` 100.0MB(서명 없음, 아이콘 리소스는 바꾸지 않음 — rcedit 없음) |
+| B04 | Windows 에서 실행 | **미검증** | Windows 기기 없음 |
+| B05 | 웹 내보내기(스레드 없는 판, Compatibility) | 통과 | wasm 43.7MB + pck 2.6MB, 합 45MB |
+| B06 | 웹 체험판이 브라우저에서 뜨고 실험이 진행됨 | 통과(헤드리스) | 헤드리스 Chromium + SwiftShader WebGL2: 오류·pageerror 없음, 실험실 전체 화면, 틱 진행 |
+| B07 | 웹 체험판 속도 | 기록 | SwiftShader(소프트웨어 그래픽)에서 64배 목표에 실제 1.1배. **실제 GPU 브라우저 속도는 미검증** |
+| B08 | 웹에서 "CSV 내보내기"·"스냅숏 저장" → 내려받기(zip·JSON), "스냅숏 열기" 숨김 | 통과 | `tests/view/web_checks.gd` 16개(zip 안 5개 파일, zip 의 시계열 = 기록기 CSV, 내려받은 스냅숏을 열면 같은 해시, 웹 모드 단추) — 브라우저의 실제 내려받기 창은 미검증 |
+| B09 | 실행 파일에 검사·도구·문서가 들어가지 않음 | 통과 | `exclude_filter`, 실행 파일에서 검사 문장(예: "농사 도달 시도") 0회 |
+| B10 | 글꼴 OFL 전문이 배포판에 들어감 | 통과(설정) | 포함 필터 `assets/fonts/OFL-NanumGothic.txt`, Actions zip 에 LICENSE·CREDITS·OFL |
+| B11 | 앱 아이콘(코드로 렌더링) | 통과 | `assets/icon.png`(`tests/icon_capture.gd`), 웹 파비콘에도 쓰임 |
+| B12 | 타임랩스(빠른 문명·씨앗 5, 32배, 1,800틱, 채집 648 → 저장 702 → 농사 1,024틱) | 통과 | `docs/media/timelapse.mp4` 1.1MB, `.gif` 2.9MB |
+| B13 | Actions: test → export(세 플랫폼, Linux 헤드리스 실행) → pages(main) / release(태그) | 푸시 뒤 확인 | 아래 3절 |
+
+## 3. Actions 첫 실행
+
+(푸시 뒤 기록)
+
 # 1단계 4/5: 실험실 패널 통합 — 파라미터·그래프·연대기·비교·내보내기·소리 (v0.1.0-dev)
 
 ## 1. 대상 기록

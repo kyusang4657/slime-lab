@@ -430,3 +430,14 @@ func run(t) -> void:
 ④ 패널 `export_to(dir)` → `dir/A`·`dir/B` 의 timeseries.csv·chronicle.csv = 같은 예설정·바꾼 값·씨앗·틱 수의 헤드리스 실행기 결과(글자까지), summary.json 출처·이름표·해시, 알림의 절대 경로.
 ⑤ 비교 중 스냅숏 저장 → `-A`·`-B` 두 파일, B 를 열면 혼자 모드로 같은 틱·해시, 혼자 저장 → 더 진행 → 열기 = 저장한 상태(헤드리스와 비교), 이어 돌려도 같음, 없는 파일은 오류 글.
 ⑥ "소리" 상자 ↔ `LabSound.enabled`. ⑦ `UiTheme.keep_words`(폭 그대로, 빈칸에서만 줄바꿈).
+
+## 5단계 더함 — 웹 체험판 내려받기 (LabMain·ParamPanel)
+
+| 멤버 | 뜻 |
+|---|---|
+| `static LabMain.is_web() -> bool` | 웹 체험판인지(`OS.has_feature("web")`) |
+| `LabMain.results_zip_bytes() -> PackedByteArray` | `export_csv` 와 같은 결과 폴더(비교면 `A/`·`B/`)를 zip 바이트로(실패하면 빈 배열). 데스크톱에서도 같아 검사함 |
+| `LabMain.download_results() -> String` · `download_snapshot(index := 0) -> String` | 웹: 브라우저 내려받기(`JavaScriptBridge.download_buffer`). 데스크톱: 같은 바이트를 `user://downloads/` 에 저장. `last_download_name` = 마지막 파일 이름(검사용) |
+| `ParamPanel.web_mode` · `set_web_mode(on)` | 웹이면 "결과 내려받기(zip)"·"스냅숏 내려받기"(비교면 A·B 두 파일), "스냅숏 열기" 숨김. 기본 = `LabMain.is_web()` |
+
+검사: `tests/view/web_checks.gd`. 앱 아이콘 `tests/icon_capture.gd`, 타임랩스 `tests/timelapse_capture.gd` + `tools/make_timelapse.sh`.

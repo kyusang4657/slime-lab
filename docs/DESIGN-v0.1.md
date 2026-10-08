@@ -370,3 +370,11 @@ docs/                  DESIGN-v0.1.md, SIM-API.md, TEST-REPORT.md, screenshots/
 - **소리(10절 "2종" → 3종):** 발견 차임·멸종 낮은 음 + 저장고 "톡". 사인 + 약한 배음, 16비트 모노 22050Hz 를 실행 중 합성(CC0), 같은 소리는 0.5초에 한 번, 한 번에 온 사건 묶음은 가장 중요한 소리 하나만.
 - **사용자 데이터 폴더:** 프로젝트 이름이 한글이라 `user://` 실제 경로에 한글이 들어가면 Godot 4.4 의 엔진 FileDialog 가 거짓 "권한 없음" 을 띄워, `application/config/custom_user_dir_name = "slime-lab"`(영문)으로 바꿈.
 - **예설정:** 연구용 `fast_civ` 를 다시 맞춤(17절), 시연·검사용 `demo_fast` 를 따로 둠.
+
+## 20. 5단계: 빌드·배포 결정
+
+- **내보내기:** `export_presets.cfg` 에 Linux·Windows Desktop·Web 세 판. 실행 파일 하나에 pck 를 넣고(`embed_pck`), 검사(`tests/`)·도구(`tools/`)·문서(`docs/`)는 뺍니다. 글꼴 OFL 전문은 포함 필터로 넣습니다(OFL 조건). Windows 서명·아이콘 리소스 바꾸기(rcedit)는 하지 않았습니다. macOS 는 서명·공증이 필요해 1단계에서 빼고 소스 실행만 안내합니다.
+- **웹 체험판(포트폴리오용 예외):** 처음 결정은 "PC 전용, 모바일·웹은 고려하지 않음"이었습니다. 포트폴리오 사이트에서 바로 만져 볼 수 있게 하려고 사용자 결정으로 웹판을 더했습니다(2026-10-08). 같은 코드·같은 결과(결정적)이고 스레드 없는 템플릿이라 특별한 서버 머리글(COOP/COEP)이 필요 없습니다. 브라우저에는 고를 파일 시스템이 없어 내보내기·스냅숏 저장은 브라우저 내려받기(zip·JSON)로, 스냅숏 열기는 숨깁니다. 브라우저 GDScript(wasm)는 데스크톱보다 느려 높은 배속이 덜 나오며, 화면의 "실제 M배"가 그대로 보여 줍니다. 배포는 이 저장소의 GitHub Pages(`https://kyusang4657.github.io/slime-lab/`).
+- **Actions:** `test`(규칙·화면·100세대·분석 도구) → `export`(세 판 내보내기, Linux 실행 파일을 헤드리스로 200프레임 띄워 SCRIPT ERROR 없는지, zip 에 LICENSE·CREDITS·OFL) → `main` 푸시면 `pages`(웹 체험판 배포), `v*` 태그면 `release`(Linux·Windows zip 을 GitHub Release 에).
+- **자료:** 앱 아이콘은 슬라임 메시를 렌더링해 만들고(`tests/icon_capture.gd`), README·포트폴리오용 타임랩스는 실험실을 실제로 돌리며 찍어 ffmpeg 로 묶습니다(`tests/timelapse_capture.gd`, `tools/make_timelapse.sh`). 외부 이미지·영상 자료는 없습니다.
+

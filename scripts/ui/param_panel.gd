@@ -87,6 +87,7 @@ var _start_compare_btn: Button
 var _revert_btn: Button
 var _compare_btn: Button
 var _export_btn: Button
+var _export_tip := ""
 var _save_btn: Button
 var _open_btn: Button
 var _sound_check: CheckBox
@@ -98,6 +99,9 @@ var _adv_target_btns: Array[Button] = []
 var _adv_target_group := ButtonGroup.new()
 # 고급 설정 줄: 키 → {row, stripe, name, field(LineEdit 또는 CheckBox), err, kind}
 var _adv_rows: Dictionary = {}
+## 웹 체험판 모드: 내보내기·스냅숏 저장을 브라우저 내려받기로, 스냅숏 열기는 숨김(브라우저에는 고를 파일 시스템이 없음).
+## 기본은 LabMain.is_web(), 검사는 set_web_mode 로 바꿔 봄.
+var web_mode := LabMain.is_web()
 var _save_dialog: FileDialog
 var _open_dialog: FileDialog
 
@@ -998,10 +1002,43 @@ func _on_export() -> void:
 	if _lab == null or not is_instance_valid(_lab):
 		_report(TEXT_NO_LAB, "")
 		return
+	if web_mode:
+		_report(_lab.download_results(), "결과를 내려받을 수 없습니다")
+		return
 	export_to(_lab.default_export_dir())
 
 
+## 스냅숏 저장 단추: 데스크톱은 대화 상자, 웹은 내려받기(비교 중이면 A·B 두 파일)
+func _on_save_pressed() -> void:
+	if not web_mode:
+		open_snapshot_dialog(true)
+		return
+	if _lab == null or not is_instance_valid(_lab):
+		_report(TEXT_NO_LAB, "")
+		return
+	var errs: Array[String] = []
+	for k in _lab.experiments.size():
+		var e := _lab.download_snapshot(k)
+		if e != "":
+			errs.append(e)
+	_report("\n".join(errs), "스냅숏을 내려받을 수 없습니다")
+
+
 # ════════════════════════════ 스냅숏 ════════════════════════════
+
+func set_web_mode(on: bool) -> void:
+	web_mode = on
+	_apply_web_mode()
+
+
+func _apply_web_mode() -> void:
+	if _export_btn == null:
+		return
+	_export_btn.text = "결과 내려받기(zip)" if web_mode else "CSV 내보내기"
+	_export_btn.tooltip_text = "시계열·연대기·계통 CSV, 요약, 스냅숏을 zip 으로 내려받음" if web_mode else _export_tip
+	_save_btn.text = "스냅숏 내려받기" if web_mode else "스냅숏 저장"
+	_open_btn.visible = not web_mode
+
 
 ## 스냅숏 대화 상자(저장·열기, 파일 시스템, *.json, 시작 폴더 user://experiments — 없으면 만듦)를 띄운다.
 func open_snapshot_dialog(save: bool) -> FileDialog:
@@ -1185,19 +1222,21 @@ func _build() -> void:
 	row.add_child(_compare_btn)
 
 	_body.add_child(HSeparator.new())
-	_export_btn = _button("CSV 내보내기", "결과 폴더(시계열·연대기·계통 CSV, 요약, 스냅숏)를 %s/<날짜-시각>-seed<N> 에" % SNAPSHOT_DIR)
+	_export_tip = "결과 폴더(시계열·연대기·계통 CSV, 요약, 스냅숏)를 %s/<날짜-시각>-seed<N> 에" % SNAPSHOT_DIR
+	_export_btn = _button("CSV 내보내기", _export_tip)
 	_export_btn.pressed.connect(_on_export)
 	_body.add_child(_export_btn)
 	var srow := _hbox()
 	_body.add_child(srow)
 	_save_btn = _button("스냅숏 저장", "지금 세계를 JSON 파일로(비교 중이면 A·B 두 파일)")
 	_save_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_save_btn.pressed.connect(func() -> void: open_snapshot_dialog(true))
+	_save_btn.pressed.connect(_on_save_pressed)
 	srow.add_child(_save_btn)
 	_open_btn = _button("스냅숏 열기", "저장한 세계를 열어 이어서 진행(혼자 모드)")
 	_open_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_open_btn.pressed.connect(func() -> void: open_snapshot_dialog(false))
 	srow.add_child(_open_btn)
+	_apply_web_mode()
 	_sound_check = _check_box()
 	_sound_check.text = "소리"
 	_sound_check.focus_mode = Control.FOCUS_NONE

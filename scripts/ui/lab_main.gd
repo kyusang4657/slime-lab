@@ -304,6 +304,103 @@ func export_csv(dir: String) -> String:
 	return ""
 
 
+# ════════════════════════════ 웹(브라우저) 내려받기 ════════════════════════════
+# 웹 체험판에는 사용자가 고를 파일 시스템이 없다(user:// = 브라우저 IndexedDB). 그래서 결과 폴더를 zip 으로 묶어
+# 브라우저 내려받기로 넘긴다. zip 을 만드는 부분은 데스크톱에서도 같아 검사한다(내려받기 호출만 웹에서).
+
+## 웹 체험판인지(파라미터 패널이 내보내기·스냅숏 단추를 내려받기로 바꿈)
+static func is_web() -> bool:
+	return OS.has_feature("web")
+
+
+## 결과 폴더(export_csv 와 같은 파일, 비교면 A/·B/ 아래)를 zip 바이트로. 실패하면 빈 배열.
+func results_zip_bytes() -> PackedByteArray:
+	var dir := "user://web_export/%d" % Time.get_ticks_usec()
+	if experiments.is_empty():
+		return PackedByteArray()
+	for x in experiments:
+		var d := dir if experiments.size() == 1 else dir.path_join(x.tag)
+		if not x.export_dir(d).is_empty():
+			return PackedByteArray()
+	var zip_path := dir + ".zip"
+	var bytes := _zip_dir(ProjectSettings.globalize_path(dir), ProjectSettings.globalize_path(zip_path))
+	_remove_tree(ProjectSettings.globalize_path(dir))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(zip_path))
+	return bytes
+
+
+## 결과를 zip 으로 내려받기(웹). 데스크톱에서는 zip 을 user://downloads/ 에 저장(검사·확인용). 성공 "".
+func download_results() -> String:
+	var bytes := results_zip_bytes()
+	if bytes.is_empty():
+		var msg := "결과를 묶을 수 없습니다"
+		show_toast(msg, "error")
+		return msg
+	var fname := default_export_dir().get_file() + ".zip"
+	return _deliver(bytes, fname, "application/zip", "결과(zip)")
+
+
+## index 번째 실험의 스냅숏 JSON 내려받기(웹). 데스크톱에서는 user://downloads/ 에 저장. 성공 "".
+func download_snapshot(index: int = 0) -> String:
+	var x := experiment(index)
+	if x == null:
+		return "저장할 실험이 없습니다"
+	var text := SimSnapshot.to_text(x.world)
+	var fname := "snapshot-%s-tick%d%s.json" % [default_export_dir().get_file(), x.world.tick, "" if x.tag == "" else "-" + x.tag]
+	return _deliver(text.to_utf8_buffer(), fname, "application/json", "스냅숏")
+
+
+## 마지막으로 넘긴 내려받기 파일 이름(검사용)
+var last_download_name := ""
+
+
+func _deliver(bytes: PackedByteArray, fname: String, mime: String, what: String) -> String:
+	last_download_name = fname
+	if is_web():
+		JavaScriptBridge.download_buffer(bytes, fname, mime)
+		show_toast("%s 내려받기: %s" % [what, fname], "info")
+		return ""
+	var path := "user://downloads/" + fname
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path.get_base_dir()))
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return "파일을 쓸 수 없습니다: %s" % path
+	f.store_buffer(bytes)
+	f.close()
+	show_toast("%s 저장: %s" % [what, ProjectSettings.globalize_path(path)], "info")
+	return ""
+
+
+## 폴더(하위 폴더 포함)를 zip 으로 묶어 그 바이트를 돌려준다(경로는 폴더 기준 상대).
+static func _zip_dir(abs_dir: String, abs_zip: String) -> PackedByteArray:
+	var z := ZIPPacker.new()
+	if z.open(abs_zip) != OK:
+		return PackedByteArray()
+	_zip_add(z, abs_dir, "")
+	z.close()
+	return FileAccess.get_file_as_bytes(abs_zip)
+
+
+static func _zip_add(z: ZIPPacker, abs_dir: String, rel: String) -> void:
+	var here := abs_dir.path_join(rel) if rel != "" else abs_dir
+	for f in DirAccess.get_files_at(here):
+		if f.begins_with("."):
+			continue
+		z.start_file(rel.path_join(f) if rel != "" else f)
+		z.write_file(FileAccess.get_file_as_bytes(here.path_join(f)))
+		z.close_file()
+	for d in DirAccess.get_directories_at(here):
+		_zip_add(z, abs_dir, rel.path_join(d) if rel != "" else d)
+
+
+static func _remove_tree(abs_dir: String) -> void:
+	for f in DirAccess.get_files_at(abs_dir):
+		DirAccess.remove_absolute(abs_dir.path_join(f))
+	for d in DirAccess.get_directories_at(abs_dir):
+		_remove_tree(abs_dir.path_join(d))
+	DirAccess.remove_absolute(abs_dir)
+
+
 ## 기본 내보내기 폴더 user://experiments/<날짜-시각>-seed<N>(시각은 화면 쪽 이름에만 씀 — 시뮬레이션과 무관)
 func default_export_dir() -> String:
 	var t := Time.get_datetime_dict_from_system()

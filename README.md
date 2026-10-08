@@ -4,7 +4,15 @@
 
 Godot 4.4.1 · GDScript · 오프라인 · 서버·로그인·광고·결제·런타임 생성형 AI 없음 · 한국어
 
-> **현재 상태: 1단계 중 4/5 — 실험실 화면 완성.** 3D 지도 관찰 창·개체 정보 창·속도 조절에 더해 **파라미터 패널(새 실험·고급 설정)·실시간 그래프 3개·연대기·CSV 내보내기·스냅숏 저장/열기·비교 모드(A | B 나란히)·합성 효과음**. 남은 것은 5/5(Actions 빌드·배포 마무리). 진행 순서는 [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) 15절.
+> **현재 상태: 1단계 완료(v0.1.0).** 시뮬레이션 핵심·헤드리스 실행기·3D 실험실(파라미터·그래프 3개·연대기·비교 모드·CSV·스냅숏·합성 효과음)·분석 도구·자동 검사·Linux·Windows·웹 빌드. 진행 기록은 [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) 15~20절, 검수는 [`docs/TEST-REPORT.md`](docs/TEST-REPORT.md).
+
+| 바로 해 보기 | |
+| --- | --- |
+| **브라우저 체험판** | https://kyusang4657.github.io/slime-lab/ (PC 브라우저, WebGL2. 데스크톱판보다 느려 높은 배속은 덜 나옴 — 화면의 "실제 M배"가 정직하게 보여 줌) |
+| **Linux·Windows** | GitHub Actions 의 빌드 산출물(`slime-lab-linux`·`slime-lab-windows`, zip) — 서명 없음. 태그 `v*` 를 올리면 Release 에도 붙음 |
+| **소스에서** | 아래 "실행" |
+
+![타임랩스: 빠른 문명·씨앗 5 를 32배로 1,800틱 — 채집·저장·농사 발견 알림, 그래프가 자라고, 끝에서 저장고 가까이 개체를 따라감](docs/media/timelapse.gif)
 
 ![실험실 전체: 왼쪽 실험 조건, 가운데 3D 지도, 오른쪽 개체 정보, 아래 그래프 3개와 연대기(농사 단계의 낮, 고른 슬라임)](docs/screenshots/v0.1/lab-02-farm-selected.jpg)
 
@@ -56,6 +64,21 @@ xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 \
 python3 tools/analyze.py run --seeds 1-8 --generations 100 --preset fast_civ --out results/fast8   # 씨앗 여러 개 묶음
 ```
 
+빌드(내보내기 템플릿 4.4.1 이 필요 — Linux·Windows·웹 스레드 없는 판, 설정은 `export_presets.cfg`):
+
+```bash
+godot --headless --path . --export-release "Linux" build/linux/slime-lab.x86_64
+godot --headless --path . --export-release "Windows Desktop" build/windows/slime-lab.exe
+godot --headless --path . --export-release "Web" build/web/index.html       # 체험판(브라우저)
+xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 512x512 --script res://tests/icon_capture.gd   # 앱 아이콘 다시 만들기
+xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1280x720 --script res://tests/timelapse_capture.gd -- --out=/tmp/tl \
+    && tools/make_timelapse.sh /tmp/tl docs/media                     # 타임랩스(mp4·gif, ffmpeg)
+```
+
+`main` 에 푸시하면 GitHub Actions 가 검사 → 세 플랫폼 내보내기(Linux 실행 파일은 헤드리스로 잠깐 띄워 확인) → 웹 체험판을 GitHub Pages 에 배포합니다. `v*` 태그를 올리면 Linux·Windows zip 을 Release 에 붙입니다(`.github/workflows/build.yml`).
+
+웹 체험판은 처음 결정(PC 전용)의 **포트폴리오용 예외**입니다: 같은 코드·같은 결과(결정적)이지만, 브라우저에는 고를 파일 시스템이 없어 "CSV 내보내기"·"스냅숏 저장"이 브라우저 내려받기(zip·JSON)로 바뀌고 "스냅숏 열기"는 숨습니다. 브라우저 GDScript 는 데스크톱보다 느려 높은 배속이 덜 나옵니다.
+
 실험실 조작: 끌기 = 이동, 휠 = 확대·축소, 오른쪽 끌기 = 회전, 클릭 = 슬라임 고르기(비교 모드에서는 누른 지도의 실험) · 스페이스 = 멈춤, 1~7 = 속도(1·2·4·8·16·32·64배), F = 따라가기, Home(또는 0) = 모든 지도 전체 보기(지도 위 "전체 보기" = 그 지도만), Esc = 선택 해제. 글 칸(씨앗·숫자)에 입력 중이면 단축키는 동작하지 않고, Enter = 확정, Esc = 입력 취소. 그래프 위 마우스 = 값 읽기, 연대기 줄 클릭 = 그 시점·행위자. 위쪽 막대 오른쪽에 "목표 N배 / 실제 M배"(따라가면 정확히 목표 배속, 시뮬레이션이 프레임 예산에 걸리거나 화면이 아주 느려 실제가 목표의 90% 아래면 경고 색). 개체가 모두 죽으면 그 순간 멈추고 지도 위에 "멸종 · 틱 N" 을 남깁니다(다시 재생하면 빈 지도가 계속).
 
 실행기 선택 인자: `--preset=default|abundant|harsh_winter|fast_civ|demo_fast|no_resources`(`fast_civ` = 연구용, 발견이 진화 도중에 열리고 씨앗 1~12 모두 100세대 안에 농사 — 근거 [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md); `demo_fast` = 시연·검사용, 2세대 안팎에 농사), `--set=mutation.rate=0.08`(여러 번), `--max-ticks=N`, `--no-lineage`, `--snapshot-every=N`, `--resume=스냅숏.json`, `--quiet`.
@@ -76,9 +99,13 @@ scenes/lab.tscn            주 장면
 tests/run_tests.gd         규칙 검사
 tests/run_view_tests.gd    화면 구성 요소 검사(tests/view/*_checks.gd)
 tests/run_experiment.gd    헤드리스 실험 실행기
-tests/ui_driver.gd         실험실 화면 동작 확인·캡처(가상 디스플레이), *_capture.gd 구성 요소별 캡처, perf_capture.gd 성능 측정
+tests/ui_driver.gd         실험실 화면 동작 확인·캡처(가상 디스플레이), *_capture.gd 구성 요소별 캡처, perf_capture.gd 성능 측정,
+                           icon_capture.gd(앱 아이콘), timelapse_capture.gd(타임랩스 프레임)
+export_presets.cfg         Linux·Windows·웹 내보내기(검사·도구·문서는 실행 파일에서 뺌)
+assets/icon.png            앱 아이콘(슬라임 모델을 렌더링한 것), docs/media/ 타임랩스(mp4·gif)
 tools/render_sounds.gd     효과음을 WAV 로 써서 들어 보기(저장소에는 넣지 않음)
-tools/analyze.py           오프라인 분석(씨앗 묶음·파라미터 격자 → 표·보고서·그림)
+tools/analyze.py           오프라인 분석(씨앗 묶음·파라미터 격자 → 표·보고서·그림), make_timelapse.sh(ffmpeg 묶기)
+.github/workflows/build.yml 검사 → 내보내기 → Pages 배포 → (태그) Release
 ```
 
 ## 출처와 라이선스

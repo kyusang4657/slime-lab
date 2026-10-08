@@ -9,6 +9,9 @@ config/version="0.1.0"
 config/use_custom_user_dir=true
 config/custom_user_dir_name="slime-lab"
 run/main_scene="res://scenes/lab.tscn"
+config/icon="res://assets/icon.png"
+boot_splash/bg_color=Color(0.0823529, 0.0941176, 0.113725, 1)
+boot_splash/show_image=false
 config/features=PackedStringArray("4.4", "GL Compatibility")
 
 [display]
