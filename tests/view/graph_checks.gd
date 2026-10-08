@@ -1,7 +1,7 @@
 extends RefCounted
 ## GraphPanel·GraphView 검사(헤드리스). tests/run_view_tests.gd 가 불러 run(t) 을 부른다.
 ## LabMain 의 자리 채우기는 통합 때 연결되므로, 여기서는 패널을 직접 lab.bottom_dock 에 넣고 bind_lab 한다.
-## 비교 모드(start_compare)도 아직 뼈대라, 실험 둘을 직접 만들어 LabMain 이 내는 것과 같은 호출로 몬다:
+## 비교 모드는 패널 단위로(LabMain.start_compare 를 거친 종단은 integration4_checks), 실험 둘을 직접 만들어 LabMain 이 내는 것과 같은 호출로 몬다:
 ##   x.tag = "A"/"B" → panel.load_experiments([a, b])(= experiments_changed) → 진행할 때마다 append_row(k, rows().back())(= recorded).
 
 const MIN_CHECKS := 60
@@ -237,7 +237,7 @@ func _lab_checks(t) -> void:
 	await t.frames(1)
 
 
-# ── 비교: 실험 둘을 직접 몬다(LabMain.start_compare 가 뼈대라서) ──
+# ── 비교: 실험 둘을 직접 몬다(패널 단위 — start_compare 를 거친 종단은 integration4_checks) ──
 func _compare_checks(t) -> void:
 	var a: Experiment = Experiment.create("default", {}, 1).experiment
 	var b: Experiment = Experiment.create("demo_fast", {}, 1).experiment

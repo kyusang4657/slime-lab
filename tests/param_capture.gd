@@ -4,7 +4,8 @@ extends SceneTree
 ## 실험실(LabMain)을 숨겨 띄워 패널을 붙이고, 패널만 실제 폭(lab.left_panel_width)·실제 높이(창 높이 − 위쪽 막대 −
 ## 아래 자리)로 테마 배경 위에 그려 세 장면을 나란히 한 장으로 찍는다:
 ##   ① 혼자 · 값을 바꿈(강조 띠·"바꾼 값 N개")  ② 비교 모드(A·B 칸)  ③ 고급 설정 펼침(바꾼 값 강조·칸 아래 오류)
-## param-panel.png(세 장면, 250KB 이하 확인). --extra 를 주면 장면별 그림과 1280×720 높이 그림도 찍는다.
+## param-panel.png(세 장면, 250KB 이하 확인). --extra 를 주면 장면별 그림과 1280×720 높이 그림, 오래 돈 실험을 버리는
+## 단추의 확인 대화 상자(param-confirm.png, 창 전체)도 찍는다.
 ## 인자: --out=폴더(기본 res://docs/screenshots/v0.1), --extra
 
 ## 장면 사이·둘레 배경 폭(픽셀)
@@ -103,7 +104,28 @@ func _run() -> void:
 	if bytes > SIZE_LIMIT:
 		printerr("그림이 %d KB 로 250KB 를 넘습니다" % (bytes / 1024))
 	print("상태 줄: %s" % _panel.status_text())
+	if _extra:
+		await _confirm_shot()
 	quit(0)
+
+
+## (--extra) 오래 돈 실험을 버리는 단추의 확인 대화 상자를 창 전체로 찍는다(param-confirm.png).
+func _confirm_shot() -> void:
+	_panel.set_compare_mode(false)
+	_panel.revert()
+	_panel.confirm_discard_ticks = 1
+	_lab.step_ticks(5)
+	(_panel.control("apply") as Button).pressed.emit()
+	await _frames(4)
+	var d := _panel.control("confirm_dialog") as ConfirmationDialog
+	if d == null or not d.visible:
+		printerr("확인 대화 상자가 뜨지 않았습니다")
+		return
+	var img := root.get_texture().get_image()
+	var p := ProjectSettings.globalize_path(_out.path_join("param-confirm.png"))
+	img.save_png(p)
+	print("저장 %s (%dx%d)" % [p, img.get_width(), img.get_height()])
+	d.hide()
 
 
 ## 실험실 4단계 자리 채우기(통합 뒤)로 이미 붙은 패널이 있으면 그것을 쓴다.
