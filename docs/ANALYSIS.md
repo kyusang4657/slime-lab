@@ -119,7 +119,7 @@ OUT/
 
 ## 주의
 
-- **시간:** 기본 설정에서 실행 하나가 평균 약 250틱/초, 세대당 약 110틱 → **세대당 약 0.45초**(1,000세대 ≈ 7.4분, `docs/TEST-REPORT.md`). 전체 ≈ 묶음 수 × 씨앗 수 × 세대 × 0.45초 ÷ `--jobs`. CPU 코어보다 `--jobs` 를 크게 주면 빨라지지 않습니다. `fast_civ` 40세대 씨앗 4개는 4코어에서 약 15초.
+- **시간:** 기본 설정에서 실행 하나가 평균 약 250틱/초, 세대당 약 110틱 → **세대당 약 0.45초**(1,000세대 ≈ 7.4분, `docs/TEST-REPORT.md`). 전체 ≈ 묶음 수 × 씨앗 수 × 세대 × 0.45초 ÷ `--jobs`. CPU 코어보다 `--jobs` 를 크게 주면 빨라지지 않습니다. `fast_civ` 100세대 씨앗 12개는 4코어에서 `--jobs 3` 으로 약 3분 20초(실행 하나 24~58초).
 - **`run_seconds`** 는 동시에 돌던 다른 실행과 CPU 를 나눈 시간입니다. 성능 비교에는 `--jobs 1` 로.
 - **결정성:** 같은 씨앗·같은 설정·같은 코드면 역사 해시가 같습니다(병렬로 돌려도). 같은 결과 폴더로 `report` 를 다시 만들면 `summary.csv`·`cells.csv`·`report.md` 는 바이트까지 같습니다(검사함. `summary.csv`·`cells.csv` 는 pandas 2.2 와 3.0 사이에서도 같음을 확인). 실행을 다시 돌리면 `run_seconds` 만 달라집니다. 해시가 다르면 설정이나 코드가 다른 것입니다.
 - **중도 절단:** 목표 세대에서 멈추므로, 그보다 늦게 올 발견은 "도달 못 함"으로 셉니다. 늦은 단계를 비교할 때는 목표 세대를 넉넉히.
@@ -134,14 +134,14 @@ OUT/
 이 저장소에 함께 올린 작은 예시입니다(원본 실행 폴더는 올리지 않음, 보고서·표·그림만).
 
 ```bash
-python3 tools/analyze.py run   --seeds 1-4 --generations 40 --preset fast_civ --out results/example-run --jobs 4
-python3 tools/analyze.py sweep --param mutation.rate=0.02,0.05,0.1 --seeds 1-4 --generations 30 --preset fast_civ \
-                               --out results/example-sweep --jobs 4
+python3 tools/analyze.py run   --seeds 1-8 --generations 100 --preset fast_civ --out results/example-run --jobs 3
+python3 tools/analyze.py sweep --param mutation.rate=0.02,0.05,0.1 --seeds 1-4 --generations 60 --preset fast_civ \
+                               --out results/example-sweep --jobs 3
 ```
 
-- [`run/report.md`](analysis/example/run/report.md) — `fast_civ` 씨앗 4개 × 40세대. 4개 모두 농사까지 도달, 농사 발견 세대 중앙값 6.1(씨앗별 21.7 · 2.0 · 10.2 · 1.95). 씨앗 1 의 21.7세대는 규칙 검사 S15(`docs/TEST-REPORT.md`)와 같은 값입니다(결정성).
-- [`sweep/report.md`](analysis/example/sweep/report.md) — 돌연변이율 0.02·0.05·0.1 × 씨앗 4개 × 30세대. 0.1 에서 씨앗 3 이 멸종(1,007틱, 멸종 직전 평균 12세대). 씨앗 4개라 칸 사이 차이는 아직 결론이 아닙니다.
-- 읽을거리: `fast_civ` 의 채집 임계(배부른 줍기 시도 120회)는 씨앗 2·4 처럼 **약 0.2세대 만에** 넘기도 합니다. 이 예설정에서 채집 발견 세대는 진화보다 첫 개체들의 무작위 행동을 더 많이 반영한다는 뜻입니다.
+- [`run/report.md`](analysis/example/run/report.md) — `fast_civ`(조정 기록 [`TUNING-fast_civ.md`](TUNING-fast_civ.md)) 씨앗 8개 × 100세대. 8개 모두 농사까지 도달, 멸종 없음. 발견 세대 중앙값 채집 6.4 · 저장 7.8 · 농사 16.4(씨앗별 농사 49.0 · 12.7 · 74.3 · 20.0 · 12.8 · 12.5 · 2.0 · 23.9). 씨앗 1 의 농사(3,321틱, 49.0세대)는 규칙 검사 S15(`test_farm_reachable`)가 같은 씨앗으로 다시 얻는 값입니다(결정성).
+- [`sweep/report.md`](analysis/example/sweep/report.md) — 돌연변이율 0.02·0.05·0.1 × 씨앗 4개 × 60세대. 멸종 없음, 농사 도달 3/4 · 3/4 · 2/4(60세대에서 멈추므로 늦은 씨앗은 "도달 못 함" — 중도 절단). 0.05(기본값과 같음) 칸은 위 `run` 의 씨앗 1~4 와 60세대까지 같은 역사입니다(발견 세대가 같음). 0.1 에서 씨앗 1 은 채집이 59.3세대에야 열립니다(0.05 에서 33.9). 씨앗 4개라 칸 사이 차이는 아직 결론이 아닙니다.
+- 읽을거리: 조정한 `fast_civ` 에서도 씨앗 7 은 채집·저장·농사를 모두 **2세대 안에** 엽니다(첫 세대 무작위 두뇌의 배부른 줍기 시도가 371회로 임계 280 을 바로 넘음). 반대로 씨앗 1·3 은 채집 23~34세대, 농사 49~74세대입니다. 같은 설정에서도 씨앗 사이 퍼짐이 이렇게 크므로 씨앗을 넉넉히 쓰세요(분포와 그 까닭은 [`TUNING-fast_civ.md`](TUNING-fast_civ.md)).
 
 ![발견 세대 — 돌연변이율 격자](analysis/example/sweep/discovery.png)
 
