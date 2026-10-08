@@ -33,12 +33,17 @@ const TITLE := "연대기"
 const HINT := "틱 · 평균 세대 · 사건 — 최신이 위"
 const EMPTY_TEXT := "아직 기록된 사건이 없습니다"
 const EMPTY_FILTERED := "이 종류의 사건이 아직 없습니다"
-## 줄 머리 글자("틱 N · 평균 G세대 · 문장")
+## 줄 머리 글자("틱 N · 평균 G세대 · 문장"). 평균 세대는 저장된 그대로(사건의 mean_gen 은 0.01 단위 = chronicle.csv) —
+## 0.1 단위로 한 번 더 반올림하면 문장 속 "(평균 X세대)"(반올림 전 값을 0.1 단위로)와 어긋났음(4.35 → "4.4세대" 옆에 "평균 4.3세대")
 const TICK_WORD := "틱"
-const GEN_FORMAT := "평균 %.1f세대"
+const GEN_FORMAT := "평균 %.2f세대"
 ## 목록 안의 평균 세대(폭을 아끼려고 "평균" 을 뺌 — 머리 줄·풍선 도움말·item_text 에는 있음)
-const GEN_SHORT := "%.1f세대"
+const GEN_SHORT := "%.2f세대"
 const SEP := " · "
+## 줄바꿈 자리를 고를 때 빈칸을 얼마나 붙여 둘지(낮은 것부터 끊음, wrap_text): 보통 빈칸 · 괄호 안 · 숫자로 시작하는 낱말 앞
+const GLUE_NONE := 0
+const GLUE_PAREN := 1
+const GLUE_NUMBER := 2
 
 ## 화면에 두는 최대 줄 수(ui.chronicle.max_items, 검사에서 줄여 볼 수 있음 — 바꾸면 refresh())
 var max_items := 300
@@ -48,8 +53,9 @@ var _lab: LabMain
 var _exps: Array = []
 var _rows: Array = []
 var _by_group: Array = []
-# 실험마다 연대기를 다시 읽은 틱: 그 틱 이하의 사건은 이미 들어 있다(아직 비우지 않은 사건이 와도 두 번 넣지 않음)
-var _since: Array[int] = []
+# 실험마다 줄로 읽은 연대기 항목 수(다시 읽기·덧붙이기). 다시 읽을 때 아직 비우지 않은 사건은 연대기 끝에 이미 있으므로,
+# 다음 events_tagged 목록 가운데 연대기 위치가 이보다 앞인 것은 건너뜀(_already_read — 틱이 아니라 위치로 셈)
+var _read_n: Array[int] = []
 var _filter := FILTER_ALL
 var _visible: Array = []
 var _older := 0
@@ -148,7 +154,7 @@ func set_experiments(list: Array) -> void:
 	_exps = list.duplicate()
 	_rows.clear()
 	_by_group.clear()
-	_since.clear()
+	_read_n.clear()
 	for k in _exps.size():
 		var all: Array = []
 		var groups: Array = [all]
@@ -156,9 +162,8 @@ func set_experiments(list: Array) -> void:
 			groups.append([])
 		_rows.append(all)
 		_by_group.append(groups)
-		var x := _exps[k] as Experiment
-		var w: SimWorld = x.world if x != null else null
-		_since.append(w.tick if w != null else -1)
+		var w := _world_of(k)
+		_read_n.append(w.chronicle.size() if w != null else 0)
 		if w != null:
 			for e: Dictionary in w.chronicle:
 				_add_row(k, e)
@@ -167,18 +172,51 @@ func set_experiments(list: Array) -> void:
 
 
 ## index 번째 실험의 새 사건(LabMain.events_tagged 의 사본 목록)을 덧붙인다.
-## 마지막으로 다시 읽은 틱 이하의 사건은 이미 연대기에서 읽었으므로 건너뛴다.
+## 다시 읽을 때 이미 연대기에서 읽은 사건(그때 아직 비우지 않았던 것)은 건너뛴다 — _already_read.
 func append_events(index: int, list: Array) -> void:
 	if index < 0 or index >= _rows.size() or list.is_empty():
 		return
-	var added := 0
-	for e: Dictionary in list:
-		if int(e.get("tick", 0)) <= _since[index]:
-			continue
-		_add_row(index, e)
-		added += 1
-	if added > 0:
-		_refresh(true)
+	var skip := _already_read(index, list)
+	if skip >= list.size():
+		return
+	for i in range(skip, list.size()):
+		_add_row(index, list[i] as Dictionary)
+	_refresh(true)
+
+
+## list 의 앞에서 몇 개가 이미 줄로 읽은 연대기 항목인지(그만큼 건너뜀). LabMain 은 drain_events 바로 뒤에 보내므로
+## list = 연대기의 끝 list.size() 개이고, 그 가운데 연대기 위치가 _read_n 보다 앞인 것이 다시 읽을 때 이미 넣은 것.
+## 틱으로 거르지 않는다: 발견·저장고·첫 밭·밭 잃음은 한 틱을 진행하는 도중에 진행 전 틱 번호를 달고 나와서,
+## "다시 읽은 틱 이하 = 이미 읽음" 으로 거르면 다시 읽은 바로 뒤 틱의 새 사건을 잃었다(스냅숏 열기·비교 끝내기 뒤).
+## 연대기의 끝과 다른 목록(세계 없음, 검사가 꾸며 넣은 사건)은 모두 새 사건.
+func _already_read(index: int, list: Array) -> int:
+	var w := _world_of(index)
+	if w == null:
+		return 0
+	var n := w.chronicle.size()
+	var first := n - list.size()
+	var skip := 0
+	if first >= 0 and _read_n[index] > first and _is_tail(w.chronicle, first, list):
+		skip = mini(_read_n[index] - first, list.size())
+	_read_n[index] = maxi(_read_n[index], n)
+	return skip
+
+
+## list 가 연대기 ch 의 first 번째부터 끝까지와 같은 사건인지(틱·종류·문장 — 받는 쪽 사본이라 사전 자체는 다름)
+static func _is_tail(ch: Array, first: int, list: Array) -> bool:
+	for i in list.size():
+		var a: Dictionary = ch[first + i]
+		var b: Dictionary = list[i]
+		if int(a.get("tick", -1)) != int(b.get("tick", -1)) or str(a.get("kind", "")) != str(b.get("kind", "")) \
+				or str(a.get("text", "")) != str(b.get("text", "")):
+			return false
+	return true
+
+
+## k 번째 실험의 세계(없으면 null)
+func _world_of(k: int) -> SimWorld:
+	var x: Experiment = _exps[k] as Experiment if k >= 0 and k < _exps.size() else null
+	return x.world if x != null else null
 
 
 ## 사건 사전 → 줄(우리 사본: 틱·종류·행위자·문장·평균 세대·실험 번호·묶음)
@@ -384,30 +422,65 @@ static func group_color(g: int) -> Color:
 
 
 ## 문장을 폭 안에서 낱말(빈칸) 단위로 접는다 — 한글 음절 사이에서 끊지 않고(우리말 줄바꿈), 한 낱말이 폭보다 길 때만
-## 글자 단위로 자른다. max_lines 를 넘으면 마지막 줄 끝을 말줄임표로.
+## 글자 단위로 자른다. 다음 낱말이 넘치면 이 줄의 빈칸 가운데 덜 붙여 둔(_glue_levels 가 낮은) 마지막 자리에서 끊는다:
+## 괄호 안("(30, 0)"·"(남은 밭 55)")과 숫자로 시작하는 낱말 앞("밭 1곳이")은 다른 자리가 없을 때만(묶음이 폭보다 넓을 때 —
+## 그때도 숫자는 앞 낱말과 함께: "(남은" / "밭 55)"). max_lines 를 넘으면 마지막 줄 끝을 말줄임표로.
 static func wrap_text(font: Font, text: String, fs: int, width: float, max_lines: int, ellipsis: String = "…") -> PackedStringArray:
 	var lines := PackedStringArray()
-	var cur := ""
-	for word: String in text.split(" ", false):
-		var cand := word if cur == "" else cur + " " + word
-		if _text_w(font, cand, fs) <= width:
-			cur = cand
-			continue
-		if cur != "":
-			lines.append(cur)
-		cur = word
-		while cur.length() > 1 and _text_w(font, cur, fs) > width:
-			var k := _fit_chars(font, cur, fs, width, "")
-			lines.append(cur.substr(0, k))
-			cur = cur.substr(k)
-	if cur != "":
-		lines.append(cur)
+	var words := text.split(" ", false)
+	var glue := _glue_levels(words)
+	var s := 0
+	while s < words.size():
+		# 낱말 하나가 폭보다 길면 글자 단위로 자르고 남은 조각이 이 줄의 첫 낱말
+		while words[s].length() > 1 and _text_w(font, words[s], fs) > width:
+			var k := _fit_chars(font, words[s], fs, width, "")
+			lines.append(words[s].substr(0, k))
+			words[s] = words[s].substr(k)
+		# s 부터 폭 안에 드는 마지막 낱말 e
+		var line := words[s]
+		var e := s
+		while e + 1 < words.size():
+			var cand := line + " " + words[e + 1]
+			if _text_w(font, cand, fs) > width:
+				break
+			line = cand
+			e += 1
+		if e + 1 < words.size():
+			# 끊을 자리(낱말 j 뒤): 가장 덜 붙여 둔 단계 가운데 가장 뒤
+			var cut := e
+			for j in range(e - 1, s - 1, -1):
+				if glue[cut] == GLUE_NONE:
+					break
+				if glue[j] < glue[cut]:
+					cut = j
+			if cut < e:
+				line = " ".join(words.slice(s, cut + 1))
+				e = cut
+		lines.append(line)
+		s = e + 1
 	if lines.size() > maxi(1, max_lines):
 		var keep := maxi(1, max_lines)
 		var rest := " ".join(lines.slice(keep - 1))
 		lines = lines.slice(0, keep - 1)
 		lines.append(ellipsize(font, rest, fs, width, ellipsis))
 	return lines
+
+
+## 낱말 i 뒤 빈칸을 얼마나 붙여 둘지(마지막 낱말은 GLUE_NONE): 다음 낱말이 숫자로 시작하면 GLUE_NUMBER(수를 앞 낱말에서
+## 떼지 않음 — "밭 55"·"시도 121회"), 괄호 안이면 GLUE_PAREN, 아니면 GLUE_NONE. 시뮬레이션 문장은 그대로 두고 접는 자리만 고름.
+static func _glue_levels(words: PackedStringArray) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	out.resize(words.size())
+	var depth := 0
+	for i in words.size():
+		depth = maxi(0, depth + words[i].count("(") - words[i].count(")"))
+		if i + 1 < words.size() and words[i + 1].left(1).is_valid_int():
+			out[i] = GLUE_NUMBER
+		elif depth > 0 and i + 1 < words.size():
+			out[i] = GLUE_PAREN
+		else:
+			out[i] = GLUE_NONE
+	return out
 
 
 ## 폭을 넘으면 끝을 잘라 말줄임표를 붙인다.
@@ -498,6 +571,7 @@ class RowList extends Control:
 	var _pad_v := 4.0
 	var _gap := 8.0
 	var _badge_pad := 4.0
+	var _badge_gap := 6.0
 	var _wheel := 48.0
 	var _colors: Array[Color] = []
 	var _tag_boxes: Array[StyleBoxFlat] = []
@@ -514,6 +588,7 @@ class RowList extends Control:
 		_pad_v = UiConfig.num("chronicle.row_pad_v")
 		_gap = UiConfig.num("chronicle.col_gap")
 		_badge_pad = UiConfig.num("chronicle.badge_pad_h")
+		_badge_gap = UiConfig.num("chronicle.badge_gap")
 		_wheel = UiConfig.num("chronicle.wheel_step_px")
 		for g in ChroniclePanel.COLOR_KEYS.size():
 			_colors.append(ChroniclePanel.group_color(g))
@@ -597,7 +672,8 @@ class RowList extends Control:
 		_badge_w = 0.0
 		if _tagged:
 			_badge_w = font.get_string_size("W", HORIZONTAL_ALIGNMENT_LEFT, -1, _fs_meta).x + 2.0 * _badge_pad
-		_x_tick = _stripe + _gap + (_badge_w + _gap * 0.75 if _tagged else 0.0)
+		# A/B 이름표와 틱 사이는 열 사이(col_gap)보다 좁게(ui.chronicle.badge_gap) — 이름표가 그 줄의 틱에 붙어 보이게
+		_x_tick = _stripe + _gap + (_badge_w + _badge_gap if _tagged else 0.0)
 		_x_gen = _x_tick + ceilf(tick_w) + _gap
 		_x_text = _x_gen + ceilf(gen_w) + _gap
 		_text_w = maxf(1.0, size.x - _x_text - _gap * 0.5)

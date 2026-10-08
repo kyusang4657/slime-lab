@@ -998,7 +998,8 @@ func _rebuild_stores() -> void:
 
 func _event(kind: String, actor: int, text: String, extra: Dictionary = {}) -> void:
 	var e := {tick = tick, kind = kind, actor = actor, text = text, mean_gen = snappedf(mean_generation(), EVENT_GEN_STEP)}
-	e.merge(extra)
+	# extra 가 기본 값을 덮어씀(멸종 사건의 mean_gen)
+	e.merge(extra, true)
 	chronicle.append(e)
 	# 알림용 사본(화면·4단계 청취자가 고쳐 써도 연대기가 바뀌지 않게)
 	_pending_events.append(e.duplicate())
@@ -1010,7 +1011,8 @@ func _after_tick() -> void:
 		peak_population = n
 	if n == 0 and extinct_tick == -1:
 		extinct_tick = tick
-		_event("extinction", -1, "멸종 — 마지막 개체가 사라짐")
+		# 개체가 모두 사라진 뒤라 mean_generation() 은 0 — 마지막 개체군(이 틱에 죽은 개체)의 평균 세대를 싣는다
+		_event("extinction", -1, "멸종 — 마지막 개체가 사라짐", {mean_gen = snappedf(_last_deaths_mean_gen(), EVENT_GEN_STEP)})
 	if n > 0:
 		var mg := mean_generation()
 		var step_m := int(cfg.record.generation_milestone)
@@ -1019,6 +1021,19 @@ func _after_tick() -> void:
 			next_milestone += step_m
 	if tick % int(cfg.hash.every) == 0:
 		_hash_step()
+
+
+## 방금 진행한 틱에 죽은 개체들의 평균 세대(계통 기록 lin_death 로 셈 — 멸종 때 한 번만 부름, 상태를 따로 두지 않아
+## 스냅숏에서 이어 돌려도 같음). 죽은 개체가 없으면 0.
+func _last_deaths_mean_gen() -> float:
+	var t := tick - 1
+	var s := 0
+	var n := 0
+	for id in lin_death.size():
+		if lin_death[id] == t:
+			s += lin_gen[id]
+			n += 1
+	return float(s) / float(n) if n > 0 else 0.0
 
 
 func _hash_step() -> void:

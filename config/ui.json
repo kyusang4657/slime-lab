@@ -371,6 +371,7 @@
 		"col_gap": 8,
 		"badge_pad_h": 4,
 		"badge_radius": 3,
+		"badge_gap": 6,
 		"wheel_step_px": 48,
 		"swatch_px": 10,
 		"colors": {
