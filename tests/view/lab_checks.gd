@@ -7,7 +7,7 @@ const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 231
+const MIN_CHECKS := 234
 ## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
 const B_MUTATION := 0.07
 ## 최소 창(1280×720)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기
@@ -1411,6 +1411,28 @@ func _compare_layout(t, lab: LabMain) -> void:
 		tails_ok = tails_ok and tl.text.ends_with("씨앗 %d" % (k + 1)) and tl.text.contains(GraphPanel.ELLIPSIS) and tw <= tl.size.x + 0.5
 		tails_ok = tails_ok and _rect(lab._panes[k].container).encloses(_rect(lab._panes[k].head)) and lab._panes[k].full_title == lab.experiment(k).label
 	t.check(tails_ok and shown[0] != shown[1], "좁은 비교 지도 이름: 예설정 이름만 줄이고 씨앗은 남김 %s" % str(shown))
+	# 씨앗이 같고 값만 다른 비교(멈춤 표지까지 붙어 가장 좁을 때): 씨앗 대신 A·B 를 가르는 값을 남김(4단계 최종 점검: 예전엔
+	# 둘 다 "… · 씨앗 1 · 돌연…", 고급 키는 "plants.regro…" / "plants.regrow…")
+	lab.set_paused(true)
+	for pair in [["mutation.rate", 0.08, 0.02, "0.08", "0.02"], ["plants.regrow", 0.5, 0.25, "=0.5", "=0.25"]]:
+		lab.start_compare({preset = "demo_fast", seed = 1, overrides = {pair[0]: pair[1]}},
+				{preset = "demo_fast", seed = 1, overrides = {pair[0]: pair[2]}})
+		lab.set_paused(true)
+		await t.frames(2)
+		var vals := PackedStringArray()
+		var vals_ok := true
+		for k in 2:
+			var tl := lab._panes[k].title
+			var tw := tl.get_theme_font("font").get_string_size(tl.text, HORIZONTAL_ALIGNMENT_LEFT, -1, tl.get_theme_font_size("font_size")).x
+			vals.append(tl.text)
+			vals_ok = vals_ok and lab._panes[k].paused.visible and tl.text.contains(GraphPanel.ELLIPSIS) and tw <= tl.size.x + 0.5
+			vals_ok = vals_ok and tl.text.ends_with(str(pair[3 + k])) and _rect(lab._panes[k].container).encloses(_rect(lab._panes[k].head))
+		t.check(vals_ok and vals[0] != vals[1], "좁은 비교 지도 이름(씨앗 같고 %s 만 다름, 멈춤): 가르는 값을 남김 %s" % [pair[0], str(vals)])
+	t.check(LabMain.fit_tail(" · 씨앗 2 · 돌연변이 0.08", 1e6, func(x: String) -> float: return float(x.length()), false) == "… · 씨앗 2 · 돌연변이 0.08"
+			and LabMain.fit_tail(" · 씨앗 1 · 돌연변이 0.08", 1e6, func(x: String) -> float: return float(x.length()), true) == "… · 돌연변이 0.08"
+			and LabMain.fit_tail(" · 씨앗 1 · 돌연변이 0.08 · 자원 1.4", 15.0, func(x: String) -> float: return float(x.length()), true) == "… · 돌연변이 0.08…"
+			and LabMain.fit_tail(" · 씨앗 1 · plants.regrow=0.5", 15.0, func(x: String) -> float: return float(x.length()), true) == "… · plants…=0.5",
+			"꼬리 줄임 규칙(씨앗이 같으면 씨앗 대신 첫 값, 그다음 끝 줄임, 그다음 이름 줄임)")
 	lab.start_compare({preset = "demo_fast", seed = 1}, {preset = "harsh_winter", seed = 1})
 	await t.frames(2)
 	# 계절이 다른 때(빠른 계절 2일 vs 혹독한 겨울 5일)

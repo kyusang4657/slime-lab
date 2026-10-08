@@ -3,9 +3,11 @@ extends RefCounted
 ## 실험 하나 = 세계(SimWorld) + 기록기(SimRecorder) + 만든 조건. 계약: docs/VIEW-API.md "Experiment".
 ## 기록은 헤드리스 실행기(tests/run_experiment.gd)와 **같은 줄**이 되게 한다:
 ## 만들 때(또는 스냅숏을 열 때) 한 줄, 그 뒤 tick % record.every == 0 이 되는 step 마다 한 줄, 그리고 멸종한 틱에 한 줄
-## (실행기는 멸종에서 멈추며 끝 줄을 쓴다 — 그래서 그래프에 개체 수 0 줄·"멸종" 표시가 생김).
-## 내보낼 때 마지막 기록 줄이 지금 틱이 아니면 지금 틱의 끝 줄을 파일에만 더한다(실행기의 끝 줄과 같음, tail_row()).
-## 그래서 화면에서 내보낸 timeseries.csv 는 같은 씨앗·설정으로 그 틱까지(또는 멸종까지) 돌린 실행기 결과와 글자까지 같다(검사).
+## (실행기는 멸종에서 멈추며 끝 줄을 쓴다 — 그래서 그래프에 개체 수 0 줄·"멸종" 표시가 생김). 멸종한 뒤에는 기록하지 않는다
+## (세계는 빈 채 계속 진행할 수 있다 — 비교 모드에서 한쪽만 멸종했거나, 멸종해 멈춘 뒤 다시 재생했을 때).
+## 내보낼 때 마지막 기록 줄이 지금 틱이 아니면(멸종하지 않았을 때) 지금 틱의 끝 줄을 파일에만 더한다(실행기의 끝 줄과 같음, tail_row()).
+## 그래서 화면에서 내보낸 timeseries.csv 는 같은 씨앗·설정으로 그 틱까지(또는 멸종까지) 돌린 실행기 결과와 글자까지 같다(검사 —
+## 비교 모드의 A/·B/ 각각도).
 ## 노드가 아니다(화면 없이 검사·캡처에서도 씀). 세계를 진행하는 것은 step()/step_n() 뿐이다.
 
 ## 비교 모드의 이름표(첫째 = A, 둘째 = B)
@@ -106,16 +108,10 @@ static func ordered_keys(sets: Dictionary, first: Array = []) -> Array[String]:
 	return out
 
 
-## 바꾼 값 하나: "돌연변이 0.08" / "plants.regrow=0.5"(수는 짧게 — 0.08, 150, 1.4).
+## 바꾼 값 하나: "돌연변이 0.08" / "plants.regrow=0.5". 수는 파라미터 패널 입력 칸과 같은 표기(ParamPanel.format_value —
+## 정수 키는 150, 실수는 JSON 표기라 0.123456789012345 도 그대로; 예전 String.num 은 0.12345678901234 로 줄였음), 글은 그대로.
 static func describe_value(key: String, v: Variant) -> String:
-	var txt := ""
-	match typeof(v):
-		TYPE_FLOAT:
-			txt = String.num(float(v))
-		TYPE_INT, TYPE_STRING, TYPE_STRING_NAME:
-			txt = str(v)
-		_:
-			txt = JSON.stringify(v)
+	var txt := str(v) if typeof(v) in [TYPE_STRING, TYPE_STRING_NAME] else ParamPanel.format_value(key, v)
 	return "%s %s" % [str(SHORT_NAMES[key]), txt] if SHORT_NAMES.has(key) else "%s=%s" % [key, txt]
 
 
@@ -141,9 +137,12 @@ func _adopt(w: SimWorld) -> void:
 
 
 ## 한 틱 진행 + 기록(record.every 마다, 그리고 멸종한 틱 — 실행기가 멸종에서 멈추며 쓰는 끝 줄과 같은 줄).
-## 이번 step 에서 한 줄을 기록했으면 true.
+## 멸종한 틱 뒤로는 기록하지 않는다(실행기는 거기서 끝남 — 4단계 최종 점검: 비교 모드에서 멸종한 쪽이 개체 0 줄을 계속 쌓아
+## 그쪽 CSV 가 실행기와 달랐음). 이번 step 에서 한 줄을 기록했으면 true.
 func step() -> bool:
 	world.step()
+	if world.extinct_tick >= 0 and world.tick > world.extinct_tick:
+		return false
 	if world.tick % _every == 0 or world.tick == world.extinct_tick:
 		recorder.record(world)
 		return true
@@ -191,11 +190,12 @@ func export_dir(dir: String, with_lineage: bool = true) -> PackedStringArray:
 	return failed
 
 
-## 내보낼 때 더하는 끝 줄: 마지막 기록 줄이 지금 틱이면(record.every 의 배수·멸종한 틱·막 만든 실험) {}, 아니면 지금 틱의
+## 내보낼 때 더하는 끝 줄: 마지막 기록 줄이 지금 틱이면(record.every 의 배수·멸종한 틱·막 만든 실험) 또는 멸종했으면
+## (마지막 기록 줄이 멸종한 틱의 줄 = 실행기의 끝 줄 — 그 뒤로 빈 세계가 더 진행했어도) {}, 아니면 지금 틱의
 ## 한 줄 = 헤드리스 실행기가 그 틱에서 끝나며 쓰는 줄(마지막 기록 뒤의 출생·사망 수 포함). sample() 은 기간 카운터를 0 으로
 ## 되돌리므로 세계 **사본**(스냅숏 글 왕복 — 기간 카운터까지 담김)에서 부른다: 세계·기록기·다음 기록은 그대로(검사).
 func tail_row() -> Dictionary:
-	if world == null or (not recorder.rows.is_empty() and int(recorder.rows.back().tick) == world.tick):
+	if world == null or world.extinct_tick >= 0 or (not recorder.rows.is_empty() and int(recorder.rows.back().tick) == world.tick):
 		return {}
 	var r := SimSnapshot.from_text(SimSnapshot.to_text(world))
 	var copy: SimWorld = r.world

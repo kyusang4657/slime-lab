@@ -29,11 +29,46 @@
 | B10 | 글꼴 OFL 전문이 배포판에 들어감 | 통과(설정) | 포함 필터 `assets/fonts/OFL-NanumGothic.txt`, Actions zip 에 LICENSE·CREDITS·OFL |
 | B11 | 앱 아이콘(코드로 렌더링) | 통과 | `assets/icon.png`(`tests/icon_capture.gd`), 웹 파비콘에도 쓰임 |
 | B12 | 타임랩스(빠른 문명·씨앗 5, 32배, 1,800틱, 채집 648 → 저장 702 → 농사 1,024틱) | 통과 | `docs/media/timelapse.webm` 1.2MB(VP9 — 오픈소스 Chromium 계열도 재생), `.mp4` 1.1MB(H.264), `.gif` 2.9MB |
-| B13 | Actions: test → export(세 플랫폼, Linux 헤드리스 실행) → pages(main) / release(태그) | 푸시 뒤 확인 | 아래 3절 |
+| B13 | Actions: test → export(세 플랫폼, Linux 헤드리스 실행) → pages(main) / release(태그) | test·export 통과, pages **실패(저장소 설정)** | 아래 3절 |
+| B14 | 4단계 최종 점검에서 남은 것(R1~R6) 고침 | 통과 | 아래 4절 |
 
 ## 3. Actions 첫 실행
 
-(푸시 뒤 기록)
+| 실행 | 커밋 | test | export | pages | release |
+| --- | --- | --- | --- | --- | --- |
+| #8 | 8f5d518 5단계 | **실패** — 효과음 검사가 실제 시계의 최소 간격(`sound.min_interval_s`) 때문에 빠른 CI 기계에서만 실패 | 건너뜀 | 건너뜀 | 건너뜀 |
+| #9 | 634bcb5 효과음 검사 고침(`LabSound.reset_rate_limit()`, 간격을 길게 잡으면 옛 검사가 CI 와 같은 메시지로 실패함을 확인) | 통과 | 통과 | **실패** | 건너뜀(태그 없음) |
+| #10 | 7119e02 타임랩스 WebM 판 | 통과(규칙·화면·100세대 실행·파이썬) | 통과(세 판 내보내기, Linux 헤드리스 200프레임, zip·Pages 묶음 올림) | **실패** | 건너뜀(태그 없음) |
+
+pages 실패의 까닭: `actions/configure-pages`(enablement: true)가 "Get Pages site failed: Not Found" 뒤 "Create Pages site failed: Resource not accessible by integration" — 이 저장소에 GitHub Pages 가 아직 켜져 있지 않고, 워크플로의 토큰에는 Pages 사이트를 새로 만들 권한이 없다. **저장소 소유자가 Settings → Pages → Build and deployment → Source 를 "GitHub Actions" 로 한 번 바꾸면** 다음 main 실행(또는 Actions 탭에서 다시 실행)부터 `https://kyusang4657.github.io/slime-lab/` 에 체험판이 올라간다 — 그 뒤 주소가 실제로 열리는지는 **미검증**. release 는 `v*` 태그를 밀 때만 돈다(아직 태그 없음, 미검증).
+
+## 4. 4단계 최종 점검에서 고친 것(R1~R6)
+
+4단계 검토 고침(G01~G56)을 통합한 뒤의 최종 점검이 남긴 것. **고친 것마다 그 고침을 잠시 되돌려 새 검사가 실패함을 확인**했다(아래 "고치기 전").
+
+| ID | 남은 것 | 고침 | 검사 · 고치기 전 |
+| --- | --- | --- | --- |
+| R1 | 1280 창 비교 모드에서 씨앗이 같고 값만 다른 두 실험(돌연변이 0.08 / 0.02, 멈춤 표지까지 붙음)의 지도 이름이 둘 다 "… · 씨앗 1 · 돌연…"(고급 키는 "plants.regro…" / "plants.regrow…") | `LabMain.fit_tail`: 꼬리도 넘치면 두 지도를 가르는 첫 몫을 남김 — A·B 씨앗이 같으면 씨앗 대신 A·B 가 다른 첫 바꾼 값, 그것도 길면 값은 두고 이름을 줄임("… · 돌연… 0.08", "… · plants…=0.5") | lab_checks "좁은 비교 지도 이름(씨앗 같고 …)" 2개 + 줄임 규칙 1개 · 고치기 전 두 이름이 같음 |
+| R2 | 비교 모드에서 멸종한 쪽이 멸종 뒤에도 개체 0 줄을 계속 쌓아(221, 240, …, 300) 그쪽 `B/timeseries.csv` 가 실행기(221 에서 멈춤)와 다름. 혼자 모드에서도 멸종해 멈춘 뒤 다시 재생하면 같음 | `Experiment.step()` 은 멸종한 틱 뒤로 기록하지 않고, `tail_row()` 는 멸종했으면 `{}` | experiment_checks "멸종한 B/timeseries.csv = 실행기", "멸종 뒤 100틱 더 진행해도 기록 그대로" 등 4개 · 고치기 전 1550 / 1278 글자, 18줄 / 13줄 |
+| R3 | (R2 를 고치며 찾음) 한 프레임에 여러 틱을 돌 때 멸종한 틱이 아니라 그 프레임 끝까지 가서 멈춤 — 4단계 검토의 "멸종하는 순간 멈춤" 검사는 프레임 예산에 따라 통과·실패가 갈리던 것(같은 코드로 두 번 돌려 틱 221 / 222) | `LabMain._extinction_stop()`: 이 틱에 모든 실험이 멸종했고(알리지 않은 멸종) `lab.pause_on_extinction` 이면 남은 틱을 버리고 멈춤 | experiment_checks "빨리 감기에서도 멸종한 틱에서 멈춤" · 고치기 전 틱 237 에서 멈춤(멸종 221). 보통 배속 검사는 세 번 돌려 모두 통과 |
+| R4 | 이름표의 실수 표기가 입력 칸과 다름(`String.num` — "돌연변이 0.12345678901234" / 칸 "0.123456789012345") | `Experiment.describe_value` → `ParamPanel.format_value`(정수 키는 정수, 실수는 JSON 표기) | experiment_checks 2개 · 고치기 전 "0.12345678901234" |
+| R5 | 규칙 검사(`run_tests.gd`)가 실제 사용자 폴더에 `test_snap`·`test_runner`(숨은 `.gdignore` 포함)를 남김 | 프로세스마다 따로인 임시 폴더(`tmp_dir`)를 쓰고 끝에 통째로 지움(`remove_tree`, 숨은 파일까지) | run_tests 2개 · 검사 뒤 사용자 폴더에 `downloads`·`experiments`·`logs`·`shader_cache` 만 남음(확인) |
+| R6 | 문서: VIEW-API 범례 문단이 옛 꼬리("· 바꾼 값 K개"), DESIGN §19 의 Experiment 가 멸종 줄·끝 줄 없이 적힘 | VIEW-API(범례·지도 표지·Experiment·멸종)·DESIGN §19·README·W04 를 지금 동작으로 | — |
+
+검사 결과(이 고침 뒤, 같은 기계에서 차례로):
+
+```
+godot --headless --path . --script res://tests/run_tests.gd                  RESULT: 171 checks passed, 0 failed   (88초, 농사 도달 검사 24.4초 포함)
+godot --headless --path . --script res://tests/run_tests.gd -- --skip-slow   RESULT: 168 checks passed, 0 failed
+godot --headless --path . --script res://tests/run_view_tests.gd             RESULT: 1064 passed, 0 failed (view)   (179초, 두 번 돌려 같음)
+    chronicle 86 · experiment 63 · geo 76 · graph 119 · info 55 · integration4 59 · lab 234 · map 84 · param 188 · smoke 17 · sound 59 · web 24
+python3 -m unittest discover -s tools -p 'test_*.py'                         Ran 41 tests … OK
+xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd
+                                                                             RESULT: 53 passed, 0 failed (ui)
+xvfb-run … --resolution 1280x720 --script res://tests/ui_driver.gd           RESULT: 52 passed, 0 failed (ui)
+```
+
+검사를 모두 돌린 뒤 사용자 폴더(`~/.local/share/slime-lab`)에는 `downloads`·`experiments`·`logs`·`shader_cache` 만 남았다(R5 와 4단계 G27).
 
 # 1단계 4/5: 실험실 패널 통합 — 파라미터·그래프·연대기·비교·내보내기·소리 (v0.1.0-dev)
 
@@ -67,7 +102,7 @@ python3 -m unittest discover -s tools -p "test_*.py"                         Ran
 | W01 | 파라미터 패널 값(예설정·씨앗·세 주요 값·고급 키) → 새 실험의 `cfg`·씨앗·개체 수, 적용 전에는 지금 실험 그대로, 적용 뒤 "지금 실험과 같음", 범위 밖 값은 줄 아래 오류·단추 꺼짐 | 통과 | integration4 ①, param_checks |
 | W02 | 패널로 비교 시작 → 지도 둘, 바꾼 값은 그 칸의 세계에만, 그래프 세 개에 계열 둘(점 수 = 기록 줄 수), 범례 둘, 연대기 A/B 줄 수 = 두 연대기 합, 알림 "A · "/"B · " | 통과 | integration4 ②, lab_checks `_compare`, ui_driver ⑥ |
 | W03 | 연대기 줄을 실제 마우스로 누름 → 그래프 시점 세로선, 행위자(첫 밭)가 있으면 **그 실험의** 개체 선택(실험 번호 1, 정보 창 이름표 B, 고리는 B 지도에만), 두 세계 그대로 | 통과 | integration4 ③, chronicle_checks |
-| W04 | 패널의 CSV 내보내기 → 비교면 `A/`·`B/` 각각의 timeseries.csv·chronicle.csv 가 같은 예설정·바꾼 값·씨앗·틱 수의 헤드리스 실행기 결과와 **글자까지** 같음 | 통과 | integration4 ④, experiment_checks |
+| W04 | 패널의 CSV 내보내기 → 비교면 `A/`·`B/` 각각의 timeseries.csv·chronicle.csv 가 같은 예설정·바꾼 값·씨앗·틱 수의 헤드리스 실행기 결과와 **글자까지** 같음(한쪽만 멸종했으면 그쪽은 멸종까지의 실행기 결과 — 최종 점검 고침 R2) | 통과 | integration4 ④, experiment_checks |
 | W05 | 스냅숏 저장 → 더 진행 → 열기 = 저장한 틱·해시·상태(처음부터 돌린 헤드리스 세계와 비교), 이어 돌려도 같음. 비교 중 저장은 `-A`·`-B` 두 파일 | 통과 | integration4 ⑤ |
 | W06 | 화면은 시뮬레이션을 바꾸지 않음: 패널을 모두 붙인 채 실제 프레임(64배)·`step_ticks` 로 진행해도 역사 해시·상태 배열이 헤드리스와 같음(혼자·비교 A·B, 연대기 클릭 뒤에도) | 통과 | integration4 ①②③⑤, lab_checks, chronicle_checks, graph_checks, ui_driver ⑤⑥ |
 | W07 | 최소 창 1280×720·자리 모두 펼침에서 배치가 창 안(정보 창 오른쪽 끝 = 창 끝, 아래 자리 = 왼쪽 자리 + 지도), 비교 지도 한 칸 ≥ 320×400, 조작 도움말이 A 칸 안, 가장 긴 위쪽 막대 ≤ 1280 | 통과(통합 때 고침) | lab_checks `_fits_window`·`_compare_layout`·`_docks`, ui_driver 1280 |

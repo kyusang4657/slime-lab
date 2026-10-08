@@ -1,10 +1,10 @@
 extends RefCounted
 ## Experiment(세계 + 기록기) 검사: 화면 쪽 기록·내보내기가 헤드리스 실행기와 같은 결과를 낸다.
 ## record.every 의 배수 틱, 배수가 아닌 틱(내보낼 때 끝 줄), 멸종해 저절로 멈춘 틱(멸종한 틱의 줄) 모두.
-## 실험 이름(바꾼 값을 짧게 — 값만 다른 두 실험도 이름이 갈림).
+## 실험 이름(바꾼 값을 짧게 — 값만 다른 두 실험도 이름이 갈림). 멸종한 뒤에는 기록하지 않음(비교 모드의 멸종한 쪽도 실행기와 같음).
 
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 49
+const MIN_CHECKS := 60
 const TICKS := 400
 ## record.every(20)의 배수가 아닌 내보내기 틱과, 그 뒤 기록이 그대로인지 보려고 더 진행할 틱(배수)
 const ODD_TICKS := 407
@@ -14,6 +14,10 @@ const DT := 1.0 / 60.0
 const EXTINCT_PRESET := "no_resources"
 const EXTINCT_SEED := 1
 const EXTINCT_FRAMES := 4000
+## 멸종해 멈춘 뒤 다시 재생해 더 진행할 틱(record.every 의 배수를 여럿 지나게)
+const AFTER_EXTINCT := 100
+## 비교 모드: A(살아남음)·B(멸종) 를 이 틱까지(record.every 의 배수 — A 는 끝 줄 없이 실행기 --max-ticks 와 같음)
+const COMPARE_TICKS := 300
 ## 임시 폴더(프로세스마다 따로 — 다른 검사 실행과 섞이지 않게, 처음과 끝에 지움: 앞 실행이 남긴 파일이 내보내기
 ## 회귀를 가리지 않게)
 var tmp := "user://test_experiment-%d" % OS.get_process_id()
@@ -75,6 +79,8 @@ func run(t) -> void:
 	t.check(lab.experiments[0].recorder.timeseries_csv() == run_csv, "실험실을 거친 기록 = 실행기 결과")
 	lab.recorded.disconnect(count_rows)
 	await _extinct(t, lab, root)
+	_extinct_fast(t, lab)
+	_compare_extinct(t, lab, root)
 	lab.queue_free()
 	await t.frames(1)
 	_clean_dir(root)
@@ -135,6 +141,59 @@ func _extinct(t, lab: LabMain, root: String) -> void:
 			"멸종한 실험의 chronicle.csv 도 같음")
 	var sm = JSON.parse_string(FileAccess.get_file_as_string(dir.path_join("summary.json")))
 	t.check(typeof(sm) == TYPE_DICTIONARY and int(sm.extinct_tick) == et and int(sm.population) == 0, "요약: 멸종 틱 %d·개체 0" % et)
+	# 멸종해 멈춘 뒤 다시 재생하면 빈 세계는 진행하지만 기록은 멸종한 틱에서 끝(실행기의 끝 줄) — 내보내도 같은 CSV
+	var n0 := x.rows().size()
+	lab.step_ticks(AFTER_EXTINCT)
+	t.check(w.tick == et + AFTER_EXTINCT and x.rows().size() == n0 and x.tail_row().is_empty(),
+			"멸종 뒤 %d틱 더 진행해도 기록 그대로(%d줄 / %d줄)·끝 줄 없음" % [AFTER_EXTINCT, x.rows().size(), n0])
+	var dir2 := root.path_join("extinct_lab_after")
+	t.check(lab.export_csv(dir2) == "" and FileAccess.get_file_as_string(dir2.path_join("timeseries.csv")) == run_csv,
+			"멸종 뒤 더 진행하고 내보낸 timeseries.csv 도 실행기 결과와 같음")
+
+
+## 빨리 감기(한 프레임에 예산만큼 여러 틱)에서도 멸종한 틱에서 멈춤 — 프레임의 남은 틱을 돌지 않음(4단계 최종 점검: 예전엔
+## 멸종한 다음 틱까지 가서 멈출 수 있었음, 예산·기계 빠르기에 따라). 다시 재생하면 빈 세계가 진행.
+func _extinct_fast(t, lab: LabMain) -> void:
+	t.check(lab.new_experiment(EXTINCT_PRESET, {}, EXTINCT_SEED) == "", "멸종 실험(빨리 감기)")
+	lab.set_paused(false)
+	lab.set_fast_forward(true)
+	var frames := 0
+	var many := false
+	while not lab.is_paused() and frames < EXTINCT_FRAMES:
+		many = lab.advance_frame(DT) > 1 or many
+		frames += 1
+	var w := lab.world
+	t.check(many and lab.is_paused() and w.extinct_tick > 0 and w.tick == w.extinct_tick,
+			"빨리 감기(한 프레임 여러 틱 %s)에서도 멸종한 틱 %d 에서 멈춤(틱 %d)" % [many, w.extinct_tick, w.tick])
+	lab.set_paused(false)
+	var n := lab.advance_frame(DT)
+	t.check(n >= 1 and w.tick == w.extinct_tick + n and lab.is_paused() == false, "멸종해 멈춘 뒤 다시 재생하면 빈 세계가 진행(%d틱)" % n)
+	lab.set_fast_forward(false)
+	lab.set_paused(true)
+
+
+## 비교 모드에서 한쪽(B)만 멸종: 그쪽은 멸종한 틱 뒤로 기록하지 않아 B/timeseries.csv = 실행기(멸종에서 멈춤),
+## 살아남은 A/ 는 그 틱까지의 실행기(4단계 최종 점검: 예전엔 B 가 개체 0 줄을 계속 쌓아 221, 240, …, 300 줄까지 기록).
+func _compare_extinct(t, lab: LabMain, root: String) -> void:
+	var err := lab.start_compare({preset = "default", seed = 42}, {preset = EXTINCT_PRESET, seed = EXTINCT_SEED})
+	t.check(err == "" and lab.is_comparing(), "비교 모드(A 기본 · 씨앗 42 | B %s · 씨앗 %d): %s" % [EXTINCT_PRESET, EXTINCT_SEED, err])
+	if not lab.is_comparing():
+		return
+	lab.step_ticks(COMPARE_TICKS)
+	var b := lab.experiment(1)
+	var et := b.world.extinct_tick
+	var last_b: Dictionary = b.rows().back()
+	t.check(et > 0 and et < COMPARE_TICKS and int(last_b.tick) == et and b.world.tick == COMPARE_TICKS,
+			"B 는 틱 %d 에 멸종, 기록은 그 틱에서 끝(마지막 줄 틱 %s, 세계는 틱 %d)" % [et, str(last_b.tick), b.world.tick])
+	var dir := root.path_join("compare_lab")
+	t.check(lab.export_csv(dir) == "", "비교 모드 내보내기")
+	var run_a := _runner(t, root.path_join("compare_runner_a"), "default", 42, COMPARE_TICKS)
+	var run_b := _runner(t, root.path_join("compare_runner_b"), EXTINCT_PRESET, EXTINCT_SEED, -1)
+	var csv_a := FileAccess.get_file_as_string(dir.path_join("A/timeseries.csv"))
+	var csv_b := FileAccess.get_file_as_string(dir.path_join("B/timeseries.csv"))
+	t.check(csv_a != "" and csv_a == run_a, "A/timeseries.csv = 실행기(--max-ticks=%d) 결과(%d / %d 글자)" % [COMPARE_TICKS, csv_a.length(), run_a.length()])
+	t.check(csv_b != "" and csv_b == run_b, "멸종한 B/timeseries.csv = 실행기(멸종에서 멈춤) 결과(%d / %d 글자)" % [csv_b.length(), run_b.length()])
+	lab.stop_compare()
 
 
 ## 실험 이름: 바꾼 값을 짧게(세 주요 값 = 짧은 이름, 나머지 = 키=값), 최대 lab.label_max_overrides 개 + "외 K개".
@@ -152,6 +211,15 @@ func _labels(t) -> void:
 	var plain := Experiment.default_label("default", {}, 1)
 	t.check(plain.ends_with(" · 씨앗 1") and plain.count(" · ") == 1, "바꾼 값이 없으면 \"예설정 · 씨앗 N\": \"%s\"" % plain)
 	t.check(Experiment.overrides_brief(many, 0) == "바꾼 값 %d개" % many.size(), "한도 0 이면 \"바꾼 값 K개\"")
+	# 수 표기 = 파라미터 패널 입력 칸(ParamPanel.format_value): 긴 실수도 줄이지 않고, 정수 키는 정수로(4단계 최종 점검:
+	# 예전 String.num 은 0.123456789012345 를 0.12345678901234 로)
+	var long_v := 0.123456789012345
+	var dv := Experiment.describe_value("mutation.rate", long_v)
+	t.check(dv == "돌연변이 " + ParamPanel.format_value("mutation.rate", long_v) and dv.ends_with("0.123456789012345"),
+			"이름표의 실수 = 입력 칸 표기: \"%s\"" % dv)
+	t.check(Experiment.describe_value("population.initial", 150.0) == "개체 150" and Experiment.describe_value("plants.regrow", 0.5) == "plants.regrow=0.5"
+			and Experiment.describe_value("brain.policy", "argmax") == "brain.policy=argmax",
+			"정수 키는 정수, 고급 키는 키=값, 글은 따옴표 없이")
 	# 비교 모드: A·B 가 다른 키를 먼저(같은 고급 키가 많아 한도를 넘어도 이름이 갈림)
 	var sa := {"brain.hidden": 12, "plants.regrow": 0.5, "time.day_ticks": 50, "time.season_days": 3}
 	var sb := sa.duplicate()

@@ -76,6 +76,8 @@ class MapPane:
 	var fit_key := ""
 	## 실험 이름 전체(title.text 는 폭에 맞춰 줄인 글일 수 있음 — 예설정 이름만 줄이고 " · 씨앗 N …" 은 남김)
 	var full_title := ""
+	## 비교 모드에서 A·B 의 씨앗이 같음(줄일 때 씨앗 대신 A·B 를 가르는 첫 바꾼 값을 남김)
+	var seed_shared := false
 	var width := 0.0
 
 
@@ -723,7 +725,7 @@ func advance_frame(delta: float) -> int:
 			while true:
 				_step_once()
 				n += 1
-				if float(Time.get_ticks_usec() - t0) + _step_us_est > ff_us:
+				if _extinction_stop() or float(Time.get_ticks_usec() - t0) + _step_us_est > ff_us:
 					break
 			# 빨리 감기 프레임은 "지금 틱의 끝"(alpha 1)을 그린다. 멈추거나 보통 속도로 돌아가도 그 자리에서 이어지게 1.
 			_acc = 1.0
@@ -743,6 +745,10 @@ func advance_frame(delta: float) -> int:
 				_step_once()
 				_acc -= 1.0
 				n += 1
+				if _extinction_stop():
+					# 멸종한 틱에서 멈춘다(아래 _on_extinct). 남은 몫은 버림 — 다시 재생하면 그 자리에서
+					_acc -= floorf(_acc)
+					break
 			progress = float(n) + _acc - acc0
 	last_sim_ms = float(Time.get_ticks_usec() - t0) / USEC_PER_MS
 	var alpha := clampf(_acc, 0.0, 1.0)
@@ -801,6 +807,18 @@ func _on_extinct(k: int) -> void:
 	if _all_extinct() and bool(UiConfig.value("lab.pause_on_extinction", true)) and not _paused:
 		set_paused(true)
 		_extinct_paused = true
+
+
+## 이 틱에서 모든 실험이 멸종했고(아직 알리지 않은 멸종이 있음) lab.pause_on_extinction 이면 true — 프레임의 남은 틱을 돌지 않고
+## 멸종한 틱에서 멈추게(4단계 최종 점검: 한 프레임에 여러 틱을 돌 때 멸종한 다음 틱까지 가서 멈출 수 있었음, 예산에 따라 달라짐).
+## 멸종해 멈춘 뒤 다시 재생하면(모두 알렸음) 빈 세계가 계속 진행한다.
+func _extinction_stop() -> bool:
+	if not _all_extinct() or not bool(UiConfig.value("lab.pause_on_extinction", true)):
+		return false
+	for k in experiments.size():
+		if k >= _extinct_seen.size() or not _extinct_seen[k]:
+			return true
+	return false
 
 
 func _all_extinct() -> bool:
@@ -1639,6 +1657,7 @@ func _update_titles() -> void:
 		var p := _panes[k]
 		p.tag.visible = is_comparing()
 		p.full_title = experiments[k].label if is_comparing() else _title
+		p.seed_shared = is_comparing() and experiments[0].seed_value == experiments[1].seed_value
 		p.title.text = p.full_title
 		p.fit_key = ""
 	_layout_maps()
@@ -1684,11 +1703,11 @@ func _layout_maps() -> void:
 
 ## 표지 폭 맞춤: 실험 이름 = min(한 줄 폭, 지도 폭 − 양쪽 여백 − 이름표·표지·단추 몫). 넘치면 예설정 이름만 "…" 로 줄이고
 ## " · 씨앗 N · 바꾼 값" 꼬리는 남긴다(4단계 검토 G33 — 예전엔 끝을 잘라 1280 창 비교에서 씨앗만 다른 두 지도의 이름이 같아 보였음,
-## 그래프 범례와 같은 나눔 `GraphPanel.split_name`). 꼬리도 안 들어가면 예설정 이름을 빼고 꼬리 끝을 줄이되 씨앗까지는 남기고,
-## 그것도 안 들어가면 끝을 자름. 조건이 바뀔 때만 잰다.
+## 그래프 범례와 같은 나눔 `GraphPanel.split_name`). 꼬리도 안 들어가면 예설정 이름을 빼고 꼬리를 줄인다(fit_tail — 두 지도를
+## 가르는 몫은 남김). 그것도 안 들어가면 끝을 자름. 조건이 바뀔 때만 잰다.
 func _fit_title(p: MapPane) -> void:
-	var key := "%s|%s|%s|%s|%s|%s|%s|%.0f" % [p.full_title, p.tag.visible, p.paused.visible, p.extinct.visible, p.extinct.text,
-			p.north.visible, p.north.text, p.width]
+	var key := "%s|%s|%s|%s|%s|%s|%s|%s|%.0f" % [p.full_title, p.seed_shared, p.tag.visible, p.paused.visible, p.extinct.visible,
+			p.extinct.text, p.north.visible, p.north.text, p.width]
 	if key == p.fit_key or not p.title.is_inside_tree():
 		return
 	p.fit_key = key
@@ -1713,19 +1732,43 @@ func _fit_title(p: MapPane) -> void:
 				n -= 1
 			short = mid.left(n).strip_edges() + ell + tail
 		else:
-			# 꼬리(씨앗 + 바꾼 값)도 길면 예설정 이름을 빼고 꼬리 끝을 줄임 — 씨앗까지는 늘 보임: "… · 씨앗 2 · 돌연…"
-			var seed_end := tail.find(" · ", GraphPanel.SEED_MARK.length())
-			var keep := tail.length() if seed_end < 0 else seed_end
-			var m := tail.length()
-			while m > keep and float(wid.call(ell + tail.left(m).strip_edges(false, true) + ell)) > room:
-				m -= 1
-			if float(wid.call(ell + tail.left(m).strip_edges(false, true) + ell)) <= room:
-				short = ell + tail.left(m).strip_edges(false, true) + ell
+			short = fit_tail(tail, room, wid, p.seed_shared)
 		if short != "":
 			p.title.text = short
 			natural = wid.call(short)
 	p.title.custom_minimum_size.x = minf(natural, room)
 	p.head.reset_size()
+
+
+## 꼬리(" · 씨앗 N · 바꾼 값 …")만으로도 넘칠 때의 짧은 이름: 예설정 이름을 빼고 "… · " + 꼬리, 넘치면 꼬리 끝을 "…" 로 줄이되
+## 첫 몫(두 지도를 가르는 몫)은 남김. 첫 몫 = 씨앗, 단 seed_shared(비교 모드에서 A·B 씨앗이 같음)면 씨앗을 빼고 첫 바꾼 값
+## (비교 모드 이름은 A·B 가 다른 키를 먼저 적음 — Experiment.default_label). 첫 몫도 길면 값은 두고 이름을 줄임
+## ("… · 돌연… 0.08", "… · plants.re…=0.5" — 4단계 최종 점검: 예전엔 씨앗을 남기고 값을 잘라 값만 다른 두 지도가
+## 둘 다 "… · 씨앗 1 · 돌연…"). 어느 것도 안 들어가면 ""(끝을 자름). wid = 글 → 그린 폭.
+static func fit_tail(tail: String, room: float, wid: Callable, seed_shared: bool) -> String:
+	var ell := GraphPanel.ELLIPSIS
+	var parts := tail.trim_prefix(" · ").split(" · ")
+	if seed_shared and parts.size() > 1:
+		parts.remove_at(0)
+	var lead := ell + " · "
+	var body := " · ".join(parts)
+	if float(wid.call(lead + body)) <= room:
+		return lead + body
+	for m in range(body.length() - 1, parts[0].length() - 1, -1):
+		var s := lead + body.left(m).strip_edges(false, true) + ell
+		if float(wid.call(s)) <= room:
+			return s
+	# 첫 몫 "이름 값"(짧은 이름) 또는 "키=값": 값은 두고 이름 끝을 줄임
+	var first := parts[0]
+	var i := first.find(" ")
+	var j := first.find("=")
+	var cut := i if j < 0 or (i >= 0 and i < j) else j
+	if cut > 0:
+		for n in range(cut - 1, -1, -1):
+			var s := lead + first.left(n) + ell + first.substr(cut)
+			if float(wid.call(s)) <= room:
+				return s
+	return ""
 
 
 ## 조작 도움말(왼쪽 아래): 접기 단추 옆에 한 줄이 들어가면 한 줄, 아니면 마우스·키 두 줄, 그래도 넘치면 키 줄을 나눈

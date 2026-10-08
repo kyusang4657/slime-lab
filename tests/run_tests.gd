@@ -90,6 +90,27 @@ func world(sets: Dictionary = {}, seed_value: int = 1, preset: String = "default
 	return wd
 
 
+## 검사용 임시 폴더(사용자 폴더 아래, 프로세스마다 따로 — 다른 실행과 섞이지 않게). 앞 실행이 남긴 것은 지우고 돌려준다
+## (쓰는 검사가 끝에 remove_tree 로 지움 — 4단계 최종 점검: 예전엔 user://test_snap·test_runner 가 실제 사용자 폴더에 남았음).
+func tmp_dir(name: String) -> String:
+	var dir := ProjectSettings.globalize_path("user://%s-%d" % [name, OS.get_process_id()])
+	remove_tree(dir)
+	return dir
+
+
+## 폴더를 통째로 지운다(숨은 .gdignore·.bak 까지).
+static func remove_tree(abs_dir: String) -> void:
+	var d := DirAccess.open(abs_dir)
+	if d == null:
+		return
+	d.include_hidden = true
+	for sub in d.get_directories():
+		remove_tree(abs_dir.path_join(sub))
+	for f in d.get_files():
+		DirAccess.remove_absolute(abs_dir.path_join(f))
+	DirAccess.remove_absolute(abs_dir)
+
+
 ## 슬라임 없는 작은 세계(규칙 단위 검사용).
 func empty_world(sets: Dictionary = {}) -> SimWorld:
 	var s := {"population.initial": 0}
@@ -727,12 +748,9 @@ func test_snapshot_roundtrip() -> void:
 
 
 func test_snapshot_files() -> void:
-	var dir := ProjectSettings.globalize_path("user://test_snap")
+	var dir := tmp_dir("test_snap")
 	DirAccess.make_dir_recursive_absolute(dir)
 	var path := dir.path_join("exp.json")
-	for f in [path, path + ".bak", path + ".broken", path + ".tmp"]:
-		if FileAccess.file_exists(f):
-			DirAccess.remove_absolute(f)
 	var wd := world({}, 5)
 	wd.step_n(100)
 	check(SimSnapshot.save_file(wd, path) == "", "저장 성공")
@@ -750,6 +768,8 @@ func test_snapshot_files() -> void:
 	DirAccess.remove_absolute(path + ".bak")
 	var l3 := SimSnapshot.load_file(path)
 	check(l3.status == "failed" and l3.world == null, "백업도 없으면 실패를 알림")
+	remove_tree(dir)
+	check(not DirAccess.dir_exists_absolute(dir), "끝나면 임시 폴더를 지움(%s)" % dir)
 
 
 func test_runner() -> void:
@@ -758,7 +778,7 @@ func test_runner() -> void:
 	check(bad.has("error"), "잘못된 씨앗 인자 거부")
 	check(runner.parse_args(PackedStringArray(["--seed=1"])).has("error"), "--out 없으면 거부")
 	check(runner.parse_args(PackedStringArray(["--out=x", "--모름"])).has("error"), "알 수 없는 인자 거부")
-	var dir := ProjectSettings.globalize_path("user://test_runner")
+	var dir := tmp_dir("test_runner")
 	var a: Dictionary = runner.parse_args(PackedStringArray(["--seed=3", "--generations=3", "--out=" + dir, "--quiet", "--set=mutation.rate=0.07"]))
 	check(not a.has("error") and a.sets["mutation.rate"] == 0.07, "인자 해석")
 	a.silent = true
@@ -777,6 +797,8 @@ func test_runner() -> void:
 	var bad_cfg: Dictionary = runner.parse_args(PackedStringArray(["--out=" + dir, "--set=없는.키=1", "--quiet"]))
 	bad_cfg.silent = true
 	check(runner.run(bad_cfg) == 2, "설정 오류 코드 2")
+	remove_tree(dir)
+	check(not DirAccess.dir_exists_absolute(dir), "끝나면 임시 폴더를 지움(숨은 .gdignore 까지, %s)" % dir)
 
 
 func test_extinction_no_resources() -> void:
