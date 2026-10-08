@@ -81,7 +81,7 @@ xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1280x720 --sc
 
 실험실 조작: 끌기 = 이동, 휠 = 확대·축소, 오른쪽 끌기 = 회전, 클릭 = 슬라임 고르기(비교 모드에서는 누른 지도의 실험) · 스페이스 = 멈춤, 1~7 = 속도(1·2·4·8·16·32·64배), F = 따라가기, Home(또는 0) = 모든 지도 전체 보기(지도 위 "전체 보기" = 그 지도만), Esc = 선택 해제. 글 칸(씨앗·숫자)에 입력 중이면 단축키는 동작하지 않고, Enter = 확정, Esc = 입력 취소. 그래프 위 마우스 = 값 읽기, 연대기 줄 클릭 = 그 시점·행위자. 위쪽 막대 오른쪽에 "목표 N배 / 실제 M배"(따라가면 정확히 목표 배속, 시뮬레이션이 프레임 예산에 걸리거나 화면이 아주 느려 실제가 목표의 90% 아래면 경고 색). 개체가 모두 죽으면 그 순간 멈추고 지도 위에 "멸종 · 틱 N" 을 남깁니다(다시 재생하면 빈 지도가 계속).
 
-실행기 선택 인자: `--preset=default|abundant|harsh_winter|fast_civ|demo_fast|no_resources`(`fast_civ` = 연구용, 발견이 진화 도중에 열리고 씨앗 1~12 모두 100세대 안에 농사 — 근거 [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md); `demo_fast` = 시연·검사용, 2세대 안팎에 농사), `--set=mutation.rate=0.08`(여러 번), `--max-ticks=N`, `--no-lineage`, `--snapshot-every=N`, `--resume=스냅숏.json`, `--quiet`.
+실행기 선택 인자: `--preset=default|abundant|harsh_winter|fast_civ|demo_fast|no_resources`(`fast_civ` = 연구용, 씨앗 12개 중 11개는 발견이 진화 도중에 열리고(씨앗 7 은 첫 세대 폭발로 2세대 안에 셋 다 열림) 씨앗 1~12 모두 100세대 안에 농사(중앙값 15.9세대) — 근거 [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md); `demo_fast` = 시연·검사용, 씨앗 1~12 의 농사 중앙값 약 2세대(기본 씨앗 1 은 약 22세대·1,640틱)), `--set=mutation.rate=0.08`(여러 번), `--max-ticks=N`, `--no-lineage`, `--snapshot-every=N`, `--resume=스냅숏.json`, `--quiet`.
 
 결과 폴더: `summary.json`(설정·끝난 이유·발견 시각·역사 해시), `timeseries.csv`(20틱마다), `chronicle.csv`(연대기), `lineage.csv`(모든 개체의 부모·세대·특성), `final.snapshot.json`(이어 돌리기·화면에서 열기).
 

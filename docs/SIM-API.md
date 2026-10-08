@@ -12,6 +12,7 @@
 | `world.step()` / `world.step_n(n)` | 1틱 / n틱 진행 |
 | `SimSnapshot.save_file(world, path) -> String` | 저장(성공 `""`) |
 | `SimSnapshot.load_file(path) -> {world, status, error}` | 불러오기(`status`: loaded·backup·failed) |
+| `SimSnapshot.to_text(world) -> String` · `SimSnapshot.from_text(text) -> {world, error}` | 스냅숏 글(웹 내려받기)과 그 글에서 만든 세계 **사본**(화면이 내보낼 끝 줄을 사본의 `sample()` 로 — 진행 중 세계는 그대로) |
 | `SimRecorder.new()`, `rec.record(world)`, `rec.write_all(dir, world, extra, with_lineage)` | 시계열 기록과 결과 폴더 쓰기(헤드리스와 같은 형식) |
 
 ## 읽기 전용 질의
@@ -56,8 +57,10 @@
 | `SimBrain.ACT_*`(`ACT_EAT`·`ACT_GATHER`·`ACT_PLANT` 등) | 행동 번호(`s_last_action` 값) |
 | `SimBrain.BASE_INPUTS`, `SimBrain.BASE_OUTPUTS` | 기억 뉴런을 빼 기본 입력(12)·출력(8) 수 |
 | `SimWorld.STAGE_*`, `SimWorld.NO_PARENT`, `SimWorld.SEASON_COUNT` | 문명 단계 번호, 부모 없음(-1), 계절 수 |
+| `SimConfig.defaults()`, `SimConfig.get_value(cfg, dotted)`, `SimConfig.deep_equal(a, b)`, `SimConfig.load_json(path)`, `SimConfig.DEFAULTS_PATH` | 기본값의 깊은 사본, 점 이름(`"mutation.rate"`)으로 값 읽기(없으면 null), 깊은 비교, JSON 파일 읽기(없거나 깨지면 null), 기본값 파일 경로(ParamPanel 이 정수 키를 가리려 글자로 읽음). 모두 읽기만 |
+| `rec.rows`(기록기 `SimRecorder` 의 멤버) | 지금까지 기록한 줄(`SimRecorder.TIMESERIES_COLUMNS` 키 사전의 Array). 기록기를 가진 Experiment 밖에서는 **읽기만**(Experiment `rows()` 가 그대로 내줌 — 그래프가 읽음) |
 
-`tools/test_repo_rules.py` 가 `scripts/view`·`scripts/ui` 에서 `world.<이름>`·`_world.<이름>` 으로 쓰는 멤버가 모두 이 문서에 있는지 검사합니다.
+`tools/test_repo_rules.py` 가 `scripts/view`·`scripts/ui` 에서 시뮬레이션에 닿는 이름이 모두 이 문서에 있는지 검사합니다: `world.<이름>`·`_world.<이름>`, 사슬(`lab.world.<이름>`·`experiments[k].world.<이름>`), 세계를 가리키는 변수(`SimWorld` 로 적은 변수·인자, `var w := x.world`)의 `w.<이름>`, 기록기(`SimRecorder`)의 멤버, `Sim*.<이름>` 정적 이름(주석·문자열은 뺌). 같은 검사가 화면이 세계를 바꾸지 않는지도 봅니다(세계 멤버에 대입·`append` 같은 고치는 호출·`step`/`setup`/`sample`/`drain_events` 호출 — 진행·기록(`sample`)은 Experiment, `drain_events` 는 LabMain 만).
 
 ## 두뇌·유전체
 

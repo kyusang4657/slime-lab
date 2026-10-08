@@ -10,14 +10,21 @@ const MAGIC_EXEMPT: Array[String] = ["sim_config.gd"]
 ## 코드에 그대로 써도 되는 수
 const MAGIC_ALLOWED: Array[String] = ["0", "1", "2", "0.0", "1.0", "0.5", "2.0"]
 const FORBIDDEN_MATH: Array[String] = ["sin", "cos", "tan", "exp", "log", "pow", "tanh", "atan", "atan2", "randfn", "randf_range", "randi_range"]
-## 농사 도달 검사: 이 예설정·씨앗 조합 중 하나라도 평균 100세대 안에 농사(3단계)에 도달해야 한다.
+## 농사 도달 검사(S15): 이 예설정·씨앗 조합 중 하나라도 평균 100세대 안에 농사(3단계)에 도달해야 한다.
 ## 연구용 fast_civ 를 먼저 본다(씨앗 1: 3,321틱·평균 49.0세대에 농사 — docs/TUNING-fast_civ.md).
 ## 검사 전체는 4코어 컨테이너에서 약 20초(씨앗 1 농사까지 + 씨앗 2·3 채집까지).
 const FARM_PRESETS: Array[String] = ["fast_civ", "demo_fast", "default"]
 const FARM_SEEDS: Array[int] = [1, 2, 3]
 const FARM_GENERATIONS := 100.0
+## fast_civ 다시 맞춤의 목표는 S15 와 따로 검사한다(S15 는 demo_fast 로도 통과하므로): FARM_SEEDS 의 첫 씨앗이
+## fast_civ 그대로 평균 FARM_GENERATIONS 세대 안에 농사. 결정적이므로 문서에 적은 시각도 고정한다 —
+## 시뮬레이션·설정을 일부러 바꿨다면 다시 재서 이 두 값과 TUNING-fast_civ.md·TEST-REPORT(W11·6절)를 함께 고칠 것.
+const FAST_CIV_SEED1_FARM_TICK := 3321
+const FAST_CIV_SEED1_FARM_GEN := 49.0
 ## fast_civ 의 채집은 FARM_SEEDS 모두에서 진화 도중(이 평균 세대 이상)에 열려야 한다.
 ## 이전 값은 씨앗 1~3 이 4.35·0.22·0.49세대(첫 무작위 두뇌의 행동), 지금은 33.9·4.2·23.3세대.
+## 씨앗 1~3 만 본다: 씨앗 7 은 지금 값에서도 알려진 예외(채집·저장·농사 0.24·0.32·1.98세대 — 첫 세대 폭발,
+## TUNING-fast_civ.md "목표와 다른 점").
 const FAST_CIV_MIN_FORAGE_GEN := 2.0
 ## 성능 기록: 개체·틱당 마이크로초가 이 값의 두 배를 넘으면 실패(CI 기계 차이를 감안한 느슨한 상한).
 const PERF_TARGET_US := 25.0
@@ -820,6 +827,9 @@ func test_farm_reachable() -> void:
 	var fast_forage := {}
 	var found := ""
 	var tried := PackedStringArray()
+	# fast_civ 첫 씨앗의 농사 시각(-1 = 평균 FARM_GENERATIONS 세대 안에 못 함). 위 반복이 가장 먼저 돌리는 조합이라 시간이 더 들지 않음
+	var fast1_tick := -1
+	var fast1_gen := -1.0
 	for p in FARM_PRESETS:
 		for sd in FARM_SEEDS:
 			var wd := world({}, sd, p)
@@ -828,6 +838,9 @@ func test_farm_reachable() -> void:
 			tried.append("%s/씨앗%d: %s(평균 %.1f세대, t=%d)" % [p, sd, SimWorld.STAGE_NAMES[wd.stage], wd.mean_generation(), wd.tick])
 			if p == "fast_civ":
 				fast_forage[sd] = forage_gen.call(wd)
+				if sd == FARM_SEEDS[0] and wd.stage == SimWorld.STAGE_FARM:
+					fast1_tick = wd.discovery_tick[SimWorld.STAGE_FARM]
+					fast1_gen = wd.mean_generation()
 			if wd.stage == SimWorld.STAGE_FARM:
 				found = tried[tried.size() - 1]
 				break
@@ -837,6 +850,12 @@ func test_farm_reachable() -> void:
 	check(found != "", "평균 %d세대 안에 농사에 도달하는 예설정이 있음: %s" % [int(FARM_GENERATIONS), found])
 	if not FARM_PRESETS.has("fast_civ"):
 		return
+	# fast_civ 자체가 목표대로(S15 의 "아무 예설정" 과 따로 — demo_fast 가 농사해도 이것은 실패)
+	check(fast1_tick >= 0 and fast1_gen < FARM_GENERATIONS, "fast_civ 씨앗 %d 이 평균 %d세대 안에 농사: %s" % [FARM_SEEDS[0],
+			int(FARM_GENERATIONS), ("틱 %d·평균 %.1f세대" % [fast1_tick, fast1_gen]) if fast1_tick >= 0 else "못 함"])
+	check(fast1_tick == FAST_CIV_SEED1_FARM_TICK and absf(fast1_gen - FAST_CIV_SEED1_FARM_GEN) < 0.05,
+			"fast_civ 씨앗 %d 의 농사 시각이 문서 값과 같음(결정성): 틱 %d·평균 %.2f세대(문서 %d틱·%.1f세대)" % [FARM_SEEDS[0],
+			fast1_tick, fast1_gen, FAST_CIV_SEED1_FARM_TICK, FAST_CIV_SEED1_FARM_GEN])
 	# fast_civ: 채집이 첫 무작위 두뇌들의 행동으로 곧바로 열리지 않음(위에서 돌리지 않은 씨앗은 채집 발견까지만 진행)
 	var gens := PackedStringArray()
 	var all_late := true
