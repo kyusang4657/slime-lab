@@ -294,8 +294,43 @@ func run(t) -> void:
 - 줄을 누르면 `lab.request_cursor(tick)`, 행위자(`actor ≥ 0`)가 있으면 `lab.select_slime(actor, index)`.
 - `func item_count() -> int` · `func item_text(i) -> String`(검사용).
 
+**구현 메모(4단계, 연대기 담당이 덧붙임)**
+
+- 더한 멤버:
+
+  | 멤버 | 뜻 |
+  |---|---|
+  | `signal row_activated(tick: int, actor: int, index: int)` | 줄을 눌렀을 때(행위자 없으면 -1, 실험 번호). LabMain 없이도 받을 수 있게(비교 모드 검사) |
+  | `func set_experiments(list: Array)` | `experiments_changed` 와 같음: 각 `world.chronicle` 을 처음부터 읽어 **우리 사본** 줄로(연대기 사전은 고치지 않음, 검사). `bind_lab` 도 지금 실험을 바로 이것으로 읽음 |
+  | `func append_events(index: int, list: Array)` | `events_tagged` 와 같음: 새 사건만 덧붙임. 그 실험을 마지막으로 다시 읽은 틱 **이하**의 사건은 이미 연대기에 있으므로 건너뜀(아직 비우지 않은 사건이 다시 읽은 뒤에 와도 두 번 들어가지 않음) |
+  | `func set_filter(id)` · `filter()` · `const FILTER_*`(0 전체 · 1 발견 · 2 건물 · 3 밭 잃음 · 4 세대 · 5 멸종) · `const GROUP_OF`(kind → 묶음) | 거르기. 모르는 kind 는 전체에만 |
+  | `func activate_item(i)` | 줄을 누른 것과 같음 |
+  | `item(i) -> {tick, kind, actor, text, gen, index, group}` · `older_count()` · `group_count(id)` · `item_tooltip(i)` · `item_rect(i)`(전역) · `scroll_to_item(i)` · `list_stats() -> {drawn, shaped, height}` · `list_control()` · `var max_items`(바꾸면 `refresh()`) | 검사·캡처용 |
+  | `static wrap_text(font, text, fs, width, max_lines, ellipsis)` · `ellipsize(...)` · `group_color(g)` · `commas(v)` | 도움 함수 |
+
+- 배치(노드 이름 고정): `Head`(HBox: "연대기" 굵게 · 흐린 열 설명 "틱 · 평균 세대 · 사건 — 최신이 위" · `Filter` OptionButton) / `Card`(CardPanel) ⊃ `Rows`(목록 Control) | `Scroll`(VScrollBar). 폭 `ui.chronicle.width`, 자기 테마 = `UiTheme.build()`(실험실 뿌리와 같은 것 — 혼자 띄워도 같은 모양). 거르기 단추·목록은 초점을 받지 않음(스페이스 = 멈춤).
+- 목록 = **Control 하나가 보이는 줄만 그림**(300줄이어도 노드 9개, 검사). 줄 = 종류 색 띠(`ui.chronicle.stripe_width`) · [비교: A/B 이름표 — 테두리 = `ui.graph.series_a`/`series_b`] · "틱 N"(숫자 오른쪽 맞춤) · "G세대"(흐림 — 목록 안에서만 "평균" 을 줄임, 머리 줄·풍선 도움말·`item_text` 에는 있음) · 문장. 문장은 **낱말(빈칸) 단위로 접음**(ICU 줄바꿈은 한글 음절 사이 "남/은" 에서 끊어서 직접 접음, 한 낱말이 폭보다 길 때만 글자 단위), 최대 `ui.chronicle.text_max_lines` 줄 넘으면 말줄임, 풍선 도움말에 실험 이름·틱·평균 세대·문장 전체·누르면 하는 일. 줄마다 접은 결과를 사본 줄에 담아 두고 글 폭이 바뀔 때만 다시 접음(새 사건 하나 → 하나만, 검사). 열 폭(틱·세대)은 보이는 줄 가운데 가장 넓은 것.
+- 보이는 줄 = 실험마다(거르기 묶음의) 줄 끝에서 틱이 큰 것을 골라 `max_items` 개(O(max_items)). 같은 틱이면 뒤 실험(B)이 위(한 틱에 A 다음 B 를 진행). 넘치면 맨 아래 "더 오래된 K개는 생략 — 내보낸 chronicle.csv 에 모두 있음". 거르기 항목에 사건 수 "발견 (3)"(모든 실험 합, 색 견본 = 띠 색 — 범례 구실).
+- 스크롤: 막대는 늘 자리를 차지(나타났다 사라지며 글 폭이 바뀌어 다시 접히지 않게, 필요 없으면 투명). 휠 = `ui.chronicle.wheel_step_px`. 읽던 중(맨 위가 아닐 때) 새 줄이 위에 붙으면 읽던 줄이 제자리(검사), 맨 위를 보고 있었으면 새 줄이 보임.
+- 고른 줄(누른 줄)은 강조(`ItemList` 의 selected 상자), 거르기를 바꿨다 와도 유지(그래프 시점 표시와 맞게), 실험이 바뀌면 지움. 행위자 고르기: LabMain 의 `select_slime` 이 실험 번호를 받으면(인자 2개) `select_slime(actor, index)`, 3단계처럼 id 하나만 받으면 A(0) 의 줄만 고름(B 의 id 를 A 세계에서 고르면 다른 개체).
+- 띠 색 `ui.chronicle.colors`(묶음별: `discovery` 민트 = 테마 강조 · `building` 파랑 · `farm_lost` 주황 = 경고 · `milestone` 회청 · `extinction` 빨강 = 위험 · `other`). 어두운 바탕(#15181d)에서 색각 이상 모의 모든 쌍 ΔE ≥ 9.8, 빨강·주황(위험·경고 뜻 색)은 정상 시각 ΔE 14.8 — 색만으로 구별하지 않고 문장이 종류를 말함. 글자 크기 = `ui.chronicle.text_font_size`(문장)·`ui.lab.font_size_small`(틱·세대), 여백 `row_pad_v`·`col_gap`·`badge_pad_h`·`badge_radius`, 견본 `swatch_px`.
+- 캡처: `xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/chronicle_capture.gd -- --out=폴더 [--extra]` → `chronicle.png`(demo_fast·씨앗 1·세대 이정표 10세대마다, 2,130틱 — 발견 3·저장고 4·첫 밭·밭 잃음 3·세대 2. 왼쪽 420×220 = 아래 자리 높이, 첫 밭 줄을 누른 상태 / 오른쪽 420×300). `--extra`: `chronicle-compare`(A/B)·`chronicle-filter`(건물)·`chronicle-filter-farm`·`chronicle-limit`(max_items 6)·`chronicle-empty`.
+- 검사 `tests/view/chronicle_checks.gd`: 다시 읽기·순서·글·중복 없음·덧붙이기·거르기(단추 포함)·연대기 그대로·400개에서 300줄 + "더 오래된 100개"·노드 수·보이는 줄만 그림·새 줄만 접음·읽던 줄 제자리·긴 문장 말줄임·풍선 도움말·휠·고른 줄 유지·크기, 비교 모드는 `Experiment` 둘을 `set_experiments([A, B])`·`append_events(1, …)` 로(A/B 머리·틱 순 섞기·같은 틱이면 B 위·`row_activated(틱, 행위자, 1)`·실제 마우스 클릭), 실험실 연결(`bind_lab` 두 번에도 한 번씩 · `advance_frame` 의 `events_tagged` · 마우스로 첫 밭 줄 → `request_cursor` + 그 개체 선택 · 역사 해시 그대로), 낱말 단위 줄바꿈.
+
 ## LabSound — `scripts/ui/lab_sound.gd` (`class_name LabSound`, Node)
 
 - 실행 중 파형 합성(사인·삼각, 감쇠 포락선, 16비트 `AudioStreamWAV`) — 외부 음원 없음, CC0 로 CREDITS 에.
 - 소리: 발견(두세 음 차임), 멸종(낮은 음), 저장고 건설(짧은 톡). `func play_event(kind) -> bool`, `var enabled`(`ui.sound.enabled`), 음량 `ui.sound.volume_db`, 같은 소리 최소 간격 `ui.sound.min_interval_s`(빨리 감기에서 몰려도 시끄럽지 않게).
 - `func bind_lab(lab)` — `events_tagged` 를 받아 재생. `static func synth(kind: String) -> AudioStreamWAV`(검사: 길이·최댓값·NaN 없음·같은 입력이면 같은 바이트).
+
+**구현 메모(4단계, 소리 담당이 덧붙임)**
+
+- 합성(`synth(sound)` — 부를 때마다 새로, 같은 설정이면 같은 바이트): 음마다 사인 + 약한 배음(`harmonics` = 1·2·3배음 세기), 올림 `attack_s` 뒤 `exp(−decay_per_s·t)`, 음높이 `hz` → `hz_end` 를 `glide_s` 동안 지수 미끄럼(위상을 샘플마다 쌓아 끊김 없음). 소리 전체에 처음 `ui.sound.fade_s`·끝 `release_s` 의 사인 제곱 덮개 → 처음·끝 샘플 0(딸깍 없음), 최댓값을 `peak`(≤ 0.8 FS)로 맞춰 16비트 모노 `ui.sound.mix_rate`(22050 Hz), 반복 없음. 난수 없음.
+  - 발견 `ui.sound.discovery`: G5·C6·E6(784·1047·1319 Hz) 세 음이 0.085초 간격으로 오르는 차임, 0.95초, 최댓값 0.6.
+  - 멸종 `ui.sound.extinction`: 220 → 110 Hz 로 1초 동안 내려가는 낮은 음, 1.15초, 최댓값 0.6.
+  - 저장고 `ui.sound.store_built`: 1050 → 620 Hz 로 0.03초 만에 떨어지는 짧은 "톡", 0.16초, 최댓값 0.42(자주 나서 작게).
+  - `func synth_samples(sound) -> PackedFloat32Array`(−1~1 샘플, 검사용), `const SOUNDS`·`SOUND_OF`(kind → 소리: `first_farm` = 저장고 소리, 밭 잃음·세대는 소리 없음)·`PRIORITY`.
+- 노드: 재생기(`AudioStreamPlayer`) `ui.sound.players` 개를 자식으로, 쉬는 것부터(모두 바쁘면 차례로). `_ready` 에서 세 소리를 미리 만듦(이 기계에서 합쳐 약 66ms, 한 번). `enabled = false` 면 내던 소리도 멈춤, `volume_db` 를 바꾸면 모든 재생기에. 트리를 떠날 때 멈춤(오디오 서버가 재생을 붙든 채 끝나지 않게).
+- `play_event(kind)` = `play_event_at(kind, 지금 초)`: 꺼짐·소리 없는 종류·트리 밖·같은 소리(종류가 아니라 소리 이름 기준)를 `min_interval_s` 안에 다시 → false. `play_event_at` 은 시각을 받아 검사가 시계 없이 최소 간격을 확인. `play_events(list)`: 한 묶음(한 프레임의 사건)에서 가장 중요한 소리 하나만(멸종 > 발견 > 저장고) — `bind_lab` 이 `events_tagged`(A·B 모두)에 이것을 연결. `var plays`·`last_sound`·`player_count()`(검사용).
+- 들어 보기: `godot --headless --path . --script res://tools/render_sounds.gd -- --out=폴더` → `discovery.wav`·`extinction.wav`·`store_built.wav`(저장소에 넣지 않음)와 길이·최댓값·처음/끝 샘플 출력.
+- 검사 `tests/view/sound_checks.gd`: 소리마다 16비트 모노·표본율·길이 0.15~1.2초·최댓값 ≤ 0.8 FS 이고 들림·NaN/inf 없음·처음/끝 샘플 0 근처·처음/끝 1ms 가 서서히·다시 만들어도 같은 바이트, 발견이 멸종보다 높고 멸종은 내려감(영점 교차), 최소 간격·같은 소리를 쓰는 종류·1초에 100번 → 2번·꺼짐·음량·묶음 우선순위·트리 밖, 실험실 `events_tagged`(A·B) 연결(두 번 붙여도 한 번)과 실제 진행 사건·역사 그대로.

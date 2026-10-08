@@ -283,12 +283,101 @@
 	},
 	"chronicle": {
 		"max_items": 300,
-		"width": 420
+		"width": 420,
+		"text_font_size": 13,
+		"text_max_lines": 2,
+		"stripe_width": 3,
+		"row_pad_v": 4,
+		"col_gap": 8,
+		"badge_pad_h": 4,
+		"badge_radius": 3,
+		"wheel_step_px": 48,
+		"swatch_px": 10,
+		"colors": {
+			"discovery": "#7fd1b9",
+			"building": "#5c9ef2",
+			"farm_lost": "#e8a05a",
+			"milestone": "#8b95a5",
+			"extinction": "#e06464",
+			"other": "#9aa3ad"
+		}
 	},
 	"sound": {
 		"enabled": true,
 		"volume_db": -8.0,
-		"min_interval_s": 0.5
+		"min_interval_s": 0.5,
+		"mix_rate": 22050,
+		"players": 3,
+		"fade_s": 0.003,
+		"discovery": {
+			"duration_s": 0.95,
+			"peak": 0.6,
+			"release_s": 0.3,
+			"harmonics": [
+				1.0,
+				0.25,
+				0.08
+			],
+			"notes": [
+				{
+					"t_s": 0.0,
+					"hz": 783.99,
+					"attack_s": 0.005,
+					"decay_per_s": 4.0
+				},
+				{
+					"t_s": 0.085,
+					"hz": 1046.5,
+					"attack_s": 0.005,
+					"decay_per_s": 4.0
+				},
+				{
+					"t_s": 0.17,
+					"hz": 1318.51,
+					"attack_s": 0.005,
+					"decay_per_s": 3.5
+				}
+			]
+		},
+		"extinction": {
+			"duration_s": 1.15,
+			"peak": 0.6,
+			"release_s": 0.4,
+			"harmonics": [
+				1.0,
+				0.4,
+				0.15
+			],
+			"notes": [
+				{
+					"t_s": 0.0,
+					"hz": 220.0,
+					"hz_end": 110.0,
+					"glide_s": 1.0,
+					"attack_s": 0.06,
+					"decay_per_s": 1.0
+				}
+			]
+		},
+		"store_built": {
+			"duration_s": 0.16,
+			"peak": 0.42,
+			"release_s": 0.05,
+			"harmonics": [
+				1.0,
+				0.2
+			],
+			"notes": [
+				{
+					"t_s": 0.0,
+					"hz": 1050.0,
+					"hz_end": 620.0,
+					"glide_s": 0.03,
+					"attack_s": 0.004,
+					"decay_per_s": 28.0
+				}
+			]
+		}
 	},
 	"compare": {
 		"gap_px": 4
