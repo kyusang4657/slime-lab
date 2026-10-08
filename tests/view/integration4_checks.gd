@@ -5,9 +5,10 @@ extends RefCounted
 ## ③ 연대기 줄을 실제 마우스로 누름 → 그 실험의 행위자 선택 + 그래프 시점 표시 ④ 패널의 CSV 내보내기 = 헤드리스 실행기 결과(글자까지)
 ## ⑤ 스냅숏 저장 → 열기 = 같은 상태·해시(비교 모드의 -A/-B 파일도) ⑥ 소리 상자 ↔ LabSound.enabled ⑦ 한국어 낱말 단위 줄바꿈.
 
-const MIN_CHECKS := 55
+const MIN_CHECKS := 58
 const DT := 1.0 / 60.0
-const TMP := "user://integration4_checks"
+## 임시 폴더(프로세스마다 따로 — 저장소 사본 여럿에서 함께 돌려도 섞이지 않게, 처음과 끝에 숨은 파일까지 지움)
+var TMP := "user://integration4_checks-%d" % OS.get_process_id()
 ## 비교 장면: A = demo_fast·씨앗 1(돌연변이율만 바꿈), B = demo_fast·씨앗 2(세대 이정표만 바꿈 — B 줄이 연대기에 꼭 생기게)
 const A_SETS := {"mutation.rate": 0.1}
 const B_SETS := {"record.generation_milestone": 5}
@@ -38,6 +39,7 @@ func run(t) -> void:
 	await t.frames(1)
 	t.root.size = root_size
 	_clean_dir(ProjectSettings.globalize_path(TMP))
+	t.check(not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(TMP)), "임시 폴더를 지움(숨은 파일까지)")
 
 
 ## ① 파라미터 패널(예설정·씨앗·세 주요 값·고급 설정 키) → 새 실험 → 실제 세계 설정·씨앗, 화면을 거쳐도 헤드리스와 같은 역사.
@@ -199,14 +201,17 @@ func _chronicle_click(t, lab: LabMain) -> void:
 
 
 ## ④ 패널의 CSV 내보내기(export_to = 단추가 부르는 함수) → 비교면 dir/A·dir/B. 각 timeseries.csv·chronicle.csv 가
-## 같은 예설정·바꾼 값·씨앗·틱 수의 헤드리스 실행기 결과와 글자까지 같다. 혼자 모드도.
+## 같은 예설정·바꾼 값·씨앗·틱 수의 헤드리스 실행기 결과와 글자까지 같다 — record.every 의 배수가 아닌 틱에서도(실행기는
+## 그 틱에 끝 줄을 하나 더 쓰고, 화면은 내보낼 때 같은 끝 줄을 파일에 더함).
 func _csv_export(t, lab: LabMain) -> void:
 	var a := lab.experiment(0)
 	var b := lab.experiment(1)
-	# 실행기는 끝 틱이 record.every 의 배수가 아니면 끝 줄을 하나 더 기록하므로 배수에 맞춘다
+	# 배수가 아닌 틱에서 내보낸다(배수면 한 틱 더 — 끝 줄 길을 늘 지나게)
 	var every := int(a.world.cfg.record.every)
-	lab.step_ticks((every - a.world.tick % every) % every)
+	if a.world.tick % every == 0:
+		lab.step_ticks(1)
 	var ticks := a.world.tick
+	t.check(ticks % every != 0, "record.every(%d)의 배수가 아닌 틱 %d 에서 내보냄" % [every, ticks])
 	var dir := TMP.path_join("compare")
 	t.check(lab.param_panel.export_to(dir) == "", "패널에서 비교 결과 내보내기(틱 %d)" % ticks)
 	var same_a := _same_as_runner(t, ProjectSettings.globalize_path(dir.path_join("A")), "demo_fast", A_SETS, 1, ticks, "runner_a")
@@ -260,6 +265,7 @@ func _sound(t, lab: LabMain) -> void:
 	t.check(cb != null and not cb.disabled and cb.button_pressed == lab.lab_sound.enabled, "소리 상자가 LabSound 를 찾아 켜짐 상태를 보임")
 	if cb == null:
 		return
+	t.check(lab.events_tagged.is_connected(lab.lab_sound._on_events), "실험실의 LabSound 가 사건(events_tagged)에 붙어 있음")
 	var was := lab.lab_sound.enabled
 	cb.button_pressed = false
 	t.check(not lab.lab_sound.enabled and not lab.lab_sound.play_event("discovery"), "소리 끄기 → LabSound.enabled 꺼짐, 재생 안 함")
@@ -346,12 +352,14 @@ func _click(t, pos: Vector2) -> void:
 		t.root.push_input(mb)
 
 
+## 폴더를 통째로 지운다(숨은 .gdignore 까지 — 빠뜨리면 폴더가 남음).
 static func _clean_dir(abs_dir: String) -> void:
 	if not DirAccess.dir_exists_absolute(abs_dir):
 		return
 	var d := DirAccess.open(abs_dir)
 	if d == null:
 		return
+	d.include_hidden = true
 	for sub in d.get_directories():
 		_clean_dir(abs_dir.path_join(sub))
 	for f in d.get_files():

@@ -85,7 +85,7 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 **구현 메모(3단계, MapView 담당이 덧붙임)**
 
 - 노드(이름 고정, 검사가 씀): `Camera`(궤도 카메라) · `Environment`(WorldEnvironment) · `Sun` · `Terrain`(ArrayMesh 하나) · `Farms` · `Stores` · `Plants` · `Dropped` · `Slimes` · `SlimeShadows` · `Carry`(MultiMeshInstance3D) · `SelectRing`.
-- 궤도 카메라 `scripts/view/orbit_camera.gd`(Camera3D, 전역 이름 없이 `MapView.OrbitCamera` 로 preload): `target`·`yaw`·`pitch`·`distance`, `apply()`, `fit_rect(rect, aspect)`(네 모서리를 투영해 지도 전체가 들어오게), `pan_pixels(rel, vp_h)`, `zoom_at(screen_pos, steps)`(커서 아래 땅 점 고정), `rotate_pixels(rel)`, `ground_point(screen_pos, plane_y)`, `reset_orientation()`, `distance_max()`. 수치는 `camera` 절(`pitch_min_deg`·`pitch_max_deg`·`fit_margin`·`near`·`far`·`focus_distance`·`click_threshold_px`·`gesture_pan_px`·`fit_zoom_out_factor`·`follow_ref_fps` 추가).
+- 궤도 카메라 `scripts/view/orbit_camera.gd`(Camera3D, 전역 이름 없이 `MapView.OrbitCamera` 로 preload): `target`·`yaw`·`pitch`·`distance`, `apply()`, `fit_rect(rect, aspect)`(네 모서리를 투영해 지도 전체가 들어오게), `pan_pixels(rel, vp_h)`, `zoom_at(screen_pos, steps)`(커서 아래 땅 점 고정), `rotate_pixels(rel)`, `ground_point(screen_pos, plane_y)`, `reset_orientation()`, `distance_max()`. (4단계 검토 반영) `portrait_yaw`(라디안, 0 = 끔)·`portrait_gain`: 0 이 아니면 `fit_rect` 가 지금 방위와 그만큼 돌린 방위로 각각 맞춰 보고, 돌린 쪽 거리가 `portrait_gain` 배 이상 가까우면(지도가 그만큼 크게 보이면) 돌린 방위를 남긴다 — LabMain 이 비교 모드 지도에 `ui.compare.portrait_yaw_deg`·`portrait_gain_min` 을 넣는다(세로로 긴 칸). `view_turns() -> int` = 화면이 북쪽 위(방위 0)에서 90° 씩 몇 번 돌았는지(0~3, 1 = 화면 위가 서쪽·북쪽은 오른쪽). 수치는 `camera` 절(`pitch_min_deg`·`pitch_max_deg`·`fit_margin`·`near`·`far`·`focus_distance`·`click_threshold_px`·`gesture_pan_px`·`fit_zoom_out_factor`·`follow_ref_fps` 추가).
 - 최대 거리: 설정값 `camera.distance_max`(95) 로 지도 전체가 안 들어오는 큰 지도(128×96 이상, 설정 상한 1024)는 `fit_rect` 가 자르지 않고 맞춘 뒤, 실제 최대 거리 = max(설정값, 맞춘 거리 × `fit_zoom_out_factor`), 먼 자르기 면 = max(`camera.far`, 최대 거리 + 지도 대각선). `distance_max()` 는 실제 값(검사: 128×96·200×150 이 처음에 다 보임). 실시간 그림자는 꺼져 있어 `shadow_distance` 는 늘리지 않음.
 - `bind` 는 앞 세계의 저장고·밭 인스턴스를 지우고(통합 때 고침: 건물 없는 새 세계에 앞 세계 건물이 남던 문제), 카메라를 처음 방위·고각으로 돌려 지도 전체를 맞춘다. 사용자가 카메라를 움직이기 전에는 뷰포트 크기가 바뀔 때(SubViewportContainer 배치 뒤 등) 다시 맞춘다.
 - 트리에 들어가면 자기 SubViewport 의 `own_world_3d` 를 켠다(지연 호출) — 비교 모드에서 두 지도의 3D 세계가 섞이지 않게.
@@ -117,7 +117,8 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 | `func refresh() -> void` | 같은 개체의 바뀐 값 다시 표시(LabMain 이 `ui.info.refresh_frames` 마다 부름). 그사이 죽었으면 죽음 표시 |
 | `func current_id() -> int` | 표시 중인 id(-1 없음) |
 | `func set_follow(on: bool) -> void` | (추가) "따라가기" 단추 모양만 맞춤(신호 없음). LabMain 이 F·Home 키 등으로 따라가기를 바꿨을 때 부른다 |
-| `func set_empty_text(text: String) -> void` | (추가) 빈 상태 안내 문구("" = 기본). LabMain 이 멸종하면 "멸종했습니다 (틱 N) — 고를 개체가 없습니다" |
+| `func set_empty_text(text: String) -> void` | (추가) 빈 상태 안내 문구("" = 기본). LabMain 이 멸종하면 "멸종했습니다 (틱 N)\n고를 개체가 없습니다". 안내는 본문과 같은 여백(`info.padding`) 안에서 줄을 바꾼다(4단계 검토 반영 — 긴 비교 모드 안내가 창 양쪽 끝에 닿던 것) |
+| `func set_view_turns(turns: int) -> void` · `func heading_text(hd) -> String` | (추가, 4단계 검토 반영) 지도 화면이 북쪽 위에서 90° 씩 돈 수(`OrbitCamera.view_turns()`). "방향" 은 낱말 그대로 화살표만 화면 방향으로("북 ↑" → 화면이 한 번 돌면 "북 →"). LabMain 이 선택한 지도로 매 프레임 넣음(바뀔 때만 다시 씀). `HEADING_WORDS`·`HEADING_ARROWS` |
 | `static func brain_width() -> float` | (추가) 두뇌 열지도가 들어갈 너비 = `lab.right_panel_width` − 테두리 − 2 × `info.padding` − `info.scrollbar_width` |
 | `func content_overflow() -> float` | (추가) 스크롤 본문이 보이는 높이를 넘는 픽셀(음수 = 여유). V07 검사용 |
 | `func summary_text() -> String` | (추가) 머리 한 줄 `"#id · N세대 · 살아 있음"` / `"… · 죽음 · 원인 · 틱 T"`, 빈 상태면 안내 문구(검사·캡처 확인용) |
@@ -168,7 +169,7 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
   | `func apply_args(args: PackedStringArray) -> String` | 명령줄 인자로 실험 열기(`_ready` 가 `OS.get_cmdline_user_args()` 로 부름). 잘못된 값은 위험 색 알림 + 기본값, 오류 문장들(줄바꿈)을 돌려줌. 모르는 인자는 무시 |
   | `signal world_changed(world: SimWorld)` | `new_experiment`·`open_snapshot` 로 세계가 바뀌었을 때(4단계 그래프·연대기가 지난 기록을 비움) |
   | `func show_toast(text: String, kind := "info", tick := -1) -> void` | 위쪽 가운데 알림. `kind` = 사건 종류 또는 `info`·`warn`·`error`(4단계의 "저장했습니다" 등도 이것으로) |
-  | `func visible_toasts() -> Array[Dictionary]` | 보이는 알림 `{kind, text, left, count}`(`count` = 묶인 사건 수) |
+  | `func visible_toasts() -> Array[Dictionary]` | 보이는 알림 `{kind, text, left, count, group}`(`count` = 묶인 사건 수, `group` = 비교 모드 실험 이름표 — "" 없음) |
   | `func fit_map() -> void` | 지도 전체 보기(Home 키·지도 위 "전체 보기" 단추): `map_view.fit_map()` + 정보 창 따라가기 단추 끔 |
   | `is_paused()`·`is_fast_forward()`·`target_speed()`·`selected_id()`·`speed_text()` | 지금 상태 |
   | `var last_sim_ms: float`, `var last_budget_hit: bool` | 마지막 프레임의 시뮬레이션 시간과 예산을 다 썼는지(성능 기록용) |
@@ -184,7 +185,8 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 - 멸종: 멸종하는 순간 한 번 `lab.pause_on_extinction`(기본 켬)이면 멈추고(헤드리스 실행기의 끝 조건과 같게), 정보 창 빈 안내를 멸종 문구로(`set_empty_text`), 지도 위에 "멸종 · 틱 N" 표지를 계속 보인다. 다시 재생하면 빈 지도가 계속 진행. 멸종 때문에 저절로 멈춘 상태는 새 실험·스냅숏에서 풀리고, 이미 멸종한 스냅숏을 열면 멈추지 않는다.
 - 알림: 사건 문장 그대로 + 흐린 "틱 N". 왼쪽 띠 = 종류 색, 발견(`★ 새 발견` 머리)은 강조 색 테두리, 멸종·오류는 위험 색 테두리, 경고(`warn`)는 경고 색 테두리, 밭 잃음은 경고 색 띠만. 긴 문장은 줄을 바꿔 지도 폭 안에(폭 = min(`lab.toast_max_width`, 지도 폭 − 양쪽 `map_overlay_margin`), 빈칸 없는 경로도 끊음). `lab.toast_coalesce_kinds`(밭 잃음)의 종류는 이미 보이는 같은 종류 알림을 새 문장으로 고쳐 쓰고 "×N" 을 붙여 맨 아래로(하나만 보임). 최대 `lab.toast_max` 개 — 넘치면 강조 알림(발견·멸종·오류·경고)이 아닌 것 가운데 오래된 것부터 지우고, 모두 강조면 가장 오래된 것. `toast_seconds`(오류·경고는 `toast_error_seconds`) 뒤 사라지며 마지막 `toast_fade_seconds` 동안 흐려짐. **세계를 바꾸면(새 실험·스냅숏) 앞 세계의 알림을 지운다**(백업 경고는 바꾼 뒤에 띄움). 명령줄 오류는 알림과 함께 터미널(`printerr`)에도 전체 문장.
 - 선택: `map_view.slime_clicked(id)` → `select_slime(id)`(-1·없는 id = 해제; 죽은 개체 id 는 기록으로 표시), `info_panel.slime_requested(id)` → `select_slime(id)` + `map_view.focus_on(id)`, `info_panel.follow_toggled(on)` → `map_view.follow_selected = on`.
-- 단축키는 `_input` 에서 받아 처리하면 소비한다(초점 있는 단추가 스페이스를 먹지 않게). **`LineEdit`·`TextEdit` 에 초점이 있거나 Ctrl·Alt·Meta 가 눌렸으면 무시**. 1~7 은 숫자판 키도. F 는 `map_view.follow_selected` 를 뒤집고 알림, 정보 창의 따라가기 단추도 `info_panel.set_follow()` 로 맞춘다(통합 때 연결).
+- 단축키는 `_input` 에서 받아 처리하면 소비한다(초점 있는 단추가 스페이스를 먹지 않게). **글자를 적을 수 있는 `LineEdit`·`TextEdit` 에 초점이 있거나 Ctrl·Alt·Meta 가 눌렸으면 무시**(읽기 전용 칸은 해당 없음). 1~7 은 숫자판 키도. F 는 `map_view.follow_selected` 를 뒤집고 알림, 정보 창의 따라가기 단추도 `info_panel.set_follow()` 로 맞춘다(통합 때 연결).
+- **글 칸 초점 풀기(4단계 검토 반영):** 글 칸에 초점이 있을 때 그 칸 밖(지도·단추·다른 패널)을 마우스(왼쪽·오른쪽·가운데 단추, 휠은 아님)로 누르면 `_input` 이 초점을 푼다(SpinBox 안의 칸이면 화살표를 포함한 SpinBox 전체를 칸 안으로 보고, 그 SpinBox 는 지금 확정 — 엔진은 지연 호출로 확정해 같은 누름의 "새 실험" 이 옛 씨앗을 썼음). 단추·지도는 초점을 받지 않아 엔진이 초점을 풀지 않으므로, 고치기 전에는 씨앗을 적고 새 실험·지도를 눌러도 단축키가 꺼진 채 스페이스·숫자가 칸에 들어가 다음 실험에 확정됐다("42" → "42 4"). 검사 `lab_checks._focus_release`(실제 마우스·키 입력).
 - 날 표시에 하루 틱 수가 필요해 `world.cfg.time.day_ticks` 를 읽기만 한다(SIM-API 의 읽기 전용 `cfg` 항목). InfoPanel 도 `cfg.brain.weight_clamp` 만 읽는다. `tools/test_repo_rules.py` 가 화면이 쓰는 세계 멤버가 모두 SIM-API 에 있는지 검사한다.
 - 창 최소 크기 `lab.min_width × min_height`(헤드리스에서는 건너뜀). 창 제목 = "프로젝트 이름 — 예설정 · 씨앗 N".
 
@@ -239,7 +241,7 @@ func run(t) -> void:
 
 ## Experiment — `scripts/ui/experiment.gd` (`class_name Experiment`, RefCounted) — 완성(바꾸지 않음)
 
-세계 + 기록기 + 만든 조건. 기록은 헤드리스 실행기와 **같은 줄**(만들 때 한 줄, `tick % record.every == 0` 이 되는 step 마다 한 줄). `tests/view/experiment_checks.gd` 가 "화면 쪽 timeseries.csv = 실행기 결과(글자까지)"를 검사.
+세계 + 기록기 + 만든 조건. 기록은 헤드리스 실행기와 **같은 줄**(만들 때 한 줄, `tick % record.every == 0` 이 되는 step 마다 한 줄, **멸종한 틱에 한 줄** — 실행기는 멸종에서 멈추며 끝 줄을 쓰고, 그래프의 개체 수 0 줄·"멸종" 표시도 이 줄에서). 내보낼 때 마지막 기록 줄이 지금 틱이 아니면 `tail_row()` 를 timeseries.csv 에만 더한다(실행기가 그 틱에서 끝나며 쓰는 줄). 그래서 내보낸 timeseries.csv 는 같은 씨앗·설정으로 그 틱까지(멸종해 멈췄으면 멸종까지) 돌린 실행기 결과와 글자까지 같다 — `tests/view/experiment_checks.gd` 가 배수 틱·배수가 아닌 틱·멸종해 저절로 멈춘 틱 셋 모두 검사(4단계 검토 반영: 전에는 배수 틱만 같았고, 멸종해 멈춘 실험의 그래프에 멸종 표시가 없었음).
 
 | 멤버 | 뜻 |
 |---|---|
@@ -247,8 +249,10 @@ func run(t) -> void:
 | `world`, `recorder`, `preset`, `overrides`, `seed_value`, `snapshot_path`, `label`, `tag`("A"/"B"/"") | 상태(읽기 전용) |
 | `step() -> bool`(이번에 기록했으면 true) · `step_n(n)` | 진행(LabMain 만 부름) |
 | `rows() -> Array` | 기록한 시계열 줄(`SimRecorder.TIMESERIES_COLUMNS` 키 사전). **읽기 전용** |
-| `display_name()` | "A · 기본 · 씨앗 1"(혼자면 label) |
-| `export_dir(dir, with_lineage := true) -> PackedStringArray` | summary.json(`source = "lab"`)·timeseries·chronicle·lineage·final.snapshot.json, 실패한 파일 이름 |
+| `display_name()` | "A · 기본 · 씨앗 1 · 돌연변이 0.08"(혼자면 label) |
+| `label` = `static default_label(preset, overrides, seed, first := [])` | (4단계 검토 반영) "예설정 이름 · 씨앗 N · 바꾼 값": 세 주요 값은 짧은 이름(`SHORT_NAMES` = 파라미터 패널 "지금 실험" 줄의 말 "돌연변이 0.08"·"자원 1.4"·"개체 150"), 나머지는 "키=값"(plants.regrow=0.5), 최대 `ui.lab.label_max_overrides`(2)개 + "외 K개"(`overrides_brief`). 순서: `first` → 세 주요 값 → 키 이름 순. 비교 모드에서 LabMain 이 A·B 가 다른 키(`differing_keys`)를 `first` 로 다시 지어 값만 다른 비교도 이름(범례·지도 표지·창 제목·지금 실험·summary.json)이 갈린다(전에는 둘 다 "… · 바꾼 값 1개"). 스냅숏 = "스냅숏 파일 · 씨앗 N" |
+| `export_dir(dir, with_lineage := true) -> PackedStringArray` | summary.json(`source = "lab"`, `rows` = 파일의 줄 수)·timeseries(+ 끝 줄)·chronicle·lineage·final.snapshot.json, 실패한 파일 이름 |
+| `tail_row() -> Dictionary` | 내보낼 때 더하는 끝 줄(마지막 기록 줄이 지금 틱이면 `{}`). `sample()` 은 기간 출생·사망 수를 0 으로 되돌리므로 세계 **사본**(`SimSnapshot.to_text`/`from_text` 왕복 — 기간 카운터까지 담김)에서 부른다: 세계·기록기·다음 기록은 그대로(검사) |
 | `save_snapshot(path) -> String` | 스냅숏 저장 |
 
 ## LabMain 4단계 API (LabMain 담당이 비교 모드를 채움)
@@ -265,8 +269,8 @@ func run(t) -> void:
 | `func stop_compare()` · `func is_comparing() -> bool` | 비교 끝(A 만 남김) | 됨 |
 | `func select_slime(id, index := 0)` | 비교 모드에서 어느 실험의 개체인지(정보 창 머리에 A/B 표시, 그 지도에만 고리) | 됨 |
 | `func save_snapshot(path, index := 0) -> String` | 스냅숏 저장 + 알림 | 됨 |
-| `func export_csv(dir) -> String` | 결과 폴더 내보내기(비교면 `dir/A`·`dir/B`) + 알림(절대 경로) | 됨 |
-| `func default_export_dir() -> String` | `user://experiments/<날짜-시각>-seed<N>` | 됨 |
+| `func export_csv(dir) -> String` | 결과 폴더 내보내기(비교면 `dir/A`·`dir/B`) + 알림(절대 경로). 실패 문장 "내보내기 실패: 파일들" — 비교 모드면 파일마다 "B/timeseries.csv" 처럼 실험 이름표, 다 쓴 쪽은 "(A 는 저장됨: 절대 경로)"(4단계 검토 반영) | 됨 |
+| `func default_export_dir() -> String` | `user://experiments/<날짜-시각>-seed<N>`(비교 모드 `-seed<A>-vs-seed<B>`) | 됨 |
 | `func step_ticks(n)` | 프레임 없이 모든 실험 n틱(기록·`recorded` 포함, 검사·캡처용) | 됨 |
 | 자리 채우기 | `_ready` 에서 `ParamPanel` → `left_dock`, `GraphPanel`(늘어남) + `ChroniclePanel`(폭 `ui.chronicle.width`, 좁은 창에서는 아래 메모대로 줄임) → `bottom_dock`, `LabSound` → 자식. 각각 `bind_lab(self)` | 됨 |
 
@@ -282,21 +286,24 @@ func run(t) -> void:
   | `static func tag_color(index) -> Color` | 실험 색 = 그래프 계열 색(`ui.graph.series_a`·`ui.graph.series_b`) — 이름표 바탕에 씀. 연대기 A/B 표시도 이것을 쓰면 색이 한 벌 |
   | `func set_dock_open(which, open)` · `is_dock_open(which)` · `const DOCK_LEFT = "left"`, `DOCK_BOTTOM = "bottom"` | 자리 펴기·접기(지도 오른쪽 아래 단추와 같음). 처음 값 `ui.lab.left_dock_open`·`ui.lab.bottom_dock_open` |
   | `func fit_map(index := -1)` | 지도 전체 보기: -1(Home·0 키) = 모든 지도, 지도 위 "전체 보기" 단추 = 그 지도만 |
-  | `func show_toast(text, kind, tick, group := "")` | `group` = 비교 모드 이름표. 밭 잃음 묶기는 같은 종류·같은 group 끼리만 |
+  | `func show_toast(text, kind, tick, group := "")` | `group` = 비교 모드 이름표. 밭 잃음 묶기는 같은 종류·같은 group 끼리만(검사 `lab_checks._toast_rules`). 비교 모드에서 group 이 있는 알림은 그 지도 칸에(아래 "비교 모드 알림") |
+  | `func view_turns(index) -> int` · `const ARROWS` | (4단계 검토 반영) index 번째 지도 화면이 북쪽 위에서 90° 씩 돈 수(0~3). 지도 나침반·정보 창 방향 화살표가 씀 |
 
 - **배치(노드 이름 고정)**: `Column`(VBox) = `TopBar` / `Body`(HBox) = `Main`(VBox: `Middle`(HBox: `LeftWrap` ⊃ `LeftDock` | `MapArea`) / `BottomWrap` ⊃ `BottomDock`) | `InfoPanel`. 정보 창은 아래 자리 옆까지 세로 전체(1600×900 에서 두뇌 범례까지 스크롤 없이 — V07), 아래 자리 폭 = 왼쪽 자리 + 지도. 1280×720·자리 모두 펼침: 지도 680×456, 비교 모드 한 칸 338×456(검사 ≥ 320×400).
 - **지도 칸**: `MapArea` ⊃ `MapContainer`(A) [· `MapContainerB`] ⊃ `MapViewport`(`own_world_3d`) ⊃ `MapView` — 위치·크기를 코드로(픽셀 정수, `MapArea.resized` 마다): 혼자 = 자리 전체, 비교 = 반씩(사이 `ui.compare.gap_px`, 남는 1px 은 B). B 칸·표지는 `start_compare` 때 만들고, 혼자로 돌아가면(`stop_compare`·`new_experiment`·`open_snapshot`) 트리에서 바로 빼서 지운다. 지도 클릭은 `select_slime(id, 칸 번호)`.
-- **지도 위 표지**: 칸마다 왼쪽 위 `MapTitle`/`MapTitleB` = [`Tag` 이름표(비교 모드만: 실험 색 바탕 `ui.compare.tag_radius`·`ui.compare.tag_pad_h`·`ui.compare.tag_pad_v`, 어두운 굵은 글자 — 글자 자체에는 실험 색을 입히지 않음)] `Title` 실험 이름(칸 폭에 맞춰 "…") · 멈춤 · `ExtinctBadge`(그 실험) · `FitButton`(그 지도). 공용: 왼쪽 아래 `MapHint`(넓으면 한 줄, 좁으면 마우스·키 두 줄, 더 좁으면 키 줄을 나눈 세 줄 — 비교 모드에서는 A 칸에 들어가는 가장 적은 줄로 A 칸 안: 1280 창·자리 펼침은 세 줄, 통합 때 더함), 오른쪽 아래 `DockToggles`(`LeftToggle` "설정" · `BottomToggle` "그래프·연대기", 눌림 = 보임, 자식이 있는 자리만), 알림 `Toasts` 는 표지 줄 아래 `ui.lab.toast_margin_top` 에서 시작(좁은 지도·비교 모드에서 표지를 가리지 않게).
+- **지도 위 표지**: 칸마다 왼쪽 위 `MapTitle`/`MapTitleB` = [`Tag` 이름표(비교 모드만: 실험 색 바탕 `ui.compare.tag_radius`·`ui.compare.tag_pad_h`·`ui.compare.tag_pad_v`, 어두운 굵은 글자 — 글자 자체에는 실험 색을 입히지 않음)] `Title` 실험 이름(칸 폭에 맞춰 "…") · 멈춤 · `ExtinctBadge`(그 실험) · `FitButton`(그 지도). 공용: 왼쪽 아래 `MapHint`(넓으면 한 줄, 좁으면 마우스·키 두 줄, 더 좁으면 키 줄을 나눈 세 줄 — 비교 모드에서는 A 칸에 들어가는 가장 적은 줄로 A 칸 안: 1280 창·자리 펼침은 세 줄, 통합 때 더함), 오른쪽 아래 `DockToggles`(`LeftToggle` "실험 조건"(그 패널의 제목과 같은 말 — 4단계 검토 반영, 전에는 "설정") · `BottomToggle` "그래프·연대기", 눌림 = 보임, 자식이 있는 자리만), 알림 `Toasts` 는 표지 줄 아래 `ui.lab.toast_margin_top` 에서 시작(좁은 지도·비교 모드에서 표지를 가리지 않게).
+- **비교 모드 알림(4단계 검토 반영):** 실험 알림(group "A"/"B" — 사건·F 키)은 그 지도 칸 가운데 위의 칸마다 묶음 `ToastsA`/`ToastsB` 에, 폭 = min(`lab.toast_max_width`, 칸 폭 − 양쪽 `map_overlay_margin`) 안에서 줄바꿈하고, 앞머리 "A · " 대신 지도 표지와 같은 실험 색 이름표 상자(`Tag`)를 그린다(`visible_toasts()` 의 text 는 "A · …" 그대로). 이름표 없는 알림(저장·내보내기·오류)은 공용 `Toasts`(지도 자리 가운데)에, 칸 알림이 있으면 그 아래. 고치기 전에는 알림 하나가 두 지도 사이 가운데에 걸쳐 두 지도 위쪽을 함께 가렸다. 최대 수 `lab.toast_max` 는 모두 합쳐, 칸마다는 `lab.toast_max` ÷ 칸 수(2)개까지(좁은 칸에서 줄바꿈해 길어진 알림이 그 지도를 다 덮지 않게 — 오래된 일상 알림부터 지움), 칸 알림의 발견 머리는 "★" 만. 검사 `lab_checks._compare_toasts`, 캡처 ⑥ 은 쌓인 알림을 그대로 둔 채 찍음.
+- **비교 모드 지도 방향(4단계 검토 반영):** 1280 창의 비교 칸(약 338×456)처럼 세로로 긴 칸에서는 64×48 지도를 북쪽 위 그대로 맞추면 칸 높이의 약 39% 만 썼다. 비교 모드 지도는 `ui.compare.portrait_yaw_deg`(90°) 돌린 방위로도 맞춰 보고 `ui.compare.portrait_gain_min`(1.15)배 이상 크게 보이면 그 방위로(`OrbitCamera.portrait_yaw` — Home·"전체 보기"도 같은 방위, 두 칸 같은 크기라 A·B 같은 방향). 화면 위가 북쪽이 아니면 표지에 나침반 `North` "북 →"(사용자가 오른쪽 끌기로 돌렸을 때도), 정보 창 "방향" 화살표도 화면 방향(`InfoPanel.set_view_turns`). 혼자 모드는 북쪽 위(비교를 끝내면 카메라를 움직이지 않은 지도는 다시 북쪽 위로 맞춤). 검사 `lab_checks._compare_portrait`(지도가 칸 높이의 55% 이상, 두 지도 같은 방향, 나침반·방향 화살표).
 - **자리**: 자식이 있고 접지 않았을 때만 보인다(접은 자리는 자식이 들어와도 숨긴 채, 패널을 모두 빼면 접기 단추도 숨음 — 검사).
 - **패널 붙이기**: `_ready` 에서 배치 → 패널을 자리에 넣고 `bind_lab(self)` → 명령줄로 첫 실험. 즉 **`bind_lab` 때 `experiments` 는 비어 있고 `world` 는 null**, 첫 `experiments_changed` 가 곧 온다(패널은 그때 읽으면 됨). 크기: ParamPanel 세로 늘어남, GraphPanel 가로·세로 늘어남, ChroniclePanel 세로 늘어남·최소 폭 = (창 폭 − 정보 창 − 아래 자리 여백) × `ui.chronicle.dock_frac` 를 [`ui.chronicle.min_width`, `ui.chronicle.width`] 로 자르고 그래프 최소 폭이 들어가게 더 줄인 값(창 크기가 바뀔 때마다, 통합 때 더함 — 1600 창 420, 1280 창 331). 고정 420 이면 1280 창에서 연대기 420 + 그래프 최소 540 이 아래 자리 920 을 넘어 정보 창이 창 밖으로 46px 밀렸다(검사 `_fits_window`).
 - **진행**: 프레임 처음과 틱마다 **지도마다** `before_steps()`, 한 틱(`_step_once`) = A.step() 다음 B.step()(기록하면 `recorded(k, 줄)`), 프레임 끝에 지도마다 `update_view(alpha, delta)`. 한 틱 비용 추정 = 두 실험 step 시간의 합이라 예산(`ui.speed.sim_budget_ms`·빨리 감기)은 둘 몫을 합쳐 센다. 두 세계는 언제나 같은 틱(검사: 프레임마다 같은 틱 수, 두 해시·상태가 헤드리스와 같음).
-- **사건**: 실험마다 `drain_events()` → `events_tagged(k, 사본)`, A 는 `events(사본)` 도. 받는 쪽마다 따로 깊은 사본이라 청취자가 고쳐 써도 알림·다른 청취자·연대기가 그대로. 비교 모드 알림 = "A · 문장"/"B · 문장"(`visible_toasts()` 의 text 도).
-- **선택**: 고리는 그 실험의 지도에만, 정보 창 머리 이름표 = `InfoPanel.set_tag(tag, tag_color(index))`(혼자면 ""; InfoPanel 에 더한 것은 `set_tag(tag: String, col := 투명 → 강조 색)` · `current_tag() -> String` 둘뿐, 머리 `#id` 앞 실험 색 상자). 가계 단추는 같은 실험 안에서 옮겨 가며 그 지도에서 카메라를 맞춤. 따라가기(정보 창 단추·F 키)는 선택한(선택이 없으면 마지막으로 선택했던) 실험의 지도에서; 다른 실험의 개체를 고르면 앞 지도의 따라가기를 끄고 단추를 새 지도 상태로. F 알림은 비교 모드면 "A 지도 따라가기 켬". Esc·빈 곳 클릭·없는 실험 번호 = 해제(모든 지도의 고리 지움).
-- **멸종(비교 모드)**: 한쪽만 멸종하면 **멈추지 않는다** — 살아남은 쪽을 같은 틱으로 계속 견주게(그 순간은 "A · 멸종 …" 위험 색 알림과 그 지도의 `ExtinctBadge` 로 남음). **모든 실험이 멸종하면** `lab.pause_on_extinction` 대로 멈춘다(혼자 모드 = 3단계와 같음). 정보 창 빈 안내: "A 는 멸종했습니다 (틱 N) — B 지도에서 고르세요" / "A·B 모두 멸종했습니다 — 고를 개체가 없습니다".
+- **사건**: 실험마다 `drain_events()` → `events_tagged(k, 사본)`, A 는 `events(사본)` 도. 깊은 사본은 **signal 마다 하나**라 청취자가 고쳐 써도 알림·연대기·다른 signal 의 청취자는 그대로(검사 `lab_checks._events`). 같은 signal 의 청취자끼리는 같은 배열을 받으므로 고쳐 쓰지 않는다(꾸미려면 먼저 복사 — ChroniclePanel·LabSound 는 읽기만, 4단계 검토 반영: 전에는 "받는 쪽마다 따로" 라고 잘못 적었음). 비교 모드 알림 = "A · 문장"/"B · 문장"(`visible_toasts()` 의 text 도, group = "A"/"B").
+- **선택**: 고리는 그 실험의 지도에만, 정보 창 머리 이름표 = `InfoPanel.set_tag(tag, tag_color(index))`(혼자면 ""; InfoPanel 에 더한 것은 `set_tag(tag: String, col := 투명 → 강조 색)` · `current_tag() -> String` 둘뿐, 머리 `#id` 앞 실험 색 상자). `clear()`(Esc·해제·비교 끝)는 이름표도 지워 `current_tag()` = ""(4단계 검토 반영 — 전에는 빈 창이 "B" 를 돌려줌). 가계 단추는 같은 실험 안에서 옮겨 가며 그 지도에서 카메라를 맞춤. 따라가기(정보 창 단추·F 키)는 선택한(선택이 없으면 마지막으로 선택했던) 실험의 지도에서; 다른 실험의 개체를 고르면 앞 지도의 따라가기를 끄고 단추를 새 지도 상태로. F 알림은 비교 모드면 "A 지도 따라가기 켬". Esc·빈 곳 클릭·없는 실험 번호 = 해제(모든 지도의 고리 지움).
+- **멸종(비교 모드)**: 한쪽만 멸종하면 **멈추지 않는다** — 살아남은 쪽을 같은 틱으로 계속 견주게(그 순간은 "A · 멸종 …" 위험 색 알림과 그 지도의 `ExtinctBadge` 로 남음). **모든 실험이 멸종하면** `lab.pause_on_extinction` 대로 멈춘다(혼자 모드 = 3단계와 같음). 정보 창 빈 안내(두 줄): "A 는 멸종했습니다 (틱 N)\nB 지도에서 고르세요" / "A·B 모두 멸종했습니다\n고를 개체가 없습니다".
 - **위쪽 막대(비교 모드)**: 평균 세대·개체·문명 대신 `[A] 개체 · 문명 │ [B] 개체 · 문명`(이름표 = 실험 색 상자, 평균 세대는 그래프에서). 틱·계절·낮밤은 두 실험이 같으면 하나, 다르면 "A값/B값"(예: 혹독한 겨울과 견주면 "여름/봄"); 하루 길이가 달라(고급 설정) 날이 다르면 "날" 은 숨긴다(틱이 기준). 가장 긴 경우에도 최소 창 폭 안(검사).
-- **`stop_compare()`**: A 의 실험·세계·기록·카메라·(A 의) 선택은 그대로 두고 이름표를 지우고 B 를 버린다. `experiments_changed([A])`(세계는 그대로라 `world_changed` 없음), 이름표 붙은 알림을 지우고 "비교를 끝냈습니다 — … 만 계속합니다" 알림, 한 틱 비용 추정·실제 배속 창은 다시 잰다. 비교 중이 아니면 아무것도 안 함.
+- **`stop_compare()`**: A 의 실험·세계·기록·카메라·(A 의) 선택은 그대로 두고 이름표를 지우고 B 를 버린다. `experiments_changed([A])`(세계는 그대로라 `world_changed` 없음), 이름표(group) 붙은 알림 — 사건 "A · / B · "·비교 모드 F 키 알림 — **만** 지우고(이름표 없는 오류·저장 알림은 남음, 이름도 혼자 모드 순서로 — 4단계 검토 반영, 전에는 알림을 모두 지웠음, 검사) "비교를 끝냈습니다 — … 만 계속합니다" 알림, 한 틱 비용 추정·실제 배속 창은 다시 잰다. 비교 중이 아니면 아무것도 안 함.
 - **`start_compare` 오류**: 빠진 키는 기본(`lab.default_preset`·`{}`·`lab.default_seed`), 만들기 실패면 "A: 문장"/"B: 문장"을 돌려주고 지금 실험은 그대로.
-- **캡처(`tests/ui_driver.gd`)**: ⑤ `lab-05-panels` 기본·씨앗 1 을 `step_ticks(1200)` 뒤 4배로 그림 — 패널 자리 이름, "그래프·연대기" 단추를 실제 마우스로 눌러 접었다 폄, 해시·기록 줄 수. ⑥ `lab-06-compare` demo_fast | 기본(씨앗 1)을 `step_ticks(1500)` → 두 해시가 헤드리스와 같음 → 2배로 그리며 쌓인 알림 이름표 확인 → B 지도 가운데 개체를 실제 마우스로 눌러 고름(실험 번호 1, 정보 창 이름표 B, 고리는 B 지도에만) → 쌓인 알림을 흘려보내고 찍음.
+- **캡처(`tests/ui_driver.gd`)**: ⑤ `lab-05-panels` 기본·씨앗 1 을 `step_ticks(1200)` 뒤 4배로 그림 — 패널 자리 이름, "그래프·연대기" 단추를 실제 마우스로 눌러 접었다 폄, 해시·기록 줄 수. ⑥ `lab-06-compare` demo_fast | 기본(씨앗 1)을 `step_ticks(1500)` → 두 해시가 헤드리스와 같음 → 2배로 그리며 쌓인 알림 이름표 확인 → B 지도 가운데 개체를 실제 마우스로 눌러 고름(실험 번호 1, 정보 창 이름표 B, 고리는 B 지도에만) → 쌓인 알림을 그대로 둔 채(실험 알림이 모두 자기 지도 칸 안 — 확인) 찍음. 두 지도는 같은 방향(1280 창에서는 돌려 맞춤, 나침반 "북 →").
 
 ## ParamPanel — `scripts/ui/param_panel.gd` (`class_name ParamPanel`, VBoxContainer, 왼쪽 자리)
 
@@ -329,7 +336,7 @@ func run(t) -> void:
 - **지금 실험:** `experiments_changed` 마다 실험별 `label`(A/B 이름표 + `ui.graph.series_a`·`series_b` 색 점)과 세 값(`world.cfg` 를 깊은 사본으로 떠서 읽기만 함)을 다시 쓰고, **칸도 그 실험의 조건으로 맞춘다**(만든 실험 = 그 조건 그대로, 스냅숏 = 다른 값이 가장 적은 예설정 + 다른 값 — 그래서 스냅숏을 열어도 "지금 실험과 같음", 새 실험을 누르면 그 설정·씨앗으로 0틱부터 다시). 실험이 둘이 되면 비교 모드 단추가 켜지고, 둘에서 하나로 줄면 꺼진다.
 - **세 주요 값:** 슬라이더(마우스 휠로는 안 바뀜) + 오른쪽 숫자 칸. 범위 `ui.param.mutation_rate_max`·`resource_scale_max`, 초기 개체 수는 `ui.param.initial_min` ~ min(`ui.param.initial_max`, 그 칸 조건의 `population.cap`). 눈금 `ui.param.mutation_rate_step`·`resource_scale_step`·`initial_step` — 슬라이더 값은 눈금 자릿수 글자로 바꿨다 다시 읽어 넣는다(0.30000000000000004 같은 값이 `SimConfig.validate` 의 JSON 왕복 검사에 걸리지 않게). 숫자 칸에는 슬라이더 범위 밖 값도 적을 수 있다(설정 검사 범위 안이면 됨, 슬라이더는 끝에 붙음). 화면을 상태에 맞추는 동안(슬라이더 끝을 줄이면 Range 가 값을 잘라 신호를 냄) 들어오는 신호는 무시한다 — 상한을 낮춰도 초기 개체 수가 몰래 바뀌지 않고 오류로 알린다(검사).
 - **고급 설정:** `sim-defaults.json` 의 잎 키 전부를 절별로(절 이름 "지도 · map" 등). 수 → 오른쪽 맞춤 글 칸, 참거짓 → 확인 상자, 배열·글자(`seasons.growth`·`brain.policy`) → 읽기 전용 칸(보이기만). JSON 을 읽으면 수가 모두 실수가 되므로 **정수 키는 파일 글자로 가린다**(소수점 없는 수). 값 글자는 Godot 기본 표기(정수 키는 정수). 줄 이름 말풍선 = 키·예설정 값·지금 실험 값. 비교 모드에서는 머리의 A/B 단추로 고급 설정이 보여 줄 칸을 고른다. 펼쳤을 때만 줄을 갱신한다.
-- **입력:** 단추는 초점을 받지 않는다(스페이스 = 멈춤과 겹치지 않게). 글 칸(숫자 칸·씨앗 칸)에 초점이 있으면 LabMain 이 단축키를 무시한다(SpinBox 안의 LineEdit 도 — 검사: 씨앗 칸에 "42 f", 숫자 칸에 "0.07" 을 쳐도 멈춤·배속·따라가기 그대로). Enter = 확정 + 초점 풀기(지도로 돌아가면 단축키가 바로 동작), Esc = 적던 글자 버리고 초점 풀기(선택 해제 아님), 초점이 빠지면 확정. 단추 동작(새 실험·나란히 시작·비교·스냅숏) 전에 입력 중인 칸을 먼저 확정한다.
+- **입력:** 단추는 초점을 받지 않는다(스페이스 = 멈춤과 겹치지 않게). 글 칸(숫자 칸·씨앗 칸)에 초점이 있으면 LabMain 이 단축키를 무시한다(SpinBox 안의 LineEdit 도 — 검사: 씨앗 칸에 "42 f", 숫자 칸에 "0.07" 을 쳐도 멈춤·배속·따라가기 그대로). Enter = 확정 + 초점 풀기(지도로 돌아가면 단축키가 바로 동작), Esc = 적던 글자 버리고 초점 풀기(선택 해제 아님), 초점이 빠지면 확정. 칸 밖(지도·단추·다른 패널)을 누르면 LabMain 이 초점을 풀어 확정한다(4단계 검토 반영 — 단추·지도는 초점을 받지 않아 전에는 초점이 남았음, LabMain 메모 "글 칸 초점 풀기"). 단추 동작(새 실험·나란히 시작·비교·스냅숏) 전에 입력 중인 칸을 먼저 확정한다.
 - **씨앗:** SpinBox 0~`ui.param.seed_max`(정수, 밖이면 자름). "무작위" = 화면 쪽 시각으로 씨앗을 준 **따로 만든** `RandomNumberGenerator` 에서 고름 — 시뮬레이션 난수(SimRng)·Godot 전역 난수와 무관(검사: 전역 `randi()` 순서·세계 해시 그대로).
 - **비교 모드:** 켜면(비교 중이 아니면) B 칸 = A 조건 사본, 새 실험 단추 자리에 "나란히 시작"(AccentButton). 끄면 B 칸을 숨기고 `lab.stop_compare()` 를 **늘** 부른다(비교 중이 아니면 LabMain 이 아무것도 하지 않아야 함). 뼈대 `start_compare` 의 오류 문장은 패널 안 빨간 글 + 알림.
 - **파일:** CSV 내보내기 = `lab.export_csv(lab.default_export_dir())`(성공·실패 알림은 LabMain). 스냅숏 저장/열기 = 패널 자식 FileDialog 두 개(처음 누를 때 만듦, `FILE_MODE_SAVE_FILE`/`OPEN_FILE`, `ACCESS_FILESYSTEM`, `*.json`, 시작 폴더 `user://experiments` 의 실제 경로 — 없으면 만듦, 크기 `ui.param.dialog_width × dialog_height`, 저장 기본 이름 `snapshot-<날짜-시각>-seed<N>-tick<T>.json`, `use_native_dialog` — 운영 체제 대화 상자를 쓸 수 있으면 그것, 못 쓰면(헤드리스·포털 없는 Linux) 엔진 대화 상자). 비교 중 저장은 `<이름>-A.json`·`<이름>-B.json` 두 파일. 열기 실패는 패널 안 빨간 글 + 알림(지금 실험 그대로).
@@ -417,27 +424,27 @@ func run(t) -> void:
   - 저장고 `ui.sound.store_built`: 1050 → 620 Hz 로 0.03초 만에 떨어지는 짧은 "톡", 0.16초, 최댓값 0.42(자주 나서 작게).
   - `func synth_samples(sound) -> PackedFloat32Array`(−1~1 샘플, 검사용), `const SOUNDS`·`SOUND_OF`(kind → 소리: `first_farm` = 저장고 소리, 밭 잃음·세대는 소리 없음)·`PRIORITY`.
 - 노드: 재생기(`AudioStreamPlayer`) `ui.sound.players` 개를 자식으로, 쉬는 것부터(모두 바쁘면 차례로). `_ready` 에서 세 소리를 미리 만듦(이 기계에서 합쳐 약 66ms, 한 번). `enabled = false` 면 내던 소리도 멈춤, `volume_db` 를 바꾸면 모든 재생기에. 트리를 떠날 때 멈춤(오디오 서버가 재생을 붙든 채 끝나지 않게).
-- `play_event(kind)` = `play_event_at(kind, 지금 초)`: 꺼짐·소리 없는 종류·트리 밖·같은 소리(종류가 아니라 소리 이름 기준)를 `min_interval_s` 안에 다시 → false. `play_event_at` 은 시각을 받아 검사가 시계 없이 최소 간격을 확인. `play_events(list)`: 한 묶음(한 프레임의 사건)에서 가장 중요한 소리 하나만(멸종 > 발견 > 저장고) — `bind_lab` 이 `events_tagged`(A·B 모두)에 이것을 연결. `var plays`·`last_sound`·`player_count()`(검사용).
+- `play_event(kind)` = `play_event_at(kind, 지금 초)`: 꺼짐·소리 없는 종류·트리 밖·같은 소리(종류가 아니라 소리 이름 기준)를 `min_interval_s` 안에 다시 → false. `play_event_at` 은 시각을 받아 검사가 시계 없이 최소 간격을 확인. `play_events(list)`: 한 묶음에서 가장 중요한 소리 하나만(멸종 > 발견 > 저장고). `bind_lab` 은 `events_tagged`(A·B 모두)를 받아 그 프레임의 사건을 모았다가 프레임 끝(지연 호출)에 `play_events` 한 번 — 비교 모드에서 A·B 사건이 한 프레임에 와도 소리는 하나(4단계 검토 반영: 전에는 실험마다 하나씩이라 A 멸종과 B 차임이 겹쳤음). 받은 배열은 읽기만. `var plays`·`last_sound`·`player_count()`(검사용).
 - 들어 보기: `godot --headless --path . --script res://tools/render_sounds.gd -- --out=폴더` → `discovery.wav`·`extinction.wav`·`store_built.wav`(저장소에 넣지 않음)와 길이·최댓값·처음/끝 샘플 출력.
-- 검사 `tests/view/sound_checks.gd`: 소리마다 16비트 모노·표본율·길이 0.15~1.2초·최댓값 ≤ 0.8 FS 이고 들림·NaN/inf 없음·처음/끝 샘플 0 근처·처음/끝 1ms 가 서서히·다시 만들어도 같은 바이트, 발견이 멸종보다 높고 멸종은 내려감(영점 교차), 최소 간격·같은 소리를 쓰는 종류·1초에 100번 → 2번·꺼짐·음량·묶음 우선순위·트리 밖, 실험실 `events_tagged`(A·B) 연결(두 번 붙여도 한 번)과 실제 진행 사건·역사 그대로.
+- 검사 `tests/view/sound_checks.gd`: 소리마다 16비트 모노·표본율·길이 0.15~1.2초·최댓값 ≤ 0.8 FS 이고 들림·NaN/inf 없음·처음/끝 샘플 0 근처·처음/끝 1ms 가 서서히·다시 만들어도 같은 바이트, 발견이 멸종보다 높고 멸종은 내려감(영점 교차), 최소 간격·같은 소리를 쓰는 종류·1초에 100번 → 2번·꺼짐(내던 소리도 멈춤)·음량·묶음 우선순위·트리 밖 — "냄/안 냄" 은 셈(`plays`)만이 아니라 **실제 재생기**(`AudioStreamPlayer.playing` + 그 소리의 파형)까지(더미 드라이버도 play() 직후 재생 중), 실험실이 붙인 **자기** `LabSound` 의 `events_tagged`(A·B) 연결·한 프레임 A·B 묶음 → 소리 하나·두 번 붙여도 한 번과 실제 진행 사건·역사 그대로(4단계 검토 반영).
 
 ## 종단 검사 — `tests/view/integration4_checks.gd` (4단계 통합)
 
-실제 실험실 장면(1280×720)에 실제 패널을 모두 붙인 채 패널 → 실험실 → 시뮬레이션 → 그래프·연대기로 이어지는 길을 확인한다(검사 55개, 프레임은 `advance_frame` 64배).
+실제 실험실 장면(1280×720)에 실제 패널을 모두 붙인 채 패널 → 실험실 → 시뮬레이션 → 그래프·연대기로 이어지는 길을 확인한다(검사 58개, 프레임은 `advance_frame` 64배). 임시 폴더는 프로세스마다 따로(`user://integration4_checks-<pid>`), 처음과 끝에 숨은 파일까지 지운다.
 ① ParamPanel 에 예설정·씨앗·세 값·고급 키를 넣고 `apply()` → 새 세계의 `cfg`·씨앗·개체 수, "지금 실험과 같음", 화면으로 진행해도 헤드리스와 같은 상태·해시, 그래프 세 개 점 수 = 기록 줄 수.
 ② `set_compare_mode(true)` → A·B 칸(바꾼 값은 그 칸에만) → `apply_compare()` → 지도 둘, 범례 둘, B 에 첫 밭이 생길 때까지 진행 → A·B 모두 헤드리스와 같음, 그래프 계열 둘, 연대기 A/B 줄 수 = 두 연대기 합, 알림 이름표.
 ③ 연대기의 B 첫 밭 줄을 실제 마우스로 누름 → B 의 행위자 선택(실험 번호 1, 정보 창 이름표 B, 고리는 B 지도에만) + 그래프 시점 표시, 행위자 없는 A 줄 → 시점만, 두 세계 그대로.
-④ 패널 `export_to(dir)` → `dir/A`·`dir/B` 의 timeseries.csv·chronicle.csv = 같은 예설정·바꾼 값·씨앗·틱 수의 헤드리스 실행기 결과(글자까지), summary.json 출처·이름표·해시, 알림의 절대 경로.
+④ 패널 `export_to(dir)` → `dir/A`·`dir/B` 의 timeseries.csv·chronicle.csv = 같은 예설정·바꾼 값·씨앗·틱 수의 헤드리스 실행기 결과(글자까지 — `record.every` 의 배수가 아닌 틱에서 내보내 끝 줄까지), summary.json 출처·이름표·해시, 알림의 절대 경로.
 ⑤ 비교 중 스냅숏 저장 → `-A`·`-B` 두 파일, B 를 열면 혼자 모드로 같은 틱·해시, 혼자 저장 → 더 진행 → 열기 = 저장한 상태(헤드리스와 비교), 이어 돌려도 같음, 없는 파일은 오류 글.
-⑥ "소리" 상자 ↔ `LabSound.enabled`. ⑦ `UiTheme.keep_words`(폭 그대로, 빈칸에서만 줄바꿈).
+⑥ "소리" 상자 ↔ `LabSound.enabled`, 실험실의 LabSound 가 `events_tagged` 에 붙어 있음. ⑦ `UiTheme.keep_words`(폭 그대로, 빈칸에서만 줄바꿈).
 
 ## 5단계 더함 — 웹 체험판 내려받기 (LabMain·ParamPanel)
 
 | 멤버 | 뜻 |
 |---|---|
 | `static LabMain.is_web() -> bool` | 웹 체험판인지(`OS.has_feature("web")`) |
-| `LabMain.results_zip_bytes() -> PackedByteArray` | `export_csv` 와 같은 결과 폴더(비교면 `A/`·`B/`)를 zip 바이트로(실패하면 빈 배열). 데스크톱에서도 같아 검사함 |
-| `LabMain.download_results() -> String` · `download_snapshot(index := 0) -> String` | 웹: 브라우저 내려받기(`JavaScriptBridge.download_buffer`). 데스크톱: 같은 바이트를 `user://downloads/` 에 저장. `last_download_name` = 마지막 파일 이름(검사용) |
+| `LabMain.results_zip_bytes() -> PackedByteArray` | `export_csv` 와 같은 결과 폴더(비교면 `A/`·`B/`)를 zip 바이트로(실패하면 빈 배열). 데스크톱에서도 같아 검사함. 임시 폴더 `user://web_export/<프로세스>-<µs>` 와 zip 은 끝나면(실패해도) 숨은 `.gdignore` 까지 지운다(4단계 검토 반영 — 전에는 내려받을 때마다 폴더가 하나씩 남았음). `last_zip_tmp_dir`(검사용) |
+| `LabMain.download_results() -> String` · `download_snapshot(index := 0) -> String` | 웹: 브라우저 내려받기(`JavaScriptBridge.download_buffer`). 데스크톱: 같은 바이트를 `user://downloads/` 에 저장. 이름: 결과 = `default_export_dir()` 이름 + `.zip`(비교면 두 씨앗), 스냅숏 = `snapshot-<날짜-시각>-seed<그 실험의 씨앗>-tick<T>[-A/-B].json`. `last_download_name` = 마지막 파일 이름(검사용) |
 | `ParamPanel.web_mode` · `set_web_mode(on)` | 웹이면 "결과 내려받기(zip)"·"스냅숏 내려받기"(비교면 A·B 두 파일), "스냅숏 열기" 숨김. 기본 = `LabMain.is_web()` |
 
-검사: `tests/view/web_checks.gd`. 앱 아이콘 `tests/icon_capture.gd`, 타임랩스 `tests/timelapse_capture.gd` + `tools/make_timelapse.sh`.
+검사: `tests/view/web_checks.gd`(혼자·비교 zip 내용, 임시 폴더가 남지 않음, 내려받기 이름의 씨앗, 검사가 쓴 파일은 끝에 지움). 앱 아이콘 `tests/icon_capture.gd`, 타임랩스 `tests/timelapse_capture.gd` + `tools/make_timelapse.sh`.

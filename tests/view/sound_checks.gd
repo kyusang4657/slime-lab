@@ -2,6 +2,8 @@ extends RefCounted
 ## LabSound 검사. tests/run_view_tests.gd 가 불러 run(t) 을 부른다. 계약: docs/VIEW-API.md "LabSound".
 ## 합성 소리(16비트 모노·길이·최댓값·NaN 없음·같은 바이트·처음과 끝이 0 — 딸깍 없음·음높이 방향), 최소 간격,
 ## 꺼짐, 한 묶음에 하나(멸종 > 발견 > 저장고), 실험실 연결(events_tagged)과 역사 해시. 헤드리스는 더미 오디오 드라이버.
+## "소리를 냄" 은 LabSound 의 셈(plays·last_sound)만이 아니라 실제 재생기(AudioStreamPlayer)가 그 소리의 파형으로 재생 중인지까지
+## 본다(더미 드라이버도 play() 직후 playing — 재생 호출을 빼먹거나 다른 소리를 넣으면 실패).
 ## 들어 보려면: godot --headless --path . --script res://tools/render_sounds.gd -- --out=폴더
 
 const DT := 1.0 / 60.0
@@ -22,7 +24,7 @@ const T0 := 1000.0
 ## 끝에 오디오 서버가 멈춘 재생을 치울 시간(초 — 합격 여부와 무관한 정리)
 const DRAIN_S := 0.2
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 50
+const MIN_CHECKS := 59
 
 
 func run(t) -> void:
@@ -98,26 +100,36 @@ func _node(t) -> void:
 	t.check(vol_ok, "음량 = ui.sound.volume_db(모든 재생기)")
 	var gap := UiConfig.num("sound.min_interval_s")
 	t.check(gap > 0.0, "최소 간격 %.2f초" % gap)
-	t.check(snd.play_event_at("discovery", T0) and snd.plays == 1 and snd.last_sound == "discovery", "발견 → 소리")
-	t.check(not snd.play_event_at("discovery", T0 + gap * 0.5), "최소 간격 안의 같은 소리는 안 냄")
-	t.check(snd.play_event_at("store_built", T0 + gap * 0.5), "다른 소리(저장고)는 냄")
-	t.check(not snd.play_event_at("first_farm", T0 + gap * 0.6), "첫 밭은 저장고와 같은 소리 → 간격 안이라 안 냄")
-	t.check(snd.play_event_at("discovery", T0 + gap), "간격이 지나면 다시 냄")
-	t.check(not snd.play_event_at("milestone", T0 + 10.0) and not snd.play_event_at("farm_lost", T0 + 10.0) and not snd.play_event_at("", T0 + 10.0),
-			"세대·밭 잃음·없는 종류는 소리 없음")
-	t.check(snd.play_event_at("extinction", T0 + 10.0) and snd.last_sound == "extinction", "멸종 → 소리")
+	snd.stop_all()
+	t.check(snd.play_event_at("discovery", T0) and snd.plays == 1 and snd.last_sound == "discovery" and _active(snd, "discovery") == 1
+			and _playing(snd) == 1, "발견 → 소리(재생기 하나가 발견 파형을 재생)")
+	snd.stop_all()
+	t.check(not snd.play_event_at("discovery", T0 + gap * 0.5) and _playing(snd) == 0, "최소 간격 안의 같은 소리는 안 냄(재생기 조용)")
+	t.check(snd.play_event_at("store_built", T0 + gap * 0.5) and _active(snd, "store_built") == 1 and _playing(snd) == 1, "다른 소리(저장고)는 냄")
+	snd.stop_all()
+	t.check(not snd.play_event_at("first_farm", T0 + gap * 0.6) and _playing(snd) == 0, "첫 밭은 저장고와 같은 소리 → 간격 안이라 안 냄")
+	t.check(snd.play_event_at("discovery", T0 + gap) and _active(snd, "discovery") == 1, "간격이 지나면 다시 냄")
+	snd.stop_all()
+	t.check(not snd.play_event_at("milestone", T0 + 10.0) and not snd.play_event_at("farm_lost", T0 + 10.0) and not snd.play_event_at("", T0 + 10.0)
+			and _playing(snd) == 0, "세대·밭 잃음·없는 종류는 소리 없음(재생기 조용)")
+	t.check(snd.play_event_at("extinction", T0 + 10.0) and snd.last_sound == "extinction" and _active(snd, "extinction") == 1, "멸종 → 소리(멸종 파형)")
+	snd.stop_all()
+	t.check(snd.play_event_at("first_farm", T0 + 12.0) and snd.last_sound == "store_built" and _active(snd, "store_built") == 1, "첫 밭 → 저장고 파형")
 	# 빨리 감기처럼 1초에 100번
+	snd.stop_all()
 	var before := snd.plays
 	for i in BURST:
 		snd.play_event_at("discovery", T0 + 20.0 + float(i) / float(BURST))
 	var want := int(floorf((1.0 - 1.0 / float(BURST)) / gap)) + 1
-	t.check(snd.plays - before == want, "1초에 사건 %d번 → 소리 %d번만(최소 간격)" % [BURST, snd.plays - before])
-	# 꺼짐
+	t.check(snd.plays - before == want and _active(snd, "discovery") == mini(want, snd.player_count()),
+			"1초에 사건 %d번 → 소리 %d번만(최소 간격), 재생 중 %d" % [BURST, snd.plays - before, _active(snd, "discovery")])
+	# 꺼짐: 내던 소리도 멈춤
 	snd.enabled = false
 	var p0 := snd.plays
-	t.check(not snd.play_event_at("extinction", T0 + 100.0) and snd.plays == p0, "꺼지면 안 냄")
+	t.check(_playing(snd) == 0, "끄면 내던 소리도 멈춤")
+	t.check(not snd.play_event_at("extinction", T0 + 100.0) and snd.plays == p0 and _playing(snd) == 0, "꺼지면 안 냄")
 	snd.enabled = true
-	t.check(snd.play_event_at("extinction", T0 + 100.0), "다시 켜면 냄")
+	t.check(snd.play_event_at("extinction", T0 + 100.0) and _active(snd, "extinction") == 1, "다시 켜면 냄")
 	snd.volume_db = -20.0
 	var vol2 := true
 	for p in snd.get_children():
@@ -129,10 +141,13 @@ func _node(t) -> void:
 	var s2 := LabSound.new()
 	t.root.add_child(s2)
 	await t.frames(1)
-	t.check(s2.play_events([{kind = "store_built"}, {kind = "discovery"}, {kind = "farm_lost"}]) and s2.plays == 1 and s2.last_sound == "discovery",
-			"묶음에서 가장 중요한 소리 하나(발견)")
-	t.check(s2.play_events([{kind = "discovery"}, {kind = "extinction"}]) and s2.last_sound == "extinction" and s2.plays == 2, "멸종이 발견보다 먼저")
-	t.check(not s2.play_events([{kind = "milestone"}, {kind = "farm_lost"}]) and not s2.play_events([]) and s2.plays == 2, "소리 없는 묶음")
+	t.check(s2.play_events([{kind = "store_built"}, {kind = "discovery"}, {kind = "farm_lost"}]) and s2.plays == 1 and s2.last_sound == "discovery"
+			and _active(s2, "discovery") == 1 and _playing(s2) == 1, "묶음에서 가장 중요한 소리 하나(발견 — 재생기도 하나)")
+	s2.stop_all()
+	t.check(s2.play_events([{kind = "discovery"}, {kind = "extinction"}]) and s2.last_sound == "extinction" and s2.plays == 2 and _active(s2, "extinction") == 1
+			and _playing(s2) == 1, "멸종이 발견보다 먼저")
+	s2.stop_all()
+	t.check(not s2.play_events([{kind = "milestone"}, {kind = "farm_lost"}]) and not s2.play_events([]) and s2.plays == 2 and _playing(s2) == 0, "소리 없는 묶음")
 	s2.queue_free()
 	# 트리 밖이면 낼 수 없음
 	var s3 := LabSound.new()
@@ -141,38 +156,88 @@ func _node(t) -> void:
 	await t.frames(1)
 
 
-## ③ 실험실 연결: events_tagged(A·B) → 소리, 실제 진행의 사건, 역사 해시 그대로
+## ③ 실험실 연결: 실험실이 _ready 에서 붙인 **자기** LabSound(bind_lab 을 빼먹으면 실패)가 events_tagged(A·B) 를 프레임 끝에
+## 한 묶음으로 모아 소리 하나(비교 모드에서 A 멸종 + B 발견이 한 프레임에 와도 하나 — 멸종), 실제 진행의 사건, 역사 해시 그대로.
 func _with_lab(t) -> void:
 	var lab: LabMain = load("res://scenes/lab.tscn").instantiate()
 	t.root.add_child(lab)
 	await t.frames(1)
 	lab.set_process(false)
 	lab.set_paused(true)
-	var snd := LabSound.new()
-	lab.add_child(snd)
+	var snd := lab.lab_sound
+	t.check(snd != null and lab.events_tagged.is_connected(snd._on_events), "실험실의 LabSound 가 events_tagged 에 붙어 있음")
+	if snd == null:
+		return
+	snd.enabled = true
+	snd.reset_rate_limit()
+	snd.stop_all()
+	var p0 := snd.plays
+	lab.events_tagged.emit(0, [_ev("discovery")])
+	await t.frames(1)
+	t.check(snd.plays == p0 + 1 and snd.last_sound == "discovery" and _active(snd, "discovery") == 1, "events_tagged(A) → 실험실의 LabSound 가 발견 소리")
+	snd.stop_all()
+	lab.events_tagged.emit(1, [_ev("extinction")])
+	await t.frames(1)
+	t.check(snd.plays == p0 + 2 and snd.last_sound == "extinction" and _active(snd, "extinction") == 1, "events_tagged(B) → 멸종 소리")
+	# 한 프레임에 A·B 묶음 둘(비교 모드): 소리 하나, 더 중요한 것(멸종)
+	snd.reset_rate_limit()
+	snd.stop_all()
+	lab.events_tagged.emit(0, [_ev("discovery")])
+	lab.events_tagged.emit(1, [_ev("extinction"), _ev("store_built")])
+	await t.frames(1)
+	t.check(snd.plays == p0 + 3 and snd.last_sound == "extinction" and _playing(snd) == 1 and _active(snd, "extinction") == 1,
+			"한 프레임에 A 발견 + B 멸종 → 소리 하나(멸종, 재생 중 %d)" % _playing(snd))
+	# 다시 붙여도(두 번) 한 번씩
 	snd.bind_lab(lab)
 	snd.bind_lab(lab)
-	lab.events_tagged.emit(0, [{tick = 1, kind = "discovery", actor = -1, text = "검사", mean_gen = 0.0}])
-	t.check(snd.plays == 1 and snd.last_sound == "discovery", "events_tagged(A) → 발견 소리 한 번(두 번 붙여도 한 번)")
-	lab.events_tagged.emit(1, [{tick = 1, kind = "extinction", actor = -1, text = "검사", mean_gen = 0.0}])
-	t.check(snd.plays == 2 and snd.last_sound == "extinction", "events_tagged(B) → 멸종 소리")
+	snd.reset_rate_limit()
+	snd.stop_all()
+	lab.events_tagged.emit(0, [_ev("discovery")])
+	await t.frames(1)
+	t.check(snd.plays == p0 + 4 and _playing(snd) == 1, "두 번 붙여도 사건 한 묶음에 소리 한 번")
 	# 실제 진행: demo_fast 씨앗 2 는 100틱 안팎에 채집 발견
 	t.check(lab.new_experiment("demo_fast", {}, 2) == "", "새 실험")
 	# 위에서 낸 발견 소리의 최소 간격(실제 시계 0.5초)이 빠른 기계에서는 아직 안 지나 다음 발견 소리를 막는다 — 비우고 잰다
 	snd.reset_rate_limit()
-	var p0 := snd.plays
+	snd.stop_all()
+	var p1 := snd.plays
 	lab.step_ticks(130)
 	lab.advance_frame(DT)
+	await t.frames(1)
 	var kinds := {}
 	for e: Dictionary in lab.world.chronicle:
 		kinds[e.kind] = true
-	t.check(kinds.has("discovery") and snd.plays == p0 + 1, "진행 중 사건 묶음 → 소리 한 번(%s)" % [kinds.keys()])
+	t.check(kinds.has("discovery") and snd.plays == p1 + 1 and _active(snd, "discovery") == 1, "진행 중 사건 묶음 → 소리 한 번(%s)" % [kinds.keys()])
 	var ref: SimWorld = t.make_world({}, 2, "demo_fast")
 	ref.step_n(lab.world.tick)
 	t.check(t.same_state(lab.world, ref) == "", "소리가 붙어도 상태가 헤드리스와 같음")
 	lab.queue_free()
 	await t.frames(1)
 	await t.root.get_tree().create_timer(DRAIN_S).timeout
+
+
+## 시험 사건 하나
+static func _ev(kind: String) -> Dictionary:
+	return {tick = 1, kind = kind, actor = -1, text = "검사", mean_gen = 0.0}
+
+
+## 재생 중인 재생기 수
+static func _playing(snd: LabSound) -> int:
+	var n := 0
+	for p in snd.get_children():
+		if p is AudioStreamPlayer and (p as AudioStreamPlayer).playing:
+			n += 1
+	return n
+
+
+## 그 소리(LabSound 가 만들어 둔 파형)를 재생 중인 재생기 수
+static func _active(snd: LabSound, sound: String) -> int:
+	var want := snd._stream(sound)
+	var n := 0
+	for p in snd.get_children():
+		if p is AudioStreamPlayer and (p as AudioStreamPlayer).playing and (p as AudioStreamPlayer).stream == want:
+			n += 1
+	return n
 
 
 ## 부호가 바뀐 횟수(영점 교차, [a, b) 구간)

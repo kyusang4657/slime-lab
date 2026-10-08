@@ -12,8 +12,11 @@ extends PanelContainer
 signal slime_requested(id: int)
 signal follow_toggled(on: bool)
 
-## 방향 이름(0 북 1 동 2 남 3 서 = SimGrid 순서)
+## 방향 이름(0 북 1 동 2 남 3 서 = SimGrid 순서) — 화면이 북쪽 위일 때의 표시
 const HEADING_NAMES: Array[String] = ["북 ↑", "동 →", "남 ↓", "서 ←"]
+## 방향 낱말과 화면 화살표(화살표는 지도 화면이 돈 만큼 밀어 씀 — set_view_turns)
+const HEADING_WORDS: Array[String] = ["북", "동", "남", "서"]
+const HEADING_ARROWS: Array[String] = ["↑", "→", "↓", "←"]
 ## 가계 단추 메타(검사·도움말용)
 const META_ID := "slime_id"
 const META_REL := "relation"
@@ -63,8 +66,13 @@ var _fixed_buttons: Array[RelativeButton] = []
 var _kid_buttons: Array[RelativeButton] = []
 # 빈 상태 안내를 바꿔 쓰는 문구(멸종 등, "" = 기본 EMPTY_TEXT)
 var _empty_text := ""
+# 지도 화면이 북쪽 위에서 90° 씩 돈 수(0~3)와 마지막으로 보인 방향(-1 없음) — 방향 화살표를 화면 기준으로
+var _view_turns := 0
+var _heading := -1
 
 # ── 노드 ──
+# 빈 상태 안내(여백 info.padding 안 — 긴 멸종 안내가 창 가장자리에 닿지 않게 줄을 바꿈)
+var _empty_wrap: MarginContainer
 var _empty: VBoxContainer
 var _empty_label: Label
 var _main: VBoxContainer
@@ -183,7 +191,7 @@ func show_slime(world: SimWorld, id: int) -> void:
 		return
 	_world = world
 	_id = id
-	_empty.hide()
+	_empty_wrap.hide()
 	_main.show()
 	_fill_static(d)
 	_fill_family(d)
@@ -195,11 +203,15 @@ func show_slime(world: SimWorld, id: int) -> void:
 
 
 ## "슬라임을 눌러 고르세요" 안내(set_empty_text 로 바꾼 문구가 있으면 그것). 따라가기 상태는 그대로 둔다(LabMain 이 관리).
+## 비교 모드 이름표도 지운다(current_tag() = "" — 다음 선택 때 LabMain 이 set_tag 를 다시 부름).
 func clear() -> void:
 	_id = -1
 	_world = null
+	_heading = -1
 	_main.hide()
-	_empty.show()
+	_empty_wrap.show()
+	_tag.visible = false
+	_tag_label.text = ""
 	_empty_label.text = _empty_text if _empty_text != "" else EMPTY_TEXT
 	_clear_flow(_parents_flow)
 	_clear_flow(_gp_flow)
@@ -246,9 +258,31 @@ func set_tag(tag: String, col: Color = Color(0, 0, 0, 0)) -> void:
 		sb.bg_color = col if col.a > 0.0 else _c_accent
 
 
-## (추가, 4단계) 지금 이름표("" = 없음). 검사용.
+## (추가, 4단계) 지금 이름표("" = 없음 — 개체를 보이지 않는 빈 상태도). 검사용.
 func current_tag() -> String:
-	return _tag_label.text if _tag.visible else ""
+	return _tag_label.text if _tag.visible and _id >= 0 else ""
+
+
+## (추가) 지도 화면이 북쪽 위에서 90° 씩 몇 번 돌았는지(0~3, OrbitCamera.view_turns). "방향" 의 화살표를 화면 방향으로
+## 맞춘다(낱말은 그대로 — 1 이면 북쪽 = 화면 오른쪽 "북 →"). LabMain 이 선택한 지도로 매 프레임 넣는다(바뀔 때만 다시 씀).
+func set_view_turns(turns: int) -> void:
+	var t := posmod(turns, 4)
+	if t == _view_turns:
+		return
+	_view_turns = t
+	_show_heading()
+
+
+## 방향 글자 "북 ↑"(화살표는 화면 방향).
+func heading_text(hd: int) -> String:
+	if hd < 0 or hd >= HEADING_WORDS.size():
+		return "?"
+	return "%s %s" % [HEADING_WORDS[hd], HEADING_ARROWS[(hd + _view_turns) % HEADING_ARROWS.size()]]
+
+
+func _show_heading() -> void:
+	if _v_head != null and _heading >= 0:
+		_v_head.text = heading_text(_heading)
 
 
 ## (추가) 따라가기 단추 상태만 맞춘다(신호 없음). LabMain 이 F 키로 바꿨을 때 쓴다.
@@ -390,8 +424,8 @@ func _update_live(d: Dictionary) -> void:
 	_v_action.text = SimBrain.ACTION_NAMES[act] if act >= 0 and act < SimBrain.ACTION_NAMES.size() else "?"
 	_brain.set_highlight_action(act)
 	_v_pos.text = "(%d, %d)" % [int(d.x), int(d.y)]
-	var hd := int(d.heading)
-	_v_head.text = HEADING_NAMES[hd] if hd >= 0 and hd < HEADING_NAMES.size() else "?"
+	_heading = int(d.heading)
+	_v_head.text = heading_text(_heading)
 
 
 ## 자식 목록. children_of 는 계통 전체를 훑으므로 (세계, id) 가 바뀌었거나
@@ -505,11 +539,14 @@ func _on_follow_toggled(on: bool) -> void:
 # ════════════════════════════ 만들기 ════════════════════════════
 
 func _build() -> void:
-	# 빈 상태 안내
+	# 빈 상태 안내: 본문과 같은 여백(info.padding) 안에서 줄을 바꿈(긴 멸종 안내가 창 양쪽 끝에 닿던 것을 고침)
+	_empty_wrap = _margin(_pad, _pad, _pad, _pad)
+	_empty_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_empty_wrap)
 	_empty = VBoxContainer.new()
 	_empty.alignment = BoxContainer.ALIGNMENT_CENTER
 	_empty.add_theme_constant_override("separation", _row_gap * 2)
-	add_child(_empty)
+	_empty_wrap.add_child(_empty)
 	_empty_label = _label(EMPTY_TEXT, _fs, _c_text, true)
 	_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
