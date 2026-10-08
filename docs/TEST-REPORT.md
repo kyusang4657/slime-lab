@@ -28,7 +28,7 @@
 | B09 | 실행 파일에 검사·도구·문서가 들어가지 않음 | 통과 | `exclude_filter`, 실행 파일에서 검사 문장(예: "농사 도달 시도") 0회 |
 | B10 | 글꼴 OFL 전문이 배포판에 들어감 | 통과(설정) | 포함 필터 `assets/fonts/OFL-NanumGothic.txt`, Actions zip 에 LICENSE·CREDITS·OFL |
 | B11 | 앱 아이콘(코드로 렌더링) | 통과 | `assets/icon.png`(`tests/icon_capture.gd`), 웹 파비콘에도 쓰임 |
-| B12 | 타임랩스(빠른 문명·씨앗 5, 32배, 1,800틱, 채집 648 → 저장 702 → 농사 1,024틱) | 통과 | `docs/media/timelapse.mp4` 1.1MB, `.gif` 2.9MB |
+| B12 | 타임랩스(빠른 문명·씨앗 5, 32배, 1,800틱, 채집 648 → 저장 702 → 농사 1,024틱) | 통과 | `docs/media/timelapse.webm` 1.2MB(VP9 — 오픈소스 Chromium 계열도 재생), `.mp4` 1.1MB(H.264), `.gif` 2.9MB |
 | B13 | Actions: test → export(세 플랫폼, Linux 헤드리스 실행) → pages(main) / release(태그) | 푸시 뒤 확인 | 아래 3절 |
 
 ## 3. Actions 첫 실행

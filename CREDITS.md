@@ -8,7 +8,7 @@
 | 글꼴 나눔고딕 보통·굵게 | `assets/fonts/NanumGothic-Regular.ttf`, `assets/fonts/NanumGothic-Bold.ttf` | © 2010 NHN Corporation(네이버 나눔 글꼴, Reserved Font Name "Nanum"·"NanumGothic"), [google/fonts](https://github.com/google/fonts/tree/main/ofl/nanumgothic) `ofl/nanumgothic` 에서 받음. 프로젝트 기본 글꼴(`project.godot`)이자 분석 도구 그림 글꼴(`tools/analyze.py`) | [SIL OFL 1.1](assets/fonts/OFL-NanumGothic.txt) (전문: `assets/fonts/OFL-NanumGothic.txt`) |
 | 효과음(발견 차임·멸종 낮은 음·저장고 톡) | `scripts/ui/lab_sound.gd`(실행 중 합성, 설정 `config/ui.json` 의 `sound` 절) | 이 프로젝트에서 코드로 직접 합성(사인 + 약한 배음, 감쇠 포락선, 16비트 모노 22050 Hz — 음원 파일 없음) | CC0 1.0 (퍼블릭 도메인 헌정) |
 | 앱 아이콘 | `assets/icon.png` | 이 프로젝트의 슬라임 메시(`SlimeGeo`)를 렌더링해 만든 그림(`tests/icon_capture.gd`, 외부 이미지 없음) | 프로젝트 소스와 같음(MIT) |
-| 타임랩스 영상·그림 | `docs/media/timelapse.mp4`·`.gif`·`-poster.jpg` | 실험실 실행 화면을 찍어(`tests/timelapse_capture.gd`) ffmpeg 로 묶음(`tools/make_timelapse.sh`) | 프로젝트 소스와 같음(MIT) |
+| 타임랩스 영상·그림 | `docs/media/timelapse.webm`·`.mp4`·`.gif`·`-poster.jpg` | 실험실 실행 화면을 찍어(`tests/timelapse_capture.gd`) ffmpeg 로 묶음(`tools/make_timelapse.sh`) | 프로젝트 소스와 같음(MIT) |
 | 게임 엔진 | — | [Godot Engine](https://godotengine.org) 4.4.1 | MIT |
 | 분석 도구 파이썬 의존(앱에 들어가지 않음) | `tools/requirements.txt` | [numpy](https://numpy.org)·[pandas](https://pandas.pydata.org)·[matplotlib](https://matplotlib.org) | BSD 3-Clause(numpy·pandas), matplotlib 라이선스(PSF 기반) |
 
