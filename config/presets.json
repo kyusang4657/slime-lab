@@ -24,10 +24,13 @@
 	},
 	"fast_civ": {
 		"label": "빠른 문명",
+		"_comment": "연구용: 발견이 진화 도중에 열리고 100세대 안에 씨앗 1~12 모두 농사. 근거·씨앗별 결과는 docs/TUNING-fast_civ.md",
 		"set": {
-			"discovery.forage_threshold": 120,
+			"discovery.forage_threshold": 280,
 			"discovery.store_threshold": 30.0,
-			"discovery.farm_threshold": 8
+			"discovery.region_size": 16,
+			"discovery.farm_radius": 16,
+			"discovery.farm_threshold": 15
 		}
 	},
 	"demo_fast": {
