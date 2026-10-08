@@ -255,17 +255,45 @@ func run(t) -> void:
 | `var experiments: Array[Experiment]` · `experiment(index)` | 진행 중인 실험(혼자 1개, 비교 2개 [A, B]). `world` = `experiments[0].world`, `map_view` = A 의 지도 | 됨 |
 | `signal experiments_changed(list: Array)` | 실험 목록이 바뀜(새 실험·스냅숏·비교 시작/끝) — 패널은 처음부터 다시 읽음 | 됨 |
 | `signal recorded(index: int, row: Dictionary)` | index 번째 실험이 한 줄 기록 | 됨 |
-| `signal events_tagged(index: int, list: Array)` | index 번째 실험의 새 사건(사본). `events(list)` 는 A 만(3단계 호환) | A 만 됨 → 비교 때 B 도 |
+| `signal events_tagged(index: int, list: Array)` | index 번째 실험의 새 사건(사본). `events(list)` 는 A 만(3단계 호환) | 됨(A·B) |
 | `signal cursor_tick_requested(tick: int)` · `func request_cursor(tick)` | 그래프 시점 표시 요청(연대기 → 그래프), -1 = 지움 | 됨 |
 | `func new_experiment(preset, overrides, seed) -> String` · `open_snapshot(path)` | 혼자 모드로 바꿔 시작 | 됨 |
-| `func start_compare(a: Dictionary, b: Dictionary) -> String` | a·b = `{preset, overrides, seed}`. 지도 둘을 나란히(A 왼쪽 · B 오른쪽, 사이 `ui.compare.gap_px`), 같은 배속으로 틱마다 A 다음 B 를 진행(예산은 둘 몫을 합쳐 셈), 사건 알림 앞에 "A · "/"B · " | **뼈대 → LabMain 담당** |
-| `func stop_compare()` · `func is_comparing() -> bool` | 비교 끝(A 만 남김) | **뼈대 → LabMain 담당** |
-| `func select_slime(id, index := 0)` | 비교 모드에서 어느 실험의 개체인지(정보 창 머리에 A/B 표시, 그 지도에만 고리) | **LabMain 담당** |
+| `func start_compare(a: Dictionary, b: Dictionary) -> String` | a·b = `{preset, overrides, seed}`. 지도 둘을 나란히(A 왼쪽 · B 오른쪽, 사이 `ui.compare.gap_px`), 같은 배속으로 틱마다 A 다음 B 를 진행(예산은 둘 몫을 합쳐 셈), 사건 알림 앞에 "A · "/"B · " | 됨 |
+| `func stop_compare()` · `func is_comparing() -> bool` | 비교 끝(A 만 남김) | 됨 |
+| `func select_slime(id, index := 0)` | 비교 모드에서 어느 실험의 개체인지(정보 창 머리에 A/B 표시, 그 지도에만 고리) | 됨 |
 | `func save_snapshot(path, index := 0) -> String` | 스냅숏 저장 + 알림 | 됨 |
 | `func export_csv(dir) -> String` | 결과 폴더 내보내기(비교면 `dir/A`·`dir/B`) + 알림(절대 경로) | 됨 |
 | `func default_export_dir() -> String` | `user://experiments/<날짜-시각>-seed<N>` | 됨 |
 | `func step_ticks(n)` | 프레임 없이 모든 실험 n틱(기록·`recorded` 포함, 검사·캡처용) | 됨 |
-| 자리 채우기 | `_ready` 에서 `ParamPanel` → `left_dock`, `GraphPanel`(늘어남) + `ChroniclePanel`(폭 `ui.chronicle.width`) → `bottom_dock`, `LabSound` → 자식. 각각 `bind_lab(self)` | **LabMain 담당** |
+| 자리 채우기 | `_ready` 에서 `ParamPanel` → `left_dock`, `GraphPanel`(늘어남) + `ChroniclePanel`(폭 `ui.chronicle.width`) → `bottom_dock`, `LabSound` → 자식. 각각 `bind_lab(self)` | 됨 |
+
+**구현 메모(4단계, LabMain 담당이 덧붙임 — 3단계 메모의 배치·알림 위치·멸종·선택 설명을 이것으로 고쳐 읽음)**
+
+- 더한 멤버:
+
+  | 멤버 | 뜻 |
+  |---|---|
+  | `var param_panel: ParamPanel` · `graph_panel: GraphPanel` · `chronicle_panel: ChroniclePanel` · `lab_sound: LabSound` | 자리에 넣은 패널(노드 이름도 같음: `LeftDock/ParamPanel`, `BottomDock/GraphPanel`·`BottomDock/ChroniclePanel`, `LabSound`) |
+  | `func map_view_of(index) -> MapView` | index 번째 실험의 지도(0 = A = `map_view`, 1 = B, 없으면 null) |
+  | `func selected_index() -> int` | 선택한 개체의 실험 번호(선택 없으면 -1) |
+  | `static func tag_color(index) -> Color` | 실험 색 = 그래프 계열 색(`ui.graph.series_a`·`ui.graph.series_b`) — 이름표 바탕에 씀. 연대기 A/B 표시도 이것을 쓰면 색이 한 벌 |
+  | `func set_dock_open(which, open)` · `is_dock_open(which)` · `const DOCK_LEFT = "left"`, `DOCK_BOTTOM = "bottom"` | 자리 펴기·접기(지도 오른쪽 아래 단추와 같음). 처음 값 `ui.lab.left_dock_open`·`ui.lab.bottom_dock_open` |
+  | `func fit_map(index := -1)` | 지도 전체 보기: -1(Home·0 키) = 모든 지도, 지도 위 "전체 보기" 단추 = 그 지도만 |
+  | `func show_toast(text, kind, tick, group := "")` | `group` = 비교 모드 이름표. 밭 잃음 묶기는 같은 종류·같은 group 끼리만 |
+
+- **배치(노드 이름 고정)**: `Column`(VBox) = `TopBar` / `Body`(HBox) = `Main`(VBox: `Middle`(HBox: `LeftWrap` ⊃ `LeftDock` | `MapArea`) / `BottomWrap` ⊃ `BottomDock`) | `InfoPanel`. 정보 창은 아래 자리 옆까지 세로 전체(1600×900 에서 두뇌 범례까지 스크롤 없이 — V07), 아래 자리 폭 = 왼쪽 자리 + 지도. 1280×720·자리 모두 펼침: 지도 680×456, 비교 모드 한 칸 338×456(검사 ≥ 320×400).
+- **지도 칸**: `MapArea` ⊃ `MapContainer`(A) [· `MapContainerB`] ⊃ `MapViewport`(`own_world_3d`) ⊃ `MapView` — 위치·크기를 코드로(픽셀 정수, `MapArea.resized` 마다): 혼자 = 자리 전체, 비교 = 반씩(사이 `ui.compare.gap_px`, 남는 1px 은 B). B 칸·표지는 `start_compare` 때 만들고, 혼자로 돌아가면(`stop_compare`·`new_experiment`·`open_snapshot`) 트리에서 바로 빼서 지운다. 지도 클릭은 `select_slime(id, 칸 번호)`.
+- **지도 위 표지**: 칸마다 왼쪽 위 `MapTitle`/`MapTitleB` = [`Tag` 이름표(비교 모드만: 실험 색 바탕 `ui.compare.tag_radius`·`ui.compare.tag_pad_h`·`ui.compare.tag_pad_v`, 어두운 굵은 글자 — 글자 자체에는 실험 색을 입히지 않음)] `Title` 실험 이름(칸 폭에 맞춰 "…") · 멈춤 · `ExtinctBadge`(그 실험) · `FitButton`(그 지도). 공용: 왼쪽 아래 `MapHint`(넓으면 한 줄, 좁으면 마우스·키 두 줄, 비교 모드에서 A 칸에 들어가면 A 칸 안), 오른쪽 아래 `DockToggles`(`LeftToggle` "설정" · `BottomToggle` "그래프·연대기", 눌림 = 보임, 자식이 있는 자리만), 알림 `Toasts` 는 표지 줄 아래 `ui.lab.toast_margin_top` 에서 시작(좁은 지도·비교 모드에서 표지를 가리지 않게).
+- **자리**: 자식이 있고 접지 않았을 때만 보인다(접은 자리는 자식이 들어와도 숨긴 채, 패널을 모두 빼면 접기 단추도 숨음 — 검사).
+- **패널 붙이기**: `_ready` 에서 배치 → 패널을 자리에 넣고 `bind_lab(self)` → 명령줄로 첫 실험. 즉 **`bind_lab` 때 `experiments` 는 비어 있고 `world` 는 null**, 첫 `experiments_changed` 가 곧 온다(패널은 그때 읽으면 됨). 크기: ParamPanel 세로 늘어남, GraphPanel 가로·세로 늘어남, ChroniclePanel 최소 폭 `ui.chronicle.width`·세로 늘어남.
+- **진행**: 프레임 처음과 틱마다 **지도마다** `before_steps()`, 한 틱(`_step_once`) = A.step() 다음 B.step()(기록하면 `recorded(k, 줄)`), 프레임 끝에 지도마다 `update_view(alpha, delta)`. 한 틱 비용 추정 = 두 실험 step 시간의 합이라 예산(`ui.speed.sim_budget_ms`·빨리 감기)은 둘 몫을 합쳐 센다. 두 세계는 언제나 같은 틱(검사: 프레임마다 같은 틱 수, 두 해시·상태가 헤드리스와 같음).
+- **사건**: 실험마다 `drain_events()` → `events_tagged(k, 사본)`, A 는 `events(사본)` 도. 받는 쪽마다 따로 깊은 사본이라 청취자가 고쳐 써도 알림·다른 청취자·연대기가 그대로. 비교 모드 알림 = "A · 문장"/"B · 문장"(`visible_toasts()` 의 text 도).
+- **선택**: 고리는 그 실험의 지도에만, 정보 창 머리 이름표 = `InfoPanel.set_tag(tag, tag_color(index))`(혼자면 ""; InfoPanel 에 더한 것은 `set_tag(tag: String, col := 투명 → 강조 색)` · `current_tag() -> String` 둘뿐, 머리 `#id` 앞 실험 색 상자). 가계 단추는 같은 실험 안에서 옮겨 가며 그 지도에서 카메라를 맞춤. 따라가기(정보 창 단추·F 키)는 선택한(선택이 없으면 마지막으로 선택했던) 실험의 지도에서; 다른 실험의 개체를 고르면 앞 지도의 따라가기를 끄고 단추를 새 지도 상태로. F 알림은 비교 모드면 "A 지도 따라가기 켬". Esc·빈 곳 클릭·없는 실험 번호 = 해제(모든 지도의 고리 지움).
+- **멸종(비교 모드)**: 한쪽만 멸종하면 **멈추지 않는다** — 살아남은 쪽을 같은 틱으로 계속 견주게(그 순간은 "A · 멸종 …" 위험 색 알림과 그 지도의 `ExtinctBadge` 로 남음). **모든 실험이 멸종하면** `lab.pause_on_extinction` 대로 멈춘다(혼자 모드 = 3단계와 같음). 정보 창 빈 안내: "A 는 멸종했습니다 (틱 N) — B 지도에서 고르세요" / "A·B 모두 멸종했습니다 — 고를 개체가 없습니다".
+- **위쪽 막대(비교 모드)**: 평균 세대·개체·문명 대신 `[A] 개체 · 문명 │ [B] 개체 · 문명`(이름표 = 실험 색 상자, 평균 세대는 그래프에서). 틱·계절·낮밤은 두 실험이 같으면 하나, 다르면 "A값/B값"(예: 혹독한 겨울과 견주면 "여름/봄"); 하루 길이가 달라(고급 설정) 날이 다르면 "날" 은 숨긴다(틱이 기준). 가장 긴 경우에도 최소 창 폭 안(검사).
+- **`stop_compare()`**: A 의 실험·세계·기록·카메라·(A 의) 선택은 그대로 두고 이름표를 지우고 B 를 버린다. `experiments_changed([A])`(세계는 그대로라 `world_changed` 없음), 이름표 붙은 알림을 지우고 "비교를 끝냈습니다 — … 만 계속합니다" 알림, 한 틱 비용 추정·실제 배속 창은 다시 잰다. 비교 중이 아니면 아무것도 안 함.
+- **`start_compare` 오류**: 빠진 키는 기본(`lab.default_preset`·`{}`·`lab.default_seed`), 만들기 실패면 "A: 문장"/"B: 문장"을 돌려주고 지금 실험은 그대로.
+- **캡처(`tests/ui_driver.gd`)**: ⑤ `lab-05-panels` 기본·씨앗 1 을 `step_ticks(1200)` 뒤 4배로 그림 — 패널 자리 이름, "그래프·연대기" 단추를 실제 마우스로 눌러 접었다 폄, 해시·기록 줄 수. ⑥ `lab-06-compare` demo_fast | 기본(씨앗 1)을 `step_ticks(1500)` → 두 해시가 헤드리스와 같음 → 2배로 그리며 쌓인 알림 이름표 확인 → B 지도 가운데 개체를 실제 마우스로 눌러 고름(실험 번호 1, 정보 창 이름표 B, 고리는 B 지도에만) → 쌓인 알림을 흘려보내고 찍음.
 
 ## ParamPanel — `scripts/ui/param_panel.gd` (`class_name ParamPanel`, VBoxContainer, 왼쪽 자리)
 

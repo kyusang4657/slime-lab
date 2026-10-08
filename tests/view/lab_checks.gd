@@ -1,12 +1,17 @@
 extends RefCounted
 ## LabMain 검사: 장면·배치·테마, 프레임 진행(배속·멈춤·빨리 감기·예산), 선택 연결, 단축키, 사건 알림,
 ## 역사 해시(화면을 거쳐도 헤드리스와 같음), 명령줄 대체값, 스냅숏 열기. 프레임은 advance_frame 으로 직접 몬다.
+## 4단계: 패널 자리 채우기·자리 접기, 비교 모드(지도 둘·같은 틱 진행·해시·기록·사건·알림 이름표·선택·멸종·끝내기).
 
 const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 119
+const MIN_CHECKS := 190
+## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
+const B_MUTATION := 0.07
+## 최소 창(1280×720)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기
+const MIN_COMPARE_MAP := Vector2(320, 400)
 ## 예산 측정 프레임 수, 평균 시뮬레이션 시간이 예산을 넘어도 되는 몫(ms)
 const BUDGET_FRAMES := 60
 const BUDGET_SLACK_MS := 0.5
@@ -37,6 +42,13 @@ func run(t) -> void:
 	_hash(t, lab)
 	_args(t, lab)
 	await _wide_brain(t, lab)
+	await _docks(t, lab)
+	await _compare(t, lab)
+	_compare_select(t, lab)
+	await _compare_stop(t, lab)
+	_compare_extinction(t, lab)
+	await _compare_layout(t, lab)
+	await _dock_empty(t, lab)
 	lab.queue_free()
 	await t.frames(1)
 	t.root.size = root_size
@@ -50,7 +62,21 @@ func _layout(t, lab: LabMain) -> void:
 	var sv := lab.map_view.get_parent()
 	t.check(sv is SubViewport and sv.get_parent() is SubViewportContainer and (sv.get_parent() as SubViewportContainer).stretch, "지도는 늘어나는 SubViewportContainer 안 SubViewport")
 	t.check(lab.left_dock is VBoxContainer and lab.bottom_dock is HBoxContainer, "4단계 자리 종류")
-	t.check(not lab._left_wrap.visible and not lab._bottom_wrap.visible, "빈 자리는 숨김")
+	# 4단계 패널 자리 채우기(뼈대든 실제든 노드 이름·종류로 확인)
+	var pp := lab.left_dock.get_node_or_null("ParamPanel")
+	var gp := lab.bottom_dock.get_node_or_null("GraphPanel")
+	var cp := lab.bottom_dock.get_node_or_null("ChroniclePanel")
+	var snd := lab.get_node_or_null("LabSound")
+	t.check(pp is ParamPanel and pp == lab.param_panel, "ParamPanel → 왼쪽 자리")
+	t.check(gp is GraphPanel and gp == lab.graph_panel and cp is ChroniclePanel and cp == lab.chronicle_panel and gp.get_index() < cp.get_index(),
+			"GraphPanel(왼쪽)·ChroniclePanel(오른쪽) → 아래 자리")
+	t.check(snd is LabSound and snd == lab.lab_sound, "LabSound → 실험실 자식")
+	if gp != null and cp != null:
+		t.check((gp as Control).size_flags_horizontal & Control.SIZE_EXPAND != 0 and is_equal_approx((cp as Control).custom_minimum_size.x, UiConfig.num("chronicle.width")),
+				"그래프는 늘어나고 연대기 폭 = chronicle.width")
+	t.check(lab._left_wrap.visible and lab._bottom_wrap.visible, "패널을 넣은 자리는 보임")
+	t.check(is_equal_approx(lab.info_panel.size.y, lab.size.y - lab._top_bar.size.y) and is_equal_approx(lab._bottom_wrap.size.x, lab._left_wrap.size.x + lab._map_area.size.x),
+			"정보 창은 아래 자리 옆까지 세로 전체(%.0f), 아래 자리 = 왼쪽 자리 + 지도 폭(%.0f)" % [lab.info_panel.size.y, lab._bottom_wrap.size.x])
 	t.check(is_equal_approx(lab.info_panel.custom_minimum_size.x, UiConfig.num("lab.right_panel_width")), "정보 창 폭 = lab.right_panel_width")
 	var top_w: float = lab._top_bar.get_combined_minimum_size().x
 	t.check(top_w <= UiConfig.num("lab.min_width"), "위쪽 막대 최소 폭 %.0f ≤ 최소 창 폭 %d" % [top_w, UiConfig.integer("lab.min_width")])
@@ -76,7 +102,7 @@ func _layout(t, lab: LabMain) -> void:
 	var ip := UiTheme.icon(UiTheme.ICON_PAUSE, 16).get_image()
 	t.check(ip.get_pixel(5, 8).a > 0.9 and ip.get_pixel(8, 8).a < 0.2 and ip.get_pixel(11, 8).a > 0.9, "멈춤 아이콘 모양(막대 둘, 가운데 빔)")
 	t.check(lab._speed_btns.size() == (UiConfig.value("speed.steps") as Array).size(), "속도 단추 = speed.steps")
-	# 4단계가 무언가를 넣으면 보이고, 비우면 다시 숨는다
+	# 무언가를 더 넣고 빼도 패널이 있는 자리는 그대로 보임(비우면 숨는 것은 끝의 _dock_empty)
 	var probe := Label.new()
 	probe.text = "시험"
 	lab.left_dock.add_child(probe)
@@ -88,7 +114,7 @@ func _layout(t, lab: LabMain) -> void:
 	probe.queue_free()
 	probe2.queue_free()
 	await t.frames(2)
-	t.check(not lab._left_wrap.visible and not lab._bottom_wrap.visible, "비우면 다시 숨김")
+	t.check(lab._left_wrap.visible and lab._bottom_wrap.visible, "더 넣은 것을 빼도 패널이 있는 자리는 보임")
 
 
 func _run_loop(t, lab: LabMain) -> void:
@@ -698,3 +724,422 @@ func _wide_brain(t, lab: LabMain) -> void:
 	await t.frames(2)
 	t.check(is_equal_approx(pw, pw2) and is_equal_approx(mw, mw2) and is_equal_approx(lab._map_area.size.x, mw),
 			"은닉 64·기억 16 개체를 골라도 정보 창 %.0f→%.0f·지도 %.0f→%.0f 폭 그대로" % [pw, pw2, mw, mw2])
+
+
+# ════════════════════════════ 4단계 ════════════════════════════
+
+## 자리 접기: 지도 오른쪽 아래 단추(눌림 = 보임)·set_dock_open. 접으면 지도가 그만큼 커지고, 접은 자리는 자식이 들어와도 숨긴 채.
+## 조작 도움말은 지도가 좁으면(1280 창, 자리 펼침) 두 줄, 넓으면 한 줄이고 접기 단추와 겹치지 않음.
+func _docks(t, lab: LabMain) -> void:
+	lab.new_experiment("default", {}, 1)
+	await t.frames(2)
+	t.check(lab._dock_toggles.visible and lab._left_toggle.visible and lab._bottom_toggle.visible and lab._left_toggle.button_pressed
+			and lab._bottom_toggle.button_pressed and lab.is_dock_open(LabMain.DOCK_LEFT) and lab.is_dock_open(LabMain.DOCK_BOTTOM),
+			"자리 접기 단추 둘(펼침 = 눌림)")
+	var area0 := lab._map_area.size
+	t.check(lab._hint_label.text.contains("\n") and _overlays_ok(lab), "좁은 지도(%.0f): 조작 도움말 두 줄, 접기 단추와 안 겹치고 지도 안" % area0.x)
+	# 단추로 아래 자리 접기(toggled 신호)
+	lab._bottom_toggle.button_pressed = false
+	await t.frames(2)
+	var bh := UiConfig.num("lab.bottom_panel_height")
+	t.check(not lab.is_dock_open(LabMain.DOCK_BOTTOM) and not lab._bottom_wrap.visible and lab._map_area.size.y >= area0.y + bh - 1.0,
+			"아래 자리 접기 → 지도 높이 %.0f → %.0f" % [area0.y, lab._map_area.size.y])
+	lab.set_dock_open(LabMain.DOCK_LEFT, false)
+	await t.frames(2)
+	t.check(not lab._left_wrap.visible and not lab._left_toggle.button_pressed and lab._map_area.size.x >= area0.x + UiConfig.num("lab.left_panel_width") - 1.0,
+			"왼쪽 자리 접기(set_dock_open) → 지도 폭 %.0f → %.0f, 단추도 꺼짐" % [area0.x, lab._map_area.size.x])
+	t.check(not lab._hint_label.text.contains("\n") and _overlays_ok(lab), "넓은 지도(%.0f): 조작 도움말 한 줄" % lab._map_area.size.x)
+	# 접은 자리는 자식이 들어와도 숨긴 채
+	var probe := Label.new()
+	lab.bottom_dock.add_child(probe)
+	await t.frames(1)
+	t.check(not lab._bottom_wrap.visible and lab._bottom_toggle.visible, "접은 자리에 자식이 들어와도 숨긴 채")
+	probe.queue_free()
+	lab._left_toggle.button_pressed = true
+	lab.set_dock_open(LabMain.DOCK_BOTTOM, true)
+	await t.frames(2)
+	t.check(lab._left_wrap.visible and lab._bottom_wrap.visible and lab._bottom_toggle.button_pressed and lab._map_area.size.is_equal_approx(area0),
+			"다시 펴면 자리·지도 크기 되돌아감(%s)" % str(lab._map_area.size))
+
+
+## 도움말·접기 단추가 지도 자리 안이고 서로 겹치지 않음.
+func _overlays_ok(lab: LabMain) -> bool:
+	var area := Rect2(Vector2.ZERO, lab._map_area.size)
+	var hr := _rect(lab._hint)
+	var tr := _rect(lab._dock_toggles)
+	return area.encloses(hr) and area.encloses(tr) and not hr.intersects(tr)
+
+
+func _rect(c: Control) -> Rect2:
+	return Rect2(c.position, c.size)
+
+
+## 비교 모드: 시작 오류, 지도 둘 나란히(각자 SubViewport·3D 세계·표지), 위쪽 막대, 프레임마다 같은 틱 수, B 지도 갱신,
+## 사건(events_tagged 0·1, events 는 A 만)·알림 이름표, recorded 0·1, 해시·상태가 헤드리스와 같음.
+func _compare(t, lab: LabMain) -> void:
+	lab.set_paused(true)
+	lab.new_experiment("default", {}, 1)
+	var before := lab.world
+	var lists := []
+	var on_changed := func(list: Array) -> void: lists.append(list.size())
+	lab.experiments_changed.connect(on_changed)
+	var e1 := lab.start_compare({preset = "없는예설정"}, {preset = "default"})
+	var e2 := lab.start_compare({preset = "default", seed = 1}, {preset = "없는예설정", seed = 1})
+	t.check(e1.begins_with("A: ") and e2.begins_with("B: ") and lab.world == before and not lab.is_comparing() and lists.is_empty(),
+			"비교 시작 실패 → \"A: …\"/\"B: …\" 오류, 지금 실험 그대로 (%s / %s)" % [e1, e2])
+	var rec: Array[int] = [0, 0]
+	var tagged: Array[int] = [0, 0]
+	var plain: Array[int] = [0]
+	var on_rec := func(i: int, _row: Dictionary) -> void: rec[i] += 1
+	var on_tag := func(i: int, list: Array) -> void: tagged[i] += list.size()
+	var on_ev := func(list: Array) -> void: plain[0] += list.size()
+	lab.recorded.connect(on_rec)
+	lab.events_tagged.connect(on_tag)
+	lab.events.connect(on_ev)
+	var err := lab.start_compare({preset = "demo_fast", overrides = {}, seed = 1}, {preset = "demo_fast", overrides = {"mutation.rate": B_MUTATION}, seed = 2})
+	var xa := lab.experiment(0)
+	var xb := lab.experiment(1)
+	t.check(err == "" and lab.is_comparing() and lab.experiments.size() == 2 and xa.tag == "A" and xb.tag == "B" and lists == [2],
+			"비교 시작: 실험 [A, B], experiments_changed(2) (%s, %s)" % [err, lists])
+	if xb == null:
+		return
+	t.check(lab.world == xa.world and lab.map_view == lab.map_view_of(0) and lab.map_view.world == xa.world and lab.map_view_of(1) != null
+			and lab.map_view_of(1).world == xb.world, "world = A 의 세계, 지도 A·B 가 각자 세계를 그림")
+	t.check(is_equal_approx(float(xb.world.cfg.mutation.rate), B_MUTATION) and not is_equal_approx(float(xa.world.cfg.mutation.rate), B_MUTATION),
+			"B 의 바꾼 값은 B 에만(돌연변이율 A %.2f · B %.2f)" % [float(xa.world.cfg.mutation.rate), float(xb.world.cfg.mutation.rate)])
+	await t.frames(2)
+	var ca := lab._map_container
+	var cb := lab._map_area.get_node_or_null("MapContainerB") as SubViewportContainer
+	t.check(cb != null and lab.map_view_of(1).get_viewport().get_parent() == cb, "B 지도 = MapContainerB ⊃ SubViewport ⊃ MapView")
+	if cb == null:
+		return
+	var gap := float(UiConfig.integer("compare.gap_px"))
+	t.check(is_zero_approx(ca.position.x) and is_equal_approx(cb.position.x - (ca.position.x + ca.size.x), gap)
+			and is_equal_approx(cb.position.x + cb.size.x, lab._map_area.size.x) and absf(ca.size.x - cb.size.x) <= 1.0
+			and is_equal_approx(ca.size.y, lab._map_area.size.y) and is_equal_approx(cb.size.y, ca.size.y),
+			"A | B 나란히: 폭 %.0f + 사이 %.0f + %.0f = 지도 자리 %.0f" % [ca.size.x, gap, cb.size.x, lab._map_area.size.x])
+	var va := lab._map_viewport
+	var vb := lab.map_view_of(1).get_viewport() as SubViewport
+	t.check(va.own_world_3d and vb.own_world_3d and va.find_world_3d() != vb.find_world_3d() and Vector2(vb.size).is_equal_approx(cb.size),
+			"B 의 3D 세계가 따로, 뷰포트 = 칸 크기(%s)" % str(vb.size))
+	var ha := lab._map_area.get_node_or_null("MapTitle") as Control
+	var hb := lab._map_area.get_node_or_null("MapTitleB") as Control
+	t.check(hb != null and _title_text(ha) == "A|" + xa.label and _title_text(hb) == "B|" + xb.label,
+			"지도마다 표지: %s / %s" % [_title_text(ha), _title_text(hb)])
+	if hb != null:
+		t.check(_rect(ca).encloses(_rect(ha)) and _rect(cb).encloses(_rect(hb)), "표지가 자기 지도 칸 안")
+	# 왼쪽 자리를 접어 지도가 넓어지면 조작 도움말(두 줄)은 A 지도 칸 안에(두 지도 사이를 걸치지 않게)
+	t.check(_overlays_ok(lab), "비교 모드 도움말·접기 단추가 지도 안, 서로 안 겹침")
+	lab.set_dock_open(LabMain.DOCK_LEFT, false)
+	await t.frames(2)
+	t.check(_rect(ca).encloses(_rect(lab._hint)) and _overlays_ok(lab), "넓어진 비교 모드: 도움말이 A 지도 칸 안(%s ⊂ %s)" % [_rect(lab._hint), _rect(ca)])
+	lab.set_dock_open(LabMain.DOCK_LEFT, true)
+	await t.frames(2)
+	lab.advance_frame(DT)
+	t.check(lab._cmp_box.visible and not lab._single_box.visible and lab._cmp_pop[0].text == LabMain._commas(xa.world.population())
+			and lab._cmp_pop[1].text == LabMain._commas(xb.world.population()) and lab._cmp_stage[1].text == SimWorld.STAGE_NAMES[xb.world.stage],
+			"위쪽 막대: [A] %s · %s │ [B] %s · %s" % [lab._cmp_pop[0].text, lab._cmp_stage[0].text, lab._cmp_pop[1].text, lab._cmp_stage[1].text])
+	t.check(lab._top_bar.get_combined_minimum_size().x <= UiConfig.num("lab.min_width"), "비교 모드 위쪽 막대도 최소 창 폭 안")
+	# 진행: 프레임마다 A·B 가 같은 틱 수
+	lab.set_paused(false)
+	lab.set_speed(8)
+	var same := true
+	var total := 0
+	for i in 60:
+		var a0 := xa.world.tick
+		var b0 := xb.world.tick
+		var n := lab.advance_frame(DT)
+		same = same and xa.world.tick - a0 == n and xb.world.tick - b0 == n
+		total += n
+	t.check(same and total > 0 and xa.world.tick == xb.world.tick, "8배 60프레임: 프레임마다 A·B 가 같은 틱 수(합 %d틱)" % total)
+	var tl := UiConfig.num("map.tile_size")
+	var bound := maxf(MapView.STACK_MAX, UiConfig.num("map.store_slime_offset")) * tl + 0.01
+	t.check(lab.map_view_of(1)._has_prev and _max_drift_of(lab, 1) <= tl + bound,
+			"B 지도도 틱마다 보간 기억·프레임마다 갱신(가장 먼 %.2f칸)" % _max_drift_of(lab, 1))
+	# 두 쪽 모두 발견할 때까지: 사건은 실험마다, 알림 앞에 이름표
+	lab.set_paused(true)
+	var prefixes := {}
+	var bad := ""
+	var guard := 0
+	while (xa.world.stage == 0 or xb.world.stage == 0 or tagged[1] == 0) and guard < 200:
+		lab.step_ticks(25)
+		lab.advance_frame(DT)
+		for v in lab.visible_toasts():
+			var s := str(v.text)
+			if s.begins_with("A · "):
+				prefixes["A"] = true
+			elif s.begins_with("B · "):
+				prefixes["B"] = true
+			else:
+				bad = s
+		guard += 1
+	t.check(xa.world.stage > 0 and xb.world.stage > 0, "A·B 모두 발견(틱 %d, 단계 %d·%d)" % [xa.world.tick, xa.world.stage, xb.world.stage])
+	t.check(tagged[0] > 0 and tagged[1] > 0 and plain[0] == tagged[0],
+			"events_tagged 0·1 모두(A %d·B %d건), events 는 A 만(%d건)" % [tagged[0], tagged[1], plain[0]])
+	t.check(prefixes.has("A") and prefixes.has("B") and bad == "", "비교 모드 사건 알림 앞에 \"A · \"/\"B · \"(%s %s)" % [prefixes.keys(), bad])
+	var every := int(xa.world.cfg.record.every)
+	t.check(rec[0] == xa.world.tick / every and rec[1] == rec[0] and xa.rows().size() == rec[0] + 1 and xb.rows().size() == rec[1] + 1,
+			"recorded(0)·(1) 각 %d·%d번(기대 %d), 기록 줄 %d·%d" % [rec[0], rec[1], xa.world.tick / every, xa.rows().size(), xb.rows().size()])
+	# 해시 검사점을 지나 헤드리스와 같음
+	lab.set_paused(false)
+	lab.set_fast_forward(true)
+	var hevery := int(xa.world.cfg.hash.every)
+	var target := (xa.world.tick / hevery + 1) * hevery
+	guard = 0
+	while xa.world.tick <= target and guard < 600:
+		lab.advance_frame(DT)
+		guard += 1
+	lab.set_speed(1)
+	lab.set_paused(true)
+	var ra: SimWorld = t.make_world({}, 1, "demo_fast")
+	ra.step_n(xa.world.tick)
+	var rb: SimWorld = t.make_world({"mutation.rate": B_MUTATION}, 2, "demo_fast")
+	rb.step_n(xb.world.tick)
+	t.check(xa.world.tick > target and xa.world.history_hash == ra.history_hash and t.same_state(xa.world, ra) == "",
+			"A: 화면으로 %d틱(검사점 %d 지남) 진행해도 해시·상태가 헤드리스와 같음 %s" % [xa.world.tick, target, t.same_state(xa.world, ra)])
+	t.check(xb.world.tick == xa.world.tick and xb.world.history_hash == rb.history_hash and t.same_state(xb.world, rb) == "",
+			"B: 같은 %d틱, 해시·상태가 헤드리스와 같음 %s" % [xb.world.tick, t.same_state(xb.world, rb)])
+	lab.experiments_changed.disconnect(on_changed)
+	lab.recorded.disconnect(on_rec)
+	lab.events_tagged.disconnect(on_tag)
+	lab.events.disconnect(on_ev)
+
+
+## 표지 글자 "이름표|실험 이름"(이름표가 숨었으면 "|이름").
+func _title_text(head: Node) -> String:
+	if head == null:
+		return ""
+	var tag := head.find_child("Tag", true, false) as Control
+	var title := head.find_child("Title", true, false) as Label
+	var tag_text := ""
+	if tag != null and tag.visible and tag.get_child_count() > 0:
+		tag_text = (tag.get_child(0) as Label).text
+	return "%s|%s" % [tag_text, title.text if title != null else ""]
+
+
+## k 번째 지도에 그려진 위치와 그 세계의 지금 칸 가운데의 가장 큰 거리(칸).
+func _max_drift_of(lab: LabMain, k: int) -> float:
+	var w := lab.experiment(k).world
+	var mv := lab.map_view_of(k)
+	var tl := UiConfig.num("map.tile_size")
+	var worst := 0.0
+	for i in w.population():
+		var p := mv.slime_instance_position(i)
+		worst = maxf(worst, Vector2(p.x - (float(w.s_x[i]) + 0.5) * tl, p.z - (float(w.s_y[i]) + 0.5) * tl).length())
+	return worst
+
+
+## 비교 모드 선택: B 지도 클릭 → B 의 개체(정보 창 이름표 B, 고리는 B 지도에만), 가계 이동은 같은 실험 안,
+## 따라가기·F 는 선택 지도, A 를 고르면 B 따라가기 꺼짐, Esc·빈 곳·없는 실험 = 해제, B "전체 보기" 는 B 만.
+func _compare_select(t, lab: LabMain) -> void:
+	var xa := lab.experiment(0)
+	var xb := lab.experiment(1)
+	if xb == null:
+		t.check(false, "비교 모드가 아님")
+		return
+	var wb := xb.world
+	var idb := -1
+	for i in wb.population():
+		if int(wb.slime_info(wb.s_id[i]).parent_a) >= 0:
+			idb = wb.s_id[i]
+			break
+	lab.map_view_of(1).slime_clicked.emit(idb)
+	t.check(idb >= 0 and lab.selected_id() == idb and lab.selected_index() == 1 and lab.info_panel.current_id() == idb
+			and lab.info_panel.current_tag() == "B" and lab.info_panel._world == wb, "B 지도 클릭 → B 의 #%d, 정보 창 이름표 \"%s\"" % [idb, lab.info_panel.current_tag()])
+	t.check(lab.map_view_of(1).ring_info().visible and not lab.map_view.ring_info().visible, "선택 고리는 B 지도에만")
+	var pa := int(wb.slime_info(idb).parent_a)
+	lab.info_panel.slime_requested.emit(pa)
+	t.check(lab.selected_id() == pa and lab.selected_index() == 1 and lab.info_panel._world == wb and lab.info_panel.current_tag() == "B",
+			"정보 창 가계 → 같은 실험(B) 안에서 #%d" % pa)
+	lab.select_slime(idb, 1)
+	lab.info_panel.follow_toggled.emit(true)
+	t.check(lab.map_view_of(1).follow_selected and not lab.map_view.follow_selected, "따라가기 단추 → B 지도만 따라감")
+	var ida := xa.world.s_id[0]
+	lab.map_view.slime_clicked.emit(ida)
+	t.check(lab.selected_index() == 0 and lab.info_panel.current_tag() == "A" and lab.info_panel._world == xa.world and lab.map_view.ring_info().visible
+			and not lab.map_view_of(1).ring_info().visible and not lab.map_view_of(1).follow_selected and not lab.info_panel._follow.button_pressed,
+			"A 개체를 고르면 이름표 A·고리는 A 에만, B 따라가기 꺼짐(정보 창 단추도)")
+	_key(t, KEY_F)
+	t.check(lab.map_view.follow_selected and not lab.map_view_of(1).follow_selected and lab.info_panel._follow.button_pressed
+			and str(lab.visible_toasts().back().text).begins_with("A 지도"), "F → 선택한 A 지도 따라가기, 알림 \"%s\"" % str(lab.visible_toasts().back().text))
+	_key(t, KEY_F)
+	t.check(not lab.map_view.follow_selected, "F 다시 → 끔")
+	lab.select_slime(idb, 1)
+	_key(t, KEY_ESCAPE)
+	t.check(lab.selected_id() == -1 and lab.selected_index() == -1 and lab.info_panel.current_id() == -1 and not lab.map_view.ring_info().visible
+			and not lab.map_view_of(1).ring_info().visible, "Esc → 선택 해제(두 지도 모두 고리 없음)")
+	lab.select_slime(idb, 1)
+	lab.map_view_of(1).slime_clicked.emit(-1)
+	t.check(lab.selected_id() == -1, "B 지도 빈 곳 → 해제")
+	lab.select_slime(idb, 5)
+	t.check(lab.selected_id() == -1, "없는 실험 번호 → 해제")
+	# B 의 "전체 보기" 단추는 B 지도만
+	lab.select_slime(idb, 1)
+	lab.map_view_of(1).focus_on(idb)
+	lab.map_view_of(1).follow_selected = true
+	lab.map_view.focus_on(ida)
+	var hb := lab._map_area.get_node_or_null("MapTitleB")
+	var fb := hb.find_child("FitButton", true, false) as Button if hb != null else null
+	if fb != null:
+		fb.pressed.emit()
+	var focus := UiConfig.num("camera.focus_distance")
+	t.check(fb != null and not lab.map_view_of(1).follow_selected and float(lab.map_view_of(1).get_camera().get("distance")) > focus
+			and float(lab.map_view.get_camera().get("distance")) <= focus + 0.01, "B \"전체 보기\" → B 지도만 전체(A 카메라 그대로)")
+	lab.fit_map()
+	t.check(float(lab.map_view.get_camera().get("distance")) > focus, "Home(fit_map()) → 모든 지도 전체 보기")
+	lab.select_slime(-1)
+
+
+## 비교 끝: A 만 남고(같은 세계·틱·선택, 이름표 없음) B 지도·표지가 사라지며 A 지도가 자리 전체. A 는 이어서 진행.
+## 새 실험·스냅숏 열기도 비교를 끝냄.
+func _compare_stop(t, lab: LabMain) -> void:
+	var xa := lab.experiment(0)
+	var wa := lab.world
+	var ida := wa.s_id[0]
+	lab.select_slime(ida, 0)
+	var lists := []
+	var on_changed := func(list: Array) -> void: lists.append(list.size())
+	lab.experiments_changed.connect(on_changed)
+	var tick := wa.tick
+	lab.stop_compare()
+	await t.frames(2)
+	t.check(not lab.is_comparing() and lab.experiments.size() == 1 and lab.experiment(0) == xa and lab.world == wa and wa.tick == tick
+			and xa.tag == "" and lists == [1], "비교 끝 → A 만(같은 세계·틱 %d), 이름표 없음, experiments_changed(1) %s" % [wa.tick, lists])
+	t.check(lab._map_area.get_node_or_null("MapContainerB") == null and lab._map_area.get_node_or_null("MapTitleB") == null and lab.map_view_of(1) == null,
+			"B 지도·표지 지움")
+	t.check(lab._map_container.size.is_equal_approx(lab._map_area.size) and _title_text(lab._map_area.get_node_or_null("MapTitle")) == "|" + xa.label,
+			"A 지도가 지도 자리 전체(%s), 표지 \"%s\"" % [str(lab._map_container.size), _title_text(lab._map_area.get_node_or_null("MapTitle"))])
+	t.check(lab.selected_id() == ida and lab.selected_index() == 0 and lab.info_panel.current_tag() == "" and lab.map_view.ring_info().visible,
+			"A 의 선택은 그대로, 정보 창 이름표 없음")
+	lab.advance_frame(DT)
+	t.check(lab._single_box.visible and not lab._cmp_box.visible, "위쪽 막대 혼자 모드로")
+	lab.set_paused(false)
+	lab.set_speed(8)
+	for i in 30:
+		lab.advance_frame(DT)
+	lab.set_paused(true)
+	var ref: SimWorld = t.make_world({}, 1, "demo_fast")
+	ref.step_n(wa.tick)
+	t.check(wa.tick > tick and t.same_state(wa, ref) == "", "비교를 끝낸 뒤 A 가 이어서 진행(%d틱, 헤드리스와 같은 상태) %s" % [wa.tick, t.same_state(wa, ref)])
+	lab.stop_compare()
+	t.check(lists == [1], "비교 중이 아니면 stop_compare 는 아무것도 안 함")
+	lab.experiments_changed.disconnect(on_changed)
+	# 새 실험·스냅숏 열기도 비교를 끝낸다
+	t.check(lab.start_compare({preset = "default", seed = 3}, {preset = "default", seed = 4}) == "" and lab.is_comparing(), "다시 비교 시작")
+	lab.new_experiment("default", {}, 5)
+	t.check(not lab.is_comparing() and lab._map_area.get_node_or_null("MapContainerB") == null and lab.world.seed_value == 5 and lab.experiment(0).tag == "",
+			"새 실험 → 비교 끝(지도 하나)")
+	var path := "user://lab_checks_compare.json"
+	t.check(SimSnapshot.save_file(lab.world, path) == "", "스냅숏 저장")
+	lab.start_compare({preset = "default", seed = 3}, {preset = "default", seed = 4})
+	t.check(lab.open_snapshot(path) == "" and not lab.is_comparing() and lab.map_view_of(1) == null, "스냅숏 열기 → 비교 끝")
+	for p in [path, path + ".bak"]:
+		if FileAccess.file_exists(p):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+
+
+## 비교 모드 멸종: 한쪽만 멸종하면 멈추지 않고(같은 틱으로 계속 견줌) 그 지도에만 표지·"A · " 멸종 알림·정보 창 안내,
+## 모두 멸종하면 멈춤. 새 실험은 다시 재생.
+func _compare_extinction(t, lab: LabMain) -> void:
+	lab.start_compare({preset = "no_resources", seed = 1}, {preset = "demo_fast", seed = 1})
+	var xa := lab.experiment(0)
+	var xb := lab.experiment(1)
+	lab.set_paused(false)
+	lab.set_speed(64)
+	var saw := false
+	var guard := 0
+	while xa.world.extinct_tick < 0 and guard < 600:
+		lab.advance_frame(DT)
+		guard += 1
+	for v in lab.visible_toasts():
+		saw = saw or (v.kind == "extinction" and str(v.text).begins_with("A · "))
+	for i in 5:
+		lab.advance_frame(DT)
+	t.check(xa.world.extinct_tick >= 0 and xb.world.extinct_tick < 0 and not lab.is_paused() and xb.world.tick == xa.world.tick and xa.world.tick > xa.world.extinct_tick,
+			"A 만 멸종(틱 %d) → 멈추지 않고 A·B 계속(지금 %d틱)" % [xa.world.extinct_tick, xa.world.tick])
+	var hb := lab._map_area.get_node_or_null("MapTitleB")
+	var bb := hb.find_child("ExtinctBadge", true, false) as Label if hb != null else null
+	t.check(lab._extinct_badge.visible and lab._extinct_badge.text.contains(LabMain._commas(xa.world.extinct_tick)) and bb != null and not bb.visible,
+			"멸종 표지는 A 지도에만(\"%s\")" % lab._extinct_badge.text)
+	t.check(saw, "멸종 알림 \"A · …\"")
+	t.check(lab.info_panel.summary_text().contains("A 는 멸종") and lab.info_panel.summary_text().contains("B 지도"), "정보 창 안내: " + lab.info_panel.summary_text())
+	lab.start_compare({preset = "no_resources", seed = 1}, {preset = "no_resources", seed = 2})
+	xa = lab.experiment(0)
+	xb = lab.experiment(1)
+	lab.set_paused(false)
+	guard = 0
+	while (xa.world.extinct_tick < 0 or xb.world.extinct_tick < 0) and guard < 1200:
+		lab.advance_frame(DT)
+		guard += 1
+	var tk := xa.world.tick
+	for i in 5:
+		lab.advance_frame(DT)
+	t.check(xa.world.extinct_tick >= 0 and xb.world.extinct_tick >= 0 and lab.is_paused() and xa.world.tick == tk,
+			"A·B 모두 멸종(틱 %d·%d) → 멈춤" % [xa.world.extinct_tick, xb.world.extinct_tick])
+	t.check(lab.info_panel.summary_text().contains("모두 멸종"), "정보 창 안내: " + lab.info_panel.summary_text())
+	lab.new_experiment("default", {}, 1)
+	t.check(not lab.is_paused() and not lab._extinct_badge.visible, "모두 멸종으로 멈춘 뒤 새 실험 → 다시 재생")
+	lab.set_paused(true)
+
+
+## 최소 창(1280×720)·자리 모두 펼침에서 비교 모드: 지도 칸 ≥ MIN_COMPARE_MAP, 긴 실험 이름은 "…"(표지가 칸 안),
+## 계절이 다르면 "A/B", 하루 길이가 다르면 "날" 숨김, 가장 긴 표시에서도 위쪽 막대가 최소 창 폭 안.
+func _compare_layout(t, lab: LabMain) -> void:
+	lab.start_compare({preset = "demo_fast", seed = 1}, {preset = "harsh_winter", seed = 1})
+	await t.frames(2)
+	var ca := lab._map_container
+	var cb := lab._map_area.get_node_or_null("MapContainerB") as Control
+	t.check(cb != null and ca.size.x >= MIN_COMPARE_MAP.x and ca.size.y >= MIN_COMPARE_MAP.y and cb.size.x >= MIN_COMPARE_MAP.x and cb.size.y >= MIN_COMPARE_MAP.y,
+			"최소 창에서 비교 지도 한 칸 %s ≥ %s(창 %s)" % [str(ca.size), str(MIN_COMPARE_MAP), str(t.root.size)])
+	var ha := lab._map_area.get_node_or_null("MapTitle") as Control
+	var title := ha.find_child("Title", true, false) as Label
+	var natural := title.get_theme_font("font").get_string_size(title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, title.get_theme_font_size("font_size")).x
+	var hb := lab._map_area.get_node_or_null("MapTitleB") as Control
+	t.check(title.custom_minimum_size.x < natural and _rect(ca).encloses(_rect(ha)) and hb != null and _rect(cb).encloses(_rect(hb)),
+			"긴 실험 이름은 줄여(%.0f < %.0f) 표지가 칸 안" % [title.custom_minimum_size.x, natural])
+	# 계절이 다른 때(빠른 계절 2일 vs 혹독한 겨울 5일)
+	lab.step_ticks(130)
+	lab.advance_frame(DT)
+	var wa := lab.experiment(0).world
+	var wb := lab.experiment(1).world
+	var want := "%s/%s" % [LabMain.SEASON_NAMES[wa.season], LabMain.SEASON_NAMES[wb.season]]
+	t.check(wa.season != wb.season and lab._lbl_season.text == want and lab._day_chip.visible, "계절이 다르면 \"%s\"(날은 같아 보임)" % lab._lbl_season.text)
+	var w1 := _longest_bar(lab)
+	t.check(w1 <= UiConfig.num("lab.min_width"), "비교 모드 가장 긴 표시(계절 A/B)에서도 위쪽 막대 %.0f ≤ 최소 창 폭" % w1)
+	# 하루 길이가 다르면(고급 설정) 날을 숨긴다 — 계절 없음/계절, 낮/밤까지 다른 가장 긴 경우
+	lab.start_compare({preset = "default", seed = 1}, {preset = "default", overrides = {"time.day_ticks": 45, "time.season_days": 0}, seed = 1})
+	lab.step_ticks(50)
+	lab.advance_frame(DT)
+	t.check(not lab._day_chip.visible and lab._lbl_season.text.contains("/" + LabMain.NO_SEASON), "하루 길이가 다르면 날 숨김, 계절 \"%s\"" % lab._lbl_season.text)
+	lab._lbl_daynight.text = "낮/밤"
+	var w2 := _longest_bar(lab)
+	t.check(w2 <= UiConfig.num("lab.min_width"), "하루 길이가 다른 가장 긴 표시에서도 위쪽 막대 %.0f ≤ 최소 창 폭" % w2)
+	lab.new_experiment("default", {}, 1)
+	t.check(lab._day_chip.visible and not lab._lbl_season.text.contains("/"), "혼자로 돌아오면 날 다시 보임")
+
+
+## 비교 모드 상태 글자를 가장 길게 바꿔 위쪽 막대 최소 폭을 잰다(다음 프레임에 제자리로).
+func _longest_bar(lab: LabMain) -> float:
+	lab._lbl_tick.text = "1,234,567"
+	lab._lbl_day.text = "20,577"
+	for k in 2:
+		lab._cmp_pop[k].text = "1,000"
+		lab._cmp_stage[k].text = "농사"
+	lab._lbl_speed.text = "빨리 감기 / 실제 1,234배"
+	return lab._top_bar.get_combined_minimum_size().x
+
+
+## 패널을 모두 빼면 자리째 숨고(접기 단추도), 다시 넣으면 보인다.
+func _dock_empty(t, lab: LabMain) -> void:
+	var panels: Array[Control] = [lab.param_panel, lab.graph_panel, lab.chronicle_panel]
+	var parents: Array[Node] = []
+	for p in panels:
+		parents.append(p.get_parent())
+		p.get_parent().remove_child(p)
+	await t.frames(2)
+	t.check(not lab._left_wrap.visible and not lab._bottom_wrap.visible and not lab._dock_toggles.visible, "빈 자리는 숨김(접기 단추도)")
+	for i in panels.size():
+		parents[i].add_child(panels[i])
+	await t.frames(2)
+	t.check(lab._left_wrap.visible and lab._bottom_wrap.visible and lab._dock_toggles.visible and lab.bottom_dock.get_child(0) == lab.graph_panel,
+			"다시 넣으면 보임")

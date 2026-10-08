@@ -3,7 +3,8 @@ extends SceneTree
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd -- --out=폴더 [--copy=폴더]
 ## scenes/lab.tscn 을 뿌리 창(1600×900)에 띄우고 프레임은 LabMain.advance_frame 으로 직접 몬다.
 ## 시나리오: ① 전경(기본·씨앗 1, 8배로 약 10초) ② demo_fast 농사 단계 낮, 밭 가까이 자식 있는 개체 선택·카메라 맞춤
-## ③ 같은 자리의 밤(멈춤) ④ 64배와 실제 배속 표시.
+## ③ 같은 자리의 밤(멈춤) ④ 64배와 실제 배속 표시 ⑤ 4단계 패널 자리(혼자 실험, 자리 접기 단추 클릭)
+## ⑥ 비교 모드(demo_fast | 기본, 1,500틱 뒤 B 지도의 개체를 실제 마우스로 고름).
 ## 동작: 지도 클릭(실제 마우스 입력) → pick_slime → 정보 창 id, 빈 곳 클릭 → 선택 해제, 속도·멈춤 단추 클릭, 단축키,
 ## 화면으로 진행해도 역사 해시가 헤드리스와 같음. 그림은 lab-*.jpg(품질 0.85, 600KB 이하 확인). 끝에 RESULT 줄.
 ## 이전 프로젝트(little-monster-village, 같은 저자·MIT)의 tests/integration_driver.gd 입력 흉내(_click)를 가져와 고침.
@@ -27,6 +28,9 @@ const FARM_NEAR: Array[int] = [2, 4, 6, -1]
 const FARM_RENDER_FRAMES := 24
 ## 고를 개체의 남은 수명 하한(틱, 낮 장면에서 밤 장면까지 약 하루 = 60틱)
 const MIN_LIFE_LEFT := 90
+## 패널 장면: 프레임 없이 미리 진행할 틱(그래프·연대기에 기록이 쌓이게), 비교 장면: 두 실험을 미리 진행할 틱
+const PANEL_TICKS := 1200
+const COMPARE_TICKS := 1500
 
 var out := "res://docs/screenshots/v0.1"
 var copy_to := ""
@@ -68,6 +72,8 @@ func _run() -> void:
 	await _farm()
 	await _night()
 	await _speed64()
+	await _panels()
+	await _compare()
 	for f in _files:
 		print("  그림 %s (%d KB)" % [f, FileAccess.get_file_as_bytes(f).size() / 1024])
 	print("RESULT: %d passed, %d failed (ui)" % [_pass, _fail])
@@ -196,14 +202,96 @@ func _speed64() -> void:
 	await _shot("lab-04-speed64")
 
 
+## ⑤ 4단계 패널 자리: 혼자 실험을 PANEL_TICKS 진행한 뒤(기록이 쌓인 그래프·연대기) 왼쪽·아래 자리와 정보 창이 함께 보이는 모습.
+## 지도 오른쪽 아래 "그래프·연대기" 단추를 실제 마우스로 눌러 접었다 편다.
+func _panels() -> void:
+	check(lab.new_experiment("default", {}, 1) == "", "패널 장면: 기본·씨앗 1 실험")
+	check(lab.left_dock.get_node_or_null("ParamPanel") is ParamPanel and lab.bottom_dock.get_node_or_null("GraphPanel") is GraphPanel
+			and lab.bottom_dock.get_node_or_null("ChroniclePanel") is ChroniclePanel and lab.get_node_or_null("LabSound") is LabSound,
+			"패널 자리: ParamPanel → 왼쪽, GraphPanel·ChroniclePanel → 아래, LabSound → 자식")
+	lab.set_paused(true)
+	lab.step_ticks(PANEL_TICKS)
+	lab.set_paused(false)
+	lab.set_speed(4)
+	await _render(FARM_RENDER_FRAMES)
+	var win := Rect2(Vector2.ZERO, Vector2(root.size))
+	check(lab._left_wrap.visible and lab._bottom_wrap.visible and win.encloses(lab._left_wrap.get_global_rect()) and win.encloses(lab._bottom_wrap.get_global_rect()),
+			"왼쪽·아래 자리가 창 안에 보임(아래 %s)" % str(lab._bottom_wrap.get_global_rect()))
+	var h0 := lab._map_area.size.y
+	await _click(_center(lab._bottom_toggle))
+	await _render(2)
+	check(not lab._bottom_wrap.visible and lab._map_area.size.y > h0, "\"그래프·연대기\" 단추 클릭 → 아래 자리 접힘(지도 높이 %.0f → %.0f)" % [h0, lab._map_area.size.y])
+	await _click(_center(lab._bottom_toggle))
+	await _render(2)
+	check(lab._bottom_wrap.visible and is_equal_approx(lab._map_area.size.y, h0), "다시 클릭 → 아래 자리 펼침")
+	await _park_mouse()
+	await _render(4)
+	var ref := _headless("default", 1, lab.world.tick)
+	check(lab.world.history_hash == ref.history_hash and lab.experiments[0].rows().size() == lab.world.tick / int(lab.world.cfg.record.every) + 1,
+			"패널 장면 %d틱: 해시가 헤드리스와 같고 기록 %d줄" % [lab.world.tick, lab.experiments[0].rows().size()])
+	await _shot("lab-05-panels")
+
+
+## ⑥ 비교 모드: A = demo_fast, B = 기본(둘 다 씨앗 1)을 COMPARE_TICKS 진행 → 두 해시가 헤드리스와 같음 → 2배로 그리며
+## 쌓인 사건 알림(A · / B ·) → B 지도 가운데 개체를 실제 마우스로 눌러 고름(정보 창 이름표 B, 고리는 B 지도에만).
+func _compare() -> void:
+	var err := lab.start_compare({preset = "demo_fast", overrides = {}, seed = 1}, {preset = "default", overrides = {}, seed = 1})
+	check(err == "" and lab.is_comparing() and lab.map_view_of(1) != null, "비교 모드 시작(demo_fast | 기본) %s" % err)
+	if not lab.is_comparing():
+		return
+	var wa := lab.experiment(0).world
+	var wb := lab.experiment(1).world
+	lab.set_paused(true)
+	var t0 := Time.get_ticks_msec()
+	lab.step_ticks(COMPARE_TICKS)
+	print("  비교: %d틱(%.1f초), A %d마리 %s · B %d마리 %s" % [wa.tick, float(Time.get_ticks_msec() - t0) / 1000.0, wa.population(),
+			SimWorld.STAGE_NAMES[wa.stage], wb.population(), SimWorld.STAGE_NAMES[wb.stage]])
+	var ra := _headless("demo_fast", 1, wa.tick)
+	var rb := _headless("default", 1, wb.tick)
+	check(wa.tick == wb.tick and wa.history_hash == ra.history_hash and wb.history_hash == rb.history_hash,
+			"비교 모드로 %d틱 진행해도 A·B 역사 해시가 각각 헤드리스와 같음" % wa.tick)
+	lab.set_paused(false)
+	lab.set_speed(2)
+	await _render(FARM_RENDER_FRAMES)
+	var tagged := {A = false, B = false}
+	for v in lab.visible_toasts():
+		var s := str(v.text)
+		for tag: String in ["A", "B"]:
+			if s.begins_with(tag + " · "):
+				tagged[tag] = true
+	check(bool(tagged.A) or bool(tagged.B), "비교 모드 알림에 이름표(%s)" % str(tagged))
+	var mb := lab._map_area.get_node_or_null("MapContainerB") as Control
+	check(mb != null and absf(lab._map_container.size.x - mb.size.x) <= 1.0 and lab._map_title.text == lab.experiment(0).label,
+			"지도 둘 나란히(%s | %s)" % [str(lab._map_container.size), str(mb.size) if mb != null else "-"])
+	await _click_slime_on(1, false)
+	check(lab.selected_index() == 1 and lab.info_panel.current_tag() == "B" and lab.map_view_of(1).ring_info().visible and not lab.map_view.ring_info().visible,
+			"B 지도 클릭 → 정보 창 이름표 \"%s\", 고리는 B 지도에만" % lab.info_panel.current_tag())
+	# 1,500틱 동안 쌓인 알림은 확인했으니 흘려보내고(멈춘 채 시간만) 두 지도를 가리지 않게 찍는다
+	lab.set_paused(true)
+	for i in int(ceil(UiConfig.num("lab.toast_seconds") / 0.25)) + 1:
+		lab.advance_frame(0.25)
+	lab.set_paused(false)
+	await _park_mouse()
+	await _render(FARM_RENDER_FRAMES)
+	check(lab._cmp_box.visible and lab._top_bar.get_combined_minimum_size().x <= float(root.size.x), "위쪽 막대 비교 모드 표시가 창 폭 안")
+	check(lab.selected_index() == 1 and lab.experiment(1).world.index_of_id(lab.selected_id()) >= 0 and lab.map_view_of(1).ring_info().visible,
+			"찍을 때도 B 의 #%d 가 살아 있고 고리가 보임" % lab.selected_id())
+	await _shot("lab-06-compare")
+
+
 # ── 동작 확인 ──
 
 ## 화면 가운데에 가까운 살아 있는 개체를 찾아 실제 마우스 입력으로 누른다(그린 위치를 몸 가운데 높이로 투영 —
 ## pick_slime 이 쓰는 면과 같음). pick_slime 이 그 개체를 찾아야 하고(못 찾으면 실패), 정보 창·선택이 그 id.
 ## 이어서 지도 모서리(빈 곳)를 누르면 선택 해제.
 func _click_slime() -> void:
-	var w := lab.world
-	var mv := lab.map_view
+	await _click_slime_on(0, true)
+
+
+## k 번째 실험의 지도(비교 모드 1 = B)에서 같은 방법으로 누른다. deselect 면 이어서 그 지도 모서리를 눌러 해제.
+func _click_slime_on(k: int, deselect: bool) -> void:
+	var w := lab.experiment(k).world
+	var mv := lab.map_view_of(k)
 	var cam := mv.get_camera()
 	var sv := mv.get_viewport() as SubViewport
 	var svc := sv.get_parent() as SubViewportContainer
@@ -233,7 +321,10 @@ func _click_slime() -> void:
 		return
 	var scale := svc.size / Vector2(sv.size)
 	await _click(svc.get_global_rect().position + best_pos * scale)
-	check(lab.info_panel.current_id() == want and lab.selected_id() == want, "지도 클릭(실제 입력) → 정보 창 #%d (지금 %d)" % [want, lab.info_panel.current_id()])
+	check(lab.info_panel.current_id() == want and lab.selected_id() == want and lab.selected_index() == k,
+			"지도 %d 클릭(실제 입력) → 정보 창 #%d (지금 %d, 실험 %d)" % [k, want, lab.info_panel.current_id(), lab.selected_index()])
+	if not deselect:
+		return
 	await _click(Vector2(svc.get_global_rect().position) + Vector2(4, 4))
 	check(lab.selected_id() == -1 and lab.info_panel.current_id() == -1, "빈 곳(지도 모서리) 클릭 → 선택 해제(%d)" % lab.selected_id())
 
