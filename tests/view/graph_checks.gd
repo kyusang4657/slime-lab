@@ -4,7 +4,7 @@ extends RefCounted
 ## 비교 모드는 패널 단위로(LabMain.start_compare 를 거친 종단은 integration4_checks), 실험 둘을 직접 만들어 LabMain 이 내는 것과 같은 호출로 몬다:
 ##   x.tag = "A"/"B" → panel.load_experiments([a, b])(= experiments_changed) → 진행할 때마다 append_row(k, rows().back())(= recorded).
 
-const MIN_CHECKS := 114
+const MIN_CHECKS := 119
 ## 합성 줄 수(긴 실행 흉내: 실험 둘 × 이만큼)와 그 줄 간격(틱)
 const LONG_ROWS := 6000
 const LONG_EVERY := 20
@@ -22,6 +22,7 @@ func run(t) -> void:
 	await _gen_compare_checks(t)
 	await _extinct_compare_checks(t)
 	await _narrow_checks(t)
+	await _x_label_checks(t)
 	await _synthetic_checks(t)
 	await _long_checks(t)
 
@@ -739,6 +740,67 @@ func _narrow_checks(t) -> void:
 	t.check(fit_ok and joined == orig, "좁은 그래프 값 읽기: %d줄 → %d줄로 접어 폭 %.0f 안, 글은 그대로" % [raw.size(), wrapped.size(), room])
 	host.queue_free()
 	await t.frames(1)
+
+
+# ── 가로축 이름(통합 I04, 4단계 검토 G29): 좁은 그림(1280 창의 아래 자리)에서도 이름이 둘 이상, 서로 겹치지 않고 그래프 안·단위 글자 앞 ──
+## 예전: 그린 이름을 기록하지 않아 캡처로만 봤고, 띠 범위 글이 오른쪽 여백을 쓰게 된 뒤(G12) 1280 창 기술 단계 그래프가 1,212틱에서
+## "0" 하나만 남았다(통합 때 캡처로 찾음). 폭 = 패널 최소 폭·1280 창(약 585)·1600 창(약 812)·더 넓게, 틱 범위 여럿, 세 그래프 모두.
+func _x_label_checks(t) -> void:
+	var host := _host(t, Vector2(1200, UiConfig.num("lab.bottom_panel_height")))
+	var panel := GraphPanel.new()
+	host.add_child(panel)
+	var min_w := panel.get_combined_minimum_size().x
+	var ends: Array[int] = [150, 484, 1212, 1696, 3000, 12345]
+	for w: float in [min_w, 585.0, 640.0, 812.0, 1100.0]:
+		host.size = Vector2(w, host.size.y)
+		panel.size = host.size
+		var bad := PackedStringArray()
+		var shown := PackedStringArray()
+		for last in ends:
+			var s := GraphPanel.Series.new(null)
+			var k := 0
+			while k < last:
+				s.append({tick = k, population = 50, mean_gen = float(k) / 75.0})
+				k += 20
+			s.append({tick = last, population = 50, mean_gen = float(last) / 75.0})
+			var one: Array[GraphPanel.Series] = [s]
+			panel.load_series(one)
+			for mode: String in [GraphPanel.X_TICK, GraphPanel.X_GEN]:
+				panel.set_x_axis(mode)
+				panel.redraw_now()
+				await t.frames(2)
+				for g in 3:
+					var v := panel.view(g)
+					var why := _x_labels_bad(v)
+					if why != "":
+						bad.append("%s %d틱 그래프%d: %s" % [mode, last, g, why])
+					if g == GraphPanel.GRAPH_CIV and mode == GraphPanel.X_TICK and last == 1212:
+						shown.append(" ".join(PackedStringArray(v.last_x_labels.map(func(l: Dictionary) -> String: return str(l.text)))))
+		t.check(bad.is_empty(), "폭 %.0f: 가로축 이름 ≥ 2·겹치지 않음·그래프 안(기술 단계 1,212틱 \"%s\") %s" % [w, ", ".join(shown), "; ".join(bad.slice(0, 4))])
+	panel.set_x_axis(GraphPanel.X_TICK)
+	host.queue_free()
+	await t.frames(1)
+
+
+## 가로축 이름이 잘못이면 그 까닭(괜찮으면 ""): 둘 미만, 간격이 고르지 않음, 서로 X_LABEL_PAD 미만, 그래프 밖·단위 글자와 겹침
+func _x_labels_bad(v: GraphView) -> String:
+	var ls := v.last_x_labels
+	if ls.size() < 2:
+		return "이름 %d개 %s" % [ls.size(), str(ls.map(func(l: Dictionary) -> String: return str(l.text)))]
+	var step := float(ls[1].value) - float(ls[0].value)
+	var unit_x := v.size.x - UiTheme.regular_font().get_string_size(str(GraphPanel.X_UNITS.get(v.panel.x_mode, "")),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, UiConfig.integer("graph.axis_font_size")).x - 1.0
+	for i in ls.size():
+		var r: Rect2 = ls[i].rect
+		if r.position.x < -0.5 or r.end.x > unit_x - 0.5:
+			return "\"%s\" 가 그래프 밖·단위 글자와 겹침(%.0f~%.0f, 단위 %.0f)" % [str(ls[i].text), r.position.x, r.end.x, unit_x]
+		if i > 0:
+			var prev: Rect2 = ls[i - 1].rect
+			if r.position.x - prev.end.x < GraphView.X_LABEL_PAD - 0.5:
+				return "\"%s\"·\"%s\" 사이 %.1fpx" % [str(ls[i - 1].text), str(ls[i].text), r.position.x - prev.end.x]
+			if not is_equal_approx(float(ls[i].value) - float(ls[i - 1].value), step):
+				return "간격이 고르지 않음 %s" % str(ls.map(func(l: Dictionary) -> float: return float(l.value)))
+	return ""
 
 
 # ── 합성 기록 비교: 기록 간격이 다른 A(20)·B(100)의 출생·사망과 B 의 자기 틱(G20), B 의 점선이 모두 무늬 틈이면 그리지 않음(G24) ──

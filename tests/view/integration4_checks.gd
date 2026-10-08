@@ -5,7 +5,7 @@ extends RefCounted
 ## ③ 연대기 줄을 실제 마우스로 누름 → 그 실험의 행위자 선택 + 그래프 시점 표시 ④ 패널의 CSV 내보내기 = 헤드리스 실행기 결과(글자까지)
 ## ⑤ 스냅숏 저장 → 열기 = 같은 상태·해시(비교 모드의 -A/-B 파일도) ⑥ 소리 상자 ↔ LabSound.enabled ⑦ 한국어 낱말 단위 줄바꿈.
 
-const MIN_CHECKS := 58
+const MIN_CHECKS := 59
 const DT := 1.0 / 60.0
 ## 임시 폴더(프로세스마다 따로 — 저장소 사본 여럿에서 함께 돌려도 섞이지 않게, 처음과 끝에 숨은 파일까지 지움)
 var TMP := "user://integration4_checks-%d" % OS.get_process_id()
@@ -232,6 +232,9 @@ func _snapshot(t, lab: LabMain) -> void:
 	var cmp := TMP.path_join("cmp.json")
 	var hb := lab.experiment(1).world.history_hash
 	var tb := lab.experiment(1).world.tick
+	# 저장 대화 상자의 기본 이름은 두 씨앗(G44 — 예전엔 A 씨앗만이라 -B.json 에도 A 의 씨앗이 붙었음)
+	var dn := pp._default_snapshot_name()
+	t.check(dn.contains("-seed1-vs-seed2-tick%d" % lab.world.tick) and dn.ends_with(".json"), "비교 중 스냅숏 기본 이름에 두 씨앗: %s" % dn)
 	t.check(pp.save_snapshot_to(cmp) == "" and FileAccess.file_exists(TMP.path_join("cmp-A.json")) and FileAccess.file_exists(TMP.path_join("cmp-B.json")),
 			"비교 중 스냅숏 저장 → cmp-A.json · cmp-B.json")
 	t.check(pp.open_snapshot_from(TMP.path_join("cmp-B.json")) == "" and not lab.is_comparing() and lab.world.history_hash == hb and lab.world.tick == tb

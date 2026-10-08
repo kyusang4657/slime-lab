@@ -7,7 +7,7 @@ const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 230
+const MIN_CHECKS := 231
 ## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
 const B_MUTATION := 0.07
 ## 최소 창(1280×720)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기
@@ -361,6 +361,13 @@ func _click(t, pos: Vector2) -> void:
 		t.root.push_input(mb)
 
 
+## 파라미터 패널의 칸을 스크롤해 화면에 보이게. 새 실험·비교 단추 등은 스크롤 밖 고정 바닥(Footer)에 있어 그대로 둔다.
+func _reveal(pp: ParamPanel, c: Control) -> void:
+	var sc := pp.control("scroll") as ScrollContainer
+	if sc != null and sc.is_ancestor_of(c):
+		sc.ensure_control_visible(c)
+
+
 ## 파라미터 패널 글 칸에 적은 뒤 칸 밖(새 실험 단추·지도)을 누르면 초점이 풀려 단축키가 바로 동작하고, 친 키가 칸에
 ## 들어가 다음 실험에 확정되지 않는다(고치기 전: 씨앗 "42" + 스페이스·"4" → "42 4", 멈춤·배속 그대로).
 ## 씨앗 위·아래 화살표를 눌러도 같음. 초점을 가진 칸 자체를 누르면 초점 그대로.
@@ -377,14 +384,14 @@ func _focus_release(t, lab: LabMain) -> void:
 	lab.set_speed(int(steps[0]))
 	var map_mid := lab._map_container.get_global_rect().get_center()
 	var sle := spin.get_line_edit()
-	(pp.control("scroll") as ScrollContainer).ensure_control_visible(spin)
+	_reveal(pp, spin)
 	await t.frames(2)
 	_click(t, sle.get_global_rect().get_center())
 	await t.frames(1)
 	_type(t, "42")
 	await t.frames(1)
 	t.check(sle.has_focus() and sle.text == "42", "씨앗 칸을 눌러 \"%s\" 입력(초점 %s)" % [sle.text, str(sle.has_focus())])
-	(pp.control("scroll") as ScrollContainer).ensure_control_visible(apply_btn)
+	_reveal(pp, apply_btn)
 	await t.frames(2)
 	_click(t, apply_btn.get_global_rect().get_center())
 	await t.frames(1)
@@ -398,7 +405,7 @@ func _focus_release(t, lab: LabMain) -> void:
 			"그 뒤 스페이스 → 멈춤, 4 → %d배, 씨앗 칸 글자 그대로 \"%s\"" % [lab.target_speed(), sle.text])
 	t.check(int(pp.current_settings(0).seed) == 42, "다음 실험 씨앗도 42 그대로(%s)" % str(pp.current_settings(0).seed))
 	# 씨앗 위 화살표 → 칸에 초점(엔진) → 지도를 누르면 풀림
-	(pp.control("scroll") as ScrollContainer).ensure_control_visible(spin)
+	_reveal(pp, spin)
 	await t.frames(2)
 	var sr := spin.get_global_rect()
 	_click(t, Vector2(sr.end.x - 4.0, sr.position.y + sr.size.y * 0.25))
@@ -411,7 +418,7 @@ func _focus_release(t, lab: LabMain) -> void:
 	t.check(after_arrow == 43 and not sle.has_focus() and lab.is_paused() != paused0,
 			"씨앗 화살표(%d) 뒤 지도를 누르면 초점이 풀려 스페이스가 동작" % after_arrow)
 	# 돌연변이율 칸: 칸 안을 다시 눌러도 초점 그대로, 지도를 누르면 그 값이 확정되고 단축키 동작
-	(pp.control("scroll") as ScrollContainer).ensure_control_visible(field)
+	_reveal(pp, field)
 	await t.frames(2)
 	_click(t, field.get_global_rect().get_center())
 	await t.frames(1)
@@ -993,7 +1000,10 @@ func _compare(t, lab: LabMain) -> void:
 			"B 의 3D 세계가 따로, 뷰포트 = 칸 크기(%s)" % str(vb.size))
 	var ha := lab._map_area.get_node_or_null("MapTitle") as Control
 	var hb := lab._map_area.get_node_or_null("MapTitleB") as Control
-	t.check(hb != null and _title_text(ha) == "A|" + xa.label and _title_text(hb) == "B|" + xb.label,
+	# 이름은 칸 폭에 맞춰 줄일 수 있다(G33): 전체 이름 = 실험 이름, 보이는 글에 자기 씨앗
+	t.check(hb != null and _title_text(ha).begins_with("A|") and _title_text(hb).begins_with("B|")
+			and lab._panes[0].full_title == xa.label and lab._panes[1].full_title == xb.label
+			and _title_text(ha).contains("씨앗 1") and _title_text(hb).contains("씨앗 2"),
 			"지도마다 표지: %s / %s" % [_title_text(ha), _title_text(hb)])
 	if hb != null:
 		t.check(_rect(ca).encloses(_rect(ha)) and _rect(cb).encloses(_rect(hb)), "표지가 자기 지도 칸 안")
@@ -1384,10 +1394,25 @@ func _compare_layout(t, lab: LabMain) -> void:
 	t.check(_fits_window(lab), "비교 모드(파라미터 B 칸·범례 둘)에서도 배치가 창 안(정보 창 오른쪽 끝 %.0f)" % lab.info_panel.get_global_rect().end.x)
 	var ha :=lab._map_area.get_node_or_null("MapTitle") as Control
 	var title := ha.find_child("Title", true, false) as Label
-	var natural := title.get_theme_font("font").get_string_size(title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, title.get_theme_font_size("font_size")).x
+	var natural := title.get_theme_font("font").get_string_size(lab._panes[0].full_title, HORIZONTAL_ALIGNMENT_LEFT, -1, title.get_theme_font_size("font_size")).x
 	var hb := lab._map_area.get_node_or_null("MapTitleB") as Control
 	t.check(title.custom_minimum_size.x < natural and _rect(ca).encloses(_rect(ha)) and hb != null and _rect(cb).encloses(_rect(hb)),
 			"긴 실험 이름은 줄여(%.0f < %.0f) 표지가 칸 안" % [title.custom_minimum_size.x, natural])
+	# 같은 예설정·다른 씨앗(G33): 줄여도 예설정 이름만 줄이고 " · 씨앗 N" 은 남아 두 지도의 이름이 갈림(예전: 끝을 잘라 둘 다
+	# "시연·검사용(아주 빠른 발견…")
+	lab.start_compare({preset = "demo_fast", seed = 1}, {preset = "demo_fast", seed = 2})
+	await t.frames(2)
+	var shown := PackedStringArray()
+	var tails_ok := true
+	for k in 2:
+		var tl := lab._panes[k].title
+		var tw := tl.get_theme_font("font").get_string_size(tl.text, HORIZONTAL_ALIGNMENT_LEFT, -1, tl.get_theme_font_size("font_size")).x
+		shown.append(tl.text)
+		tails_ok = tails_ok and tl.text.ends_with("씨앗 %d" % (k + 1)) and tl.text.contains(GraphPanel.ELLIPSIS) and tw <= tl.size.x + 0.5
+		tails_ok = tails_ok and _rect(lab._panes[k].container).encloses(_rect(lab._panes[k].head)) and lab._panes[k].full_title == lab.experiment(k).label
+	t.check(tails_ok and shown[0] != shown[1], "좁은 비교 지도 이름: 예설정 이름만 줄이고 씨앗은 남김 %s" % str(shown))
+	lab.start_compare({preset = "demo_fast", seed = 1}, {preset = "harsh_winter", seed = 1})
+	await t.frames(2)
 	# 계절이 다른 때(빠른 계절 2일 vs 혹독한 겨울 5일)
 	lab.step_ticks(130)
 	lab.advance_frame(DT)

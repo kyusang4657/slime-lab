@@ -33,7 +33,7 @@ const GEN_TOL := 0.0551
 const REBUILD_W := 126
 const SNAP_PATH := "user://chronicle_checks_rebuild.json"
 ## 이 모듈이 하는 검사 수(조건부 검사도 고정 씨앗이라 늘 같음 — 중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 85
+const MIN_CHECKS := 86
 
 
 func run(t) -> void:
@@ -43,6 +43,7 @@ func run(t) -> void:
 	await _with_lab(t)
 	await _rebuild_next_tick(t)
 	_wrap(t)
+	await _hint_fit(t)
 
 
 ## ① 실제 연대기: 다시 읽기·순서·글·덧붙이기·거르기, 연대기를 고치지 않음
@@ -512,6 +513,29 @@ func _wrap(t) -> void:
 # ── 도움 ──
 
 ## 줄 글 기대값: "틱 N · 평균 G세대 · 문장"(G = 저장된 mean_gen 그대로 0.01 단위 — G26 에서 0.1 단위를 바꿈)
+## 머리 줄 설명(G55): 1280 창의 좁은 연대기(min_width~331)에서도 잘리지 않는 판(열 이름만, 전체는 말풍선), 넓으면 전체.
+## 예전: 늘 전체 문장이라 1280 창에서 "틱 · 평균 세대 · 사건 — 최…".
+func _hint_fit(t) -> void:
+	var panel := ChroniclePanel.new()
+	t.root.add_child(panel)
+	var h := UiConfig.num("lab.bottom_panel_height")
+	var res := PackedStringArray()
+	var ok := true
+	for w: float in [UiConfig.num("chronicle.min_width"), 331.0, UiConfig.num("chronicle.width")]:
+		panel.custom_minimum_size.x = w
+		panel.size = Vector2(w, h)
+		await t.frames(2)
+		var lbl := panel.get_node("Head").get_child(1) as Label
+		var tw := lbl.get_theme_font("font").get_string_size(lbl.text, HORIZONTAL_ALIGNMENT_LEFT, -1, lbl.get_theme_font_size("font_size")).x
+		var full := w >= UiConfig.num("chronicle.width")
+		ok = ok and tw <= lbl.size.x + 0.5 and panel.hint_text() == lbl.text and lbl.tooltip_text == ChroniclePanel.HINT
+		ok = ok and lbl.text == (ChroniclePanel.HINT if full else ChroniclePanel.HINT_SHORT)
+		res.append("%.0f: \"%s\" %.0f/%.0f" % [w, lbl.text, tw, lbl.size.x])
+	t.check(ok, "머리 줄 설명이 칸 안에 다 들어감(좁으면 짧은 판, 전체는 말풍선) %s" % ", ".join(res))
+	panel.queue_free()
+	await t.frames(1)
+
+
 func _fmt(e: Dictionary) -> String:
 	return "틱 %s · 평균 %.2f세대 · %s" % [_commas(int(e.tick)), float(e.mean_gen), str(e.text)]
 

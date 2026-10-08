@@ -24,7 +24,7 @@
 | B05 | 웹 내보내기(스레드 없는 판, Compatibility) | 통과 | wasm 43.7MB + pck 2.6MB, 합 45MB |
 | B06 | 웹 체험판이 브라우저에서 뜨고 실험이 진행됨 | 통과(헤드리스) | 헤드리스 Chromium + SwiftShader WebGL2: 오류·pageerror 없음, 실험실 전체 화면, 틱 진행 |
 | B07 | 웹 체험판 속도 | 기록 | SwiftShader(소프트웨어 그래픽)에서 64배 목표에 실제 1.1배. **실제 GPU 브라우저 속도는 미검증** |
-| B08 | 웹에서 "CSV 내보내기"·"스냅숏 저장" → 내려받기(zip·JSON), "스냅숏 열기" 숨김 | 통과 | `tests/view/web_checks.gd` 16개(zip 안 5개 파일, zip 의 시계열 = 기록기 CSV, 내려받은 스냅숏을 열면 같은 해시, 웹 모드 단추) — 브라우저의 실제 내려받기 창은 미검증 |
+| B08 | 웹에서 "CSV 내보내기"·"스냅숏 저장" → 내려받기(zip·JSON), "스냅숏 열기" 숨김 | 통과 | `tests/view/web_checks.gd` 24개(4단계 검토 뒤 — zip 안 5개 파일, zip 의 시계열 = 기록기 CSV, 내려받은 스냅숏을 열면 같은 해시, 웹 모드 단추, 임시 폴더·zip 이 남지 않음, 비교 이름에 두 씨앗) — 브라우저의 실제 내려받기 창은 미검증 |
 | B09 | 실행 파일에 검사·도구·문서가 들어가지 않음 | 통과 | `exclude_filter`, 실행 파일에서 검사 문장(예: "농사 도달 시도") 0회 |
 | B10 | 글꼴 OFL 전문이 배포판에 들어감 | 통과(설정) | 포함 필터 `assets/fonts/OFL-NanumGothic.txt`, Actions zip 에 LICENSE·CREDITS·OFL |
 | B11 | 앱 아이콘(코드로 렌더링) | 통과 | `assets/icon.png`(`tests/icon_capture.gd`), 웹 파비콘에도 쓰임 |
@@ -60,7 +60,7 @@ xvfb-run … --script res://tests/graph_capture.gd                             R
 python3 -m unittest discover -s tools -p "test_*.py"                         Ran 29 tests … OK
 ```
 
-화면 검사 로그에 `SCRIPT ERROR`·`ERROR:` 줄 없음. 규칙 검사 로그의 `ERROR: Parse JSON failed` 4줄은 깨진 설정·스냅숏을 일부러 읽는 검사의 것이다. 화면 검사는 3단계 352개 → 819개(새 모듈: param·graph·chronicle·sound·experiment·integration4).
+화면 검사 로그에 `SCRIPT ERROR`·`ERROR:` 줄 없음. 규칙 검사 로그의 `ERROR: Parse JSON failed` 4줄은 깨진 설정·스냅숏을 일부러 읽는 검사의 것이다. 화면 검사는 3단계 352개 → 819개(새 모듈: param·graph·chronicle·sound·experiment·integration4). 위 수는 4단계 통합 때의 것이고, 4단계 검토(G01~G56)를 고친 뒤의 수는 7절(화면 1,047개·규칙 169개).
 
 | ID | 확인 내용 | 판정 | 근거 |
 | --- | --- | --- | --- |
@@ -75,7 +75,7 @@ python3 -m unittest discover -s tools -p "test_*.py"                         Ran
 | W09 | 캡처 장면의 그래프·연대기가 세계와 맞음(그래프 줄 수 = 기록, 마지막 기록 틱이 세계 틱의 `record.every` 안, 연대기 = 세계 연대기) | 통과(통합 때 고침) | ui_driver lab-02 새 검사 |
 | W10 | 효과음: 16비트 모노, 길이·최댓값 ≤ 0.8 FS·NaN 없음·첫/끝 샘플 0·같은 입력이면 같은 바이트·음높이 방향, 같은 소리 0.5초 간격, 묶음에서 가장 중요한 소리 하나, 패널 "소리" 상자 ↔ `LabSound.enabled` | 통과(자동) | sound_checks, integration4 ⑥ |
 | W11 | 연구용 `fast_civ`: 씨앗 1 이 평균 49.0세대에 농사, 씨앗 1~3 의 채집이 평균 2세대 이후(예전 값이면 실패) | 통과 | run_tests `test_farm_reachable` |
-| W12 | 통합에서 고친 것마다 검사가 고치기 전 코드에서 실패 | 통과(수동 확인) — **I04 는 미검증** | 고친 것마다 따로(5절): I01·I02 — 연대기 폭 규칙·세 줄 도움말을 되돌리면 lab_checks 4개 실패(정보 창 오른쪽 끝 1326 > 1280 등), 되살리면 통과. I03 — `keep_words` 가 글자를 그대로 돌려주게 하면 integration4 ⑦ 1개 실패("발/견" 에서 줄바꿈), I05 — ui_driver 농사 장면을 예전처럼 세계 `step()` 으로 돌리면 새 검사 1개 실패(그래프 1줄·마지막 틱 0 / 세계 1,696): 둘 다 통합 때가 아니라 4단계 검토(G29) 때 확인. I06 — 검토 때 더한 test_repo_rules `test_user_dir_is_ascii`(설정 줄을 지우거나 이름이 한글이면 실패). **I04 는 자동 검사가 없다**(캡처로만, U09). 구성 요소별 확인은 각 담당(연대기: 중복 건너뛰기·A/B 순서를 일부러 깨면 8개 실패, fast_civ: 예전 값이면 S15 실패) |
+| W12 | 통합에서 고친 것마다 검사가 고치기 전 코드에서 실패 | 통과(수동 확인) — I04 는 4단계 검토 통합 때 검사를 더함(7절 J02) | 고친 것마다 따로(5절): I01·I02 — 연대기 폭 규칙·세 줄 도움말을 되돌리면 lab_checks 4개 실패(정보 창 오른쪽 끝 1326 > 1280 등), 되살리면 통과. I03 — `keep_words` 가 글자를 그대로 돌려주게 하면 integration4 ⑦ 1개 실패("발/견" 에서 줄바꿈), I05 — ui_driver 농사 장면을 예전처럼 세계 `step()` 으로 돌리면 새 검사 1개 실패(그래프 1줄·마지막 틱 0 / 세계 1,696): 둘 다 통합 때가 아니라 4단계 검토(G29) 때 확인. I06 — 검토 때 더한 test_repo_rules `test_user_dir_is_ascii`(설정 줄을 지우거나 이름이 한글이면 실패). I04 — 검토 때까지 자동 검사가 없었고(캡처로만), 검토 병합 뒤 실제로 되풀이됨(1280 창 기술 단계 그래프 "0" 하나) → graph_checks "가로축 이름"(옛 코드로 3개 실패, 7절 J02). 구성 요소별 확인은 각 담당(연대기: 중복 건너뛰기·A/B 순서를 일부러 깨면 8개 실패, fast_civ: 예전 값이면 S15 실패) |
 | W13 | 캡처를 1600×900·1280×720 둘 다 눈으로 확인: 전경·농사 낮(선택)·밤·64배·패널·비교, 그래프·연대기·파라미터 패널 | 통과(눈으로 확인) | `docs/screenshots/v0.1/`(lab-*.jpg 150~220KB, png 63~124KB). 1280 판은 확인용으로만 찍음 |
 
 ## 3. 성능 실측
@@ -119,7 +119,7 @@ python3 -m unittest discover -s tools -p "test_*.py"                         Ran
 | U07 | 운영 체제 파일 대화 상자(`use_native_dialog`) | 헤드리스·xvfb 에서는 엔진 대화 상자로만 열림(안의 엔진 글은 영어). Windows·macOS·포털 있는 Linux 미확인 |
 | U08 | Windows 의 사용자 폴더 `%APPDATA%\slime-lab` | 리눅스에서 `~/.local/share/slime-lab` 만 확인 |
 | U03·U05 | Windows·macOS 화면 실행, 바뀐 CI | 리눅스뿐, 밀어 올리지 않아 GitHub Actions 에서 아직 돌지 않음(같은 명령을 이 컨테이너에서 돌려 0 failed·오류 줄 0 확인) |
-| U09 | I04: 좁은 그래프(1280 창 아래 자리)의 가로축 이름이 둘 이상·서로 겹치지 않음 | 캡처로만 봄. GraphView 가 그린 가로축 이름을 기록하지 않아 헤드리스 검사가 없음(그래프 담당 몫 — `last_markers` 처럼 기록하고 graph_checks 에 좁은 폭·1600 폭 경우를 더하면 됨) |
+| ~~U09~~ | I04: 좁은 그래프(1280 창 아래 자리)의 가로축 이름이 둘 이상·서로 겹치지 않음 | **해결**(4단계 검토 통합 때): GraphView `last_x_labels` 기록 + graph_checks "가로축 이름"(폭 4가지 × 틱 범위 6가지 × 틱·세대 축) — 7절 J02 |
 | U10 | 패널의 실제 그리기 몫(같은 지도 크기에서 패널만 숨긴 프레임 시간 대조) | perf_capture 에 그 장면이 없음 — 3절의 편·접은 비교는 지도 크기가 달라 패널 몫을 가르지 못함 |
 
 ## 5. 통합에서 고친 것
@@ -129,12 +129,12 @@ python3 -m unittest discover -s tools -p "test_*.py"                         Ran
 | I01 | 최소 창 1280×720 에서 아래 자리 최소 폭(연대기 420 + 그래프 최소 540 + 간격·여백 = 986px)이 자리(940px)를 넘어 **정보 창과 위쪽 막대 오른쪽 끝이 창 밖으로 46px** 밀림(구성 요소 검사로는 보이지 않음 — 각자 따로 띄움). 연대기 폭을 창 폭에 맞춤: (창 − 정보 창 − 여백) × `chronicle.dock_frac`(0.36)를 [`chronicle.min_width` 320, `chronicle.width` 420]로 자르고 그래프 최소 폭을 보장 → 1600 창 420, 1280 창 331 | lab_checks `_fits_window`(혼자·비교), 1600 창이면 420. 고치기 전 실패 확인 |
 | I02 | 1280 창 비교 모드에서 두 줄 조작 도움말이 A·B 지도 사이를 걸침 → 키 줄을 나눈 세 줄 단계, 비교 모드는 A 칸에 들어가는 가장 적은 줄 | lab_checks "좁은 비교 모드" — 고치기 전 실패 |
 | I03 | 한글이 음절 사이("발/견")에서 줄이 바뀜(파라미터 패널 "지금 실험", 알림) → `UiTheme.keep_words`(낱말 잇개 U+2060, 폭 0) | integration4 ⑦ |
-| I04 | 1280 창 그래프 가로축에 "0" 만 남음 → 좁은 그림에서는 이름이 겹치지 않을 만큼만 띄움, `graph.x_label_min_px` 56 → 50(1600 창은 그대로 500틱 간격) | 캡처로만 확인 — **자동 검사 없음**(U09). 좁은 그림 판정의 2.5배·여백 8px 도 아직 코드 상수 |
+| I04 | 1280 창 그래프 가로축에 "0" 만 남음 → 좁은 그림에서는 이름이 겹치지 않을 만큼만 띄움, `graph.x_label_min_px` 56 → 50(1600 창은 그대로 500틱 간격) | 검토 통합 때 검사 더함(graph_checks "가로축 이름", 7절 J02). 2.5배·여백 8px 은 이름 붙은 상수 `NARROW_LABEL_FACTOR`·`X_LABEL_PAD` |
 | I05 | ui_driver 농사·밤 장면(과 perf_capture)이 세계를 직접 `step()` 해 기록이 안 따라가 **그래프가 틱 0 한 점에 멈춘 채** 틱 1,696 장면이 찍힘 → `lab.step_ticks` | ui_driver 새 검사(그래프 줄 수·마지막 틱·연대기 = 세계) |
 | I06 | 사용자 폴더를 영문으로(`application/config/custom_user_dir_name = "slime-lab"`) — 한글 경로에서 엔진 FileDialog 가 거짓 "권한 없음" 을 띄움(파라미터 담당 요청) | 경로 출력 확인. 검토(G29) 뒤 test_repo_rules `test_user_dir_is_ascii`(project.godot 의 이름이 영문·숫자인지 — 설정을 지우면 실패) |
 | I07 | CREDITS 에 합성 효과음(CC0) 줄, SIM-API `cfg` 행(ParamPanel 이 모든 잎 키를 깊은 사본으로 읽음), VIEW-API 낡은 3단계 배치·`fast_civ` 이름, 3단계 성능 표·S15 의 `fast_civ` → 당시 값 `demo_fast` 표기, `experiment_checks.gd.uid` 추적, lab_checks 의 연대기 폭 검사를 새 규칙으로 | test_repo_rules |
 
-구성 요소 담당이 계약과 다르게 정한 것(모두 받아들임, 근거는 VIEW-API 각 구현 메모): 정보 창 세로 전체·아래 자리 = 왼쪽 자리 + 지도·자리 접기 단추는 지도 위(LabMain), 비교 모드에서 한쪽만 멸종하면 멈추지 않음(LabMain), 강조·"바꾼 값 N개" 는 지금 실험과 견줌(ParamPanel), 저장고·밭 수는 이중 축 대신 작은 띠 둘·A/B 색 #2aa98a·#d97630(색각 이상 검사 통과 — 처음엔 저장소 밖 dataviz 검사기로 한 번 잼, 4단계 검토(G52) 뒤 `tools/test_repo_rules.py` `TestPaletteClaims` 가 같은 계산(Machado 2009 심도 1.0·OKLab ΔE×100·WCAG 대비)으로 VIEW-API 의 그래프·연대기 색 수치를 config/ui.json 에서 다시 잼, 연대기는 `other` 를 뺀 다섯 묶음)·축 글자 12px(GraphPanel), 연대기 목록 안에서는 "평균" 을 줄임·낱말 단위 직접 줄바꿈(ChroniclePanel), 소리는 사인 + 약한 배음 3종(LabSound).
+구성 요소 담당이 계약과 다르게 정한 것(모두 받아들임, 근거는 VIEW-API 각 구현 메모): 정보 창 세로 전체·아래 자리 = 왼쪽 자리 + 지도·자리 접기 단추는 지도 위(LabMain), 비교 모드에서 한쪽만 멸종하면 멈추지 않음(LabMain), 강조·"바꾼 값 N개" 는 지금 실험과 견줌(ParamPanel), 저장고·밭 수는 이중 축 대신 작은 띠 둘·A/B 색 #2aa98a·#d97630(4단계 검토 G32 에서 뜻 색과 붙어 보여 #3d9406·#e54ec6 으로 바꿈, 7절)(색각 이상 검사 통과 — 처음엔 저장소 밖 dataviz 검사기로 한 번 잼, 4단계 검토(G52) 뒤 `tools/test_repo_rules.py` `TestPaletteClaims` 가 같은 계산(Machado 2009 심도 1.0·OKLab ΔE×100·WCAG 대비)으로 VIEW-API 의 그래프·연대기 색 수치를 config/ui.json 에서 다시 잼, 연대기는 `other` 를 뺀 다섯 묶음)·축 글자 12px(GraphPanel), 연대기 목록 안에서는 "평균" 을 줄임·낱말 단위 직접 줄바꿈(ChroniclePanel), 소리는 사인 + 약한 배음 3종(LabSound).
 
 ## 6. `fast_civ` 다시 맞춤(요약)
 
@@ -144,6 +144,104 @@ python3 -m unittest discover -s tools -p "test_*.py"                         Ran
 - 씨앗 1~12 × 100세대 실측: 채집 중앙값 7.7세대(IQR 5.4~14.0, 12/12), 저장 8.6(6.3~16.5, 12/12), 농사 15.9(12.3~26.1, 12/12, 가장 늦은 씨앗 74.3), 멸종 0. 예전 값은 11/12 씨앗이 채집을 바로 열었다(채집·저장·농사 중앙값 0.2·0.3·2.1세대).
 - 못 맞춘 목표(정직하게): 저장 15~35·농사 30~70 세대 중앙값은 맞추지 못함 — 빠른 씨앗을 늦추려 임계를 올리면 느린 씨앗(1·3·8·11)이 100세대를 넘김. 씨앗 7 은 여전히 2세대 안에 셋 다 엶(첫 세대 무작위 두뇌의 배부른 줍기 시도 371회). 근본 원인은 발견 집계가 누적이라 첫 세대가 지배하는 것 — 코드 변경 제안으로 남김.
 - 검사: S15(`test_farm_reachable`)가 `fast_civ` 를 먼저 시도해 씨앗 1 → 평균 49.0세대에 농사, 씨앗 1~3 채집 ≥ 2세대(33.9·4.2·23.3)를 확인(예전 값이면 4.35·0.22·0.49 로 실패). 규칙 검사 전체는 159개(+1).
+
+## 7. 검토에서 고친 것(G01~G56)
+
+4단계 통합 뒤 적대적 검토: 검토자가 렌즈별로 찾은 것을 회의적 검증자 둘이 따로 재현해 **둘 다 확인한 55건**(G01~G56, G50 은 기각되어 번호만 비어 있음)을 다섯 묶음 — LabMain·실험·소리(lab-core) / 파라미터 패널(param) / 그래프(graphs) / 연대기(chronicle) / 검사·문서(tests-docs) — 의 워크트리에서 고치고 main 에 `--no-ff` 로 병합했다. 충돌은 두 곳(VIEW-API ParamPanel "입력" 문단 = 두 묶음의 문장을 합침, graph_checks 머리 주석 = 둘 다 살림), `config/ui.json` 은 묶음마다 자기 절에만 키를 더해 그대로 합쳐졌다(키 지우기·이름 바꾸기 없음). **고친 것마다 그 고침을 잠시 되돌려 새 검사가 실패함을 확인**했다(아래 "고치기 전" 열; 문서·상수만 고친 것은 "—").
+
+```
+godot --headless --path . --script res://tests/run_tests.gd                  RESULT: 169 checks passed, 0 failed   (약 90초, 농사 도달 검사 26.6초 포함)
+godot --headless --path . --script res://tests/run_tests.gd -- --skip-slow   RESULT: 166 checks passed, 0 failed
+godot --headless --path . --script res://tests/run_view_tests.gd             RESULT: 1047 passed, 0 failed (view)   (161초, 두 번 돌려 같음)
+    chronicle 86 · experiment 49 · geo 76 · graph 119 · info 55 · integration4 59 · lab 231 · map 84 · param 188 · smoke 17 · sound 59 · web 24
+xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd
+                                                                             RESULT: 53 passed, 0 failed (ui)
+xvfb-run … --resolution 1280x720 --script res://tests/ui_driver.gd           RESULT: 52 passed, 0 failed (ui)   (V07 은 1600×900 에서만)
+xvfb-run … --script res://tests/graph_capture.gd [-- --extra]                RESULT: 0 failed (graph capture)
+xvfb-run … param_capture.gd [--extra] · chronicle_capture.gd [--extra] · timelapse_capture.gd   오류 없음(그림은 눈으로 확인)
+python3 -m unittest discover -s tools -p "test_*.py"                         Ran 41 tests … OK
+```
+
+화면 검사 로그에 `SCRIPT ERROR`·`ERROR:` 줄 없음(병합 직후 한 번 있었음 — 아래 J01). 규칙 검사 로그의 `ERROR: Parse JSON failed` 4줄은 깨진 설정·스냅숏을 일부러 읽는 검사의 것. 화면 검사는 4단계 819개 → 1,047개, 규칙 검사 159 → 169개(G10·G11), 파이썬 29 → 41개(G15·G22·G29·G52).
+
+| ID | 고친 것 | 검사 | 고치기 전 |
+| --- | --- | --- | --- |
+| G01 | 패널 글 칸에 적은 뒤 지도·단추를 눌러도 초점이 남아 단축키가 막히고, 친 키가 다음 실험 값에 들어감("42"+"3" → 씨앗 423). LabMain 이 칸 밖 마우스 누름에 초점을 풀고(SpinBox 는 바로 `apply()` — 엔진은 지연 적용이라 같은 클릭의 새 실험이 옛 씨앗을 씀), 읽기 전용 칸은 단축키를 막지 않음. 패널의 모든 단추 동작도 확정 뒤 초점을 풂 | lab_checks `_focus_release`(실제 마우스·키), param_checks(단추 뒤 초점 없음·읽기 전용 칸 FOCUS_NONE) | 실패(패널 몫 11개) |
+| G02 | Enter 없이 적던 글자가 고급 설정 A/B 바꾸기·되돌리기·예설정 뒤 엉뚱한 칸에 확정. `_end_edits()` 가 모든 패널 동작 전에 그 칸으로 확정, 고급 칸은 초점을 받을 때의 A/B 칸을 기억 | param_checks `_pending_edits`(실제 키, 4경우) | 실패 8개 |
+| G03 | 멸종해 저절로 멈춘 실험에 멸종 줄이 없어 그래프에 멸종 표시가 없고, 배수가 아닌 틱의 내보내기가 실행기와 다름. `Experiment.step()` 이 멸종 틱에 한 줄, 내보낼 때 세계 **사본**(`SimSnapshot` 왕복)의 `tail_row()` 를 덧붙임 | experiment_checks(멸종 틱 221·틱 407 내보내기 = 실행기 글자까지, 세계·기록기 그대로), integration4 ④ | 실패 |
+| G04 | 스냅숏 열기·비교 끝내기 뒤 첫 걸음의 사건이 연대기에서 빠짐(틱으로 거름). 실험별 읽은 연대기 수로 거름 | chronicle_checks `_rebuild_next_tick`(네 경로) | 실패 4개 |
+| G05 | 비교 모드 세대 축에서 마우스 세로선·값 머리가 A 의 가까운 줄을 따라감. 모든 계열 가운데 마우스에 가장 가까운 줄이 기준, 먼 계열은 "멸종 …"/"— (이 세대 기록 없음 …)" | graph_checks `_gen_compare_checks` | 실패 |
+| G06 | 세대 축 시점 표시를 A 의 평균 세대로 놓음. 계열마다 그 틱의 자기 세대에 하나씩(B 점선). 신호 `cursor_tick_requested(tick)` 는 그대로 — 검증자가 든 다른 방법 | `_lab_checks`·`_gen_compare_checks`(B 시점 = B 농사 표지 px) | 실패 |
+| G07 | 마우스 값 계산을 프레임마다 4번, 세대 축은 매번 모든 줄을 훑음. `hover_state()` 한 번 계산을 공유, 정렬 색인 이분 탐색(답은 모두 훑기와 같음) | `_hover_cost_checks`(마우스 한 번에 계산 1번), 이분 탐색 = 모두 훑기 | 실패(계산 7번) |
+| G08 | 1280×720 비교 모드에서 나란히 시작·상태 줄·비교 모드 단추가 화면 밖. 스크롤 밖 고정 바닥(`Footer`), 제목 "다음 비교 — …" 늘 보임 | param_checks `_layout`·`_real_compare`(화면 안) | 실패 4개 |
+| G09 | 값만 다른 비교(돌연변이 0.08 vs 0.02)의 이름이 같음. 이름에 바꾼 값("돌연변이 0.08", 나머지 키=값, 최대 2개 + "외 K개"), 비교면 A·B 가 다른 키를 먼저 | experiment_checks `_labels` | 실패 |
+| G10 | 연대기 멸종 줄의 평균 세대가 늘 0.0. 마지막 틱에 죽은 개체들의 평균 세대(시뮬레이션, 새 상태 없음 — 8개 세계의 역사 해시 그대로) | run_tests `test_extinction_mean_gen` | 실패 2개 |
+| G11 | S15 가 demo_fast 로도 통과해 `fast_civ` 다시 맞춤을 지키지 못함. fast_civ 씨앗 1 따로(100세대 안 농사 + 틱 3,321·49.0세대 고정) | run_tests `test_farm_reachable` | 실패 2개(농사 임계 100000 — S15 는 통과) |
+| G12 | 저장고·밭 띠의 눈금 최댓값이 선 끝에 붙어 지금 수처럼 읽힘(없는데 "1"). 띠 안 오른쪽 "0~N", 자료가 0 이면 안 씀 | `_lab_checks` | 실패 |
+| G13 | 비교 모드 알림이 A\|B 경계 가운데에서 두 지도를 가림. 칸마다 알림 열(색 A/B 표), 칸마다 최대 toast_max/2 | lab_checks `_compare_toasts`, ui_driver ⑥ | 실패 |
+| G14 | 지금 실험의 씨앗을 0~seed_max 로 잘라 "바꾼 값 1개"·새 실험이 다른 세계. 그대로 보이고 흐린 안내 | param_checks `_seed_range`(-5·3e9·그 스냅숏) | 실패 6개 |
+| G15 | 고급 설정 85개 영어 키에 설명이 없고 `docs/CONFIG.md` 가 없음. `config/sim-labels.json`(한국어 이름·단위·범위·뜻) 말풍선, 같은 내용의 `docs/CONFIG.md` 생성, `tools/test_sim_labels.py` | param_checks `_labels`, test_sim_labels | 실패(3개 + 파이썬 2개) |
+| G16 | A/B 따로 밭 잃음 알림 묶기에 검사 없음 | lab_checks `_toast_rules`·`_compare_toasts` | 실패 |
+| G17 | 비교 모드 내보내기 실패가 A/B 어느 쪽인지 말하지 않음. "B/timeseries.csv" + "(A 는 저장됨: 경로)" | lab_checks `_export_fail`(실패하는 하위 클래스 — 실제 디스크 오류 없음) | 실패 |
+| G18 | 해석할 수 없는 글자를 적던 칸 + 새 실험 → 옛 값으로 시작하고 오류가 곧 사라짐. 시작하지 않고 줄 아래 오류·"입력 오류"·알림(씨앗 칸 포함) | param_checks `_bad_text` | 실패 6개 |
+| G19 | 비교 중 끄면 A 칸에 고친 값이 지워짐. 실험이 바뀐 칸만 다시 맞춤 | `_real_compare` | 실패 2개 |
+| G20 | 출생·사망이 기록 간격당 수인데 단위가 없고 A/B 기록 간격이 다르면 견줄 수 없음. `ui.graph.flow_per_ticks`(20)틱당 수, 단위 표시 | `_series_checks`·`_synthetic_checks`·`_lab_checks` | 실패 |
+| G21 | B 점선이 가로 위치 무늬라 한 줄짜리 뾰족한 값이 무늬 틈에서 사라짐. 가파른 조각은 길이 기준 무늬 | `_dash_checks`(무늬 자리 10곳) | 실패 |
+| G22 | SIM-API 경계 검사 정규식이 4단계 세계 접근 대부분을 놓침. 주석·문자열을 빼고 사슬·별칭·기록기·정적 이름까지 찾고, 화면이 세계에 쓰거나 진행 함수를 부르면 실패(Experiment·LabMain 예외), 자기 검사 | test_repo_rules | 실패(검토자의 변형: 새 규칙 2개 실패, 옛 규칙 통과) |
+| G23 | 마우스가 움직일 때마다 세 그래프의 선을 모두 다시 그림. 마우스 겹(`HoverLayer`)만 | `_hover_cost_checks`(GraphView `draw_count` 그대로) | 실패 |
+| G24 | B 점선 계단이 빈 배열로 `draw_multiline` → 엔진 ERROR. 빈 묶음은 건너뜀 | `_synthetic_checks`(`dash_skipped`) | 실패(엔진 ERROR 9줄) |
+| G25 | 고급 설정을 편 채 슬라이더 한 칸마다 85줄·말풍선을 다시 씀. 다름은 갱신마다 한 번, 말풍선은 바뀔 때만, 줄은 바뀐 것만 | `_refresh_cost`(견준 수 ≤ 86·말풍선 0 — 시간은 출력만) | 실패(256번·85개) |
+| G26 | 줄의 세대 칸과 문장 속 평균 세대가 다름(두 번 반올림). 칸은 저장값 그대로 0.01 단위(의도한 바뀜: `%.1f` → `%.2f`) | `_real_chronicle`(422틱 칸 4.35·문장 4.3) | 실패 |
+| G27 | 폴더 지우기가 숨은 `.gdignore` 를 건너뛰어 임시 내보내기·검사 폴더가 남음. `include_hidden`, 실패해도 임시 폴더를 지움(PID 이름) | web_checks, integration4 | 실패 |
+| G28 | 저장고·밭 띠 선 굵기가 코드 상수. `ui.graph.lane_line_width` | `_synthetic_checks`(덮어쓴 굵기) | 실패 |
+| G29 | I04·I06 에 헤드리스 검사가 없는데 W12 가 모두 확인했다고 씀. I06 검사(`test_user_dir_is_ascii`), W12·I04·I06 근거를 다시 씀(I03·I05 는 되돌려 다시 확인). I04 코드 몫은 통합 때(아래 J02) | test_repo_rules, graph_checks "가로축 이름" | 실패 |
+| G30 | DESIGN 이 없는 연대기 사건·ui_driver 내보내기 단계를 약속. §8.4·§10·§12·§19 를 실제대로 | 문서 | — |
+| G31 | 1280 에서 출생·사망을 켜면 '개체 수' 제목이 사라짐. 견본을 그림 안 띠로, 제목은 자르지 않음 | `_narrow_checks`(최소 폭 ≤ 540·제목 폭 ≥ 글자 폭) | 실패(옛 코드: 559 > 540, 제목 1px) |
+| G32 | B 주황·A 초록이 경고 주황·강조 민트와 붙어 보임. A #3d9406·B #e54ec6(뜻 색과 정상 ΔE ≥ 16·색각 이상 ≥ 8.5, 바탕 대비 ≥ 4.5) | graph_checks `_color_checks`, test_repo_rules `TestPaletteClaims` | 실패 |
+| G33 | 1280 에서 비교 이름이 씨앗 앞에서 잘려 같은 예설정·다른 씨앗이 같아 보임. 그래프 범례(그래프 묶음)와 지도 위 이름(통합 때, J03)이 예설정 이름만 줄이고 " · 씨앗 N" 은 남김 | `_narrow_checks`, lab_checks "좁은 비교 지도 이름" | 실패 |
+| G34 | 1280 비교 지도가 칸 높이의 40% 미만(슬라임 3~4px). 세로로 긴 칸이면 지도를 90° 돌려 맞춤(≥ 55%), 나침반 "북 →", 정보 창 방향 화살표도 화면 기준. 혼자 모드는 북쪽 위 | lab_checks `_compare_portrait`·`_compare_stop`, ui_driver | 실패 |
+| G35 | 비교 끄기·새 실험·나란히 시작이 오래 돈 실험을 묻지 않고 버림. `ui.param.confirm_discard_ticks`(2000) 이상이면 확인([끝내기][내보내고 끝내기][취소], 기본 초점 취소) | param_checks `_confirm` | 실패 2개 |
+| G36 | sound_checks 가 LabSound 계수만 봐 실제 재생을 빼도 모름. 실제 AudioStreamPlayer 재생·스트림 확인 | sound_checks | 실패(`play()` 를 빼면 14개, 다른 소리면 11개) |
+| G37 | 실험실이 자기 LabSound 를 사건에 잇는지 검사 없음 | sound·lab·integration4 | 실패 7개 |
+| G38 | `MIN_CHECKS` 가 실제 검사 수보다 크게 낮아 중간에 끊겨도 통과. 모든 모듈을 실제 수로(param 만 180 / 188, 96%) | run_view_tests | —(상수. 연대기는 중간에 끊으면 실패함을 확인) |
+| G39 | experiment_checks 가 `user://test_experiment` 를 지우지 않아 지난 실행의 파일이 회귀를 가릴 수 있음. PID 폴더, 처음·끝에 숨은 파일까지 지움 | experiment_checks | 실패 |
+| G40 | 그래프 "시점 표시 그림" 검사가 공허(그렸는지·어디인지 안 봄). 그린 자리(px)를 확인 | `_lab_checks`·`_compare_checks` | 실패 6개 |
+| G41 | README·presets.json 이 fast_civ·demo_fast 를 부풀려 씀. 실측대로(씨앗 7 은 첫 세대 폭발, demo_fast 씨앗 1 은 21.7세대) | 문서 | — |
+| G42 | `stop_compare` 가 모든 알림을 지움(계약: A/B 알림만). 묶음(이름표) 있는 알림만 | lab_checks `_compare_stop` | 실패 |
+| G43 | 정보 창을 비운 뒤에도 `current_tag()` 가 옛 이름표 | lab_checks(Esc·비교 끝) | 실패 2개(둘 다 되돌릴 때) |
+| G44 | 비교 모드 내보내기 기본 폴더 이름에 A 씨앗만. `-seed<A>-vs-seed<B>`, 웹 스냅숏 이름은 그 실험의 씨앗, 파라미터 패널 스냅숏 저장 기본 이름도 두 씨앗(통합 때, J05) | lab_checks, web_checks, integration4 ⑤ | 실패 |
+| G45 | 비교 모드에서 한 프레임에 소리 둘. 프레임의 A·B 사건을 모아 하나 | sound_checks | 실패 |
+| G46 | 세로 눈금 수가 `y_ticks_max` 를 넘고 간격이 `y_tick_min_px` 아래 | `_y_tick_checks`(11 범위 × 7 높이) | 실패 |
+| G47 | 비교 모드 멸종 표시가 어느 실험인지 말하지 않음. "A 멸종"/"B 멸종", B 점선, 겹치면 한 줄 아래 | `_extinct_compare_checks` | 실패 |
+| G48 | 실수를 14자리로 보여 적용 값과 다를 수 있음. `JSON.stringify` 글자 | `_float_text` | 실패 2개 |
+| G49 | "받는 쪽마다 따로 깊은 사본" 이 틀림(신호마다 사본 하나, 같은 신호의 청취자는 공유). 문서·주석 | lab_checks `_events`(계약을 적어 둠 — 문서만 틀렸으므로 전후 모두 통과) | — |
+| G51 | 그래프·연대기 코드의 이름 없는 조정값(투명도·여백·무늬 배수·배지 간격). `ui.graph`·`ui.chronicle` 키와 이름 붙은 상수(픽셀 그대로) | G28 덮어쓰기 검사, test_repo_rules(문서의 키가 ui.json 에 있음) | — |
+| G52 | 확인했다고 쓴 주장 가운데 섞였거나 저장소로 재현할 수 없는 것. 3절 "패널 몫" 문장을 고치고(U10), 색 수치는 `TestPaletteClaims` 가 저장소에서 다시 잼 | test_repo_rules | 실패 2개(나쁜 색) |
+| G53 | 정보 창 멸종 안내가 여백 밖으로 넘침. 여백 안 줄바꿈 | lab_checks `_compare_extinction` | 실패 |
+| G54 | 한국어 줄바꿈이 좌표·괄호를 가름. 연대기 줄바꿈은 괄호 안·숫자 앞 빈칸을 덜 끊음(지금 실험 카드·알림은 아래 "고치지 않은 것") | chronicle_checks `_wrap`(644 폭) | 실패 |
+| G55 | 자리 접기 단추 "설정" ≠ 패널 제목 "실험 조건" → "실험 조건". 연대기 머리 줄 설명 잘림은 통합 때(J04) | lab_checks `_layout`, chronicle_checks "머리 줄 설명" | 실패 |
+| G56 | param_checks 의 뼈대 시절 갈래·`t.check(true)` 채우기. 진짜 검사로(119 → 188개) | param_checks | 실패(`apply_compare` 가 실패하면 9개 — 전에는 뼈대 갈래로 통과) |
+
+**병합 뒤 함께 띄워 드러난 것(통합 때 고침)** — 묶음마다 자기 파일만 고쳐서 합쳐야 보이던 것:
+
+| ID | 고친 것 | 검사 · 고치기 전 |
+| --- | --- | --- |
+| J01 | 파라미터 패널의 새 실험 단추가 고정 바닥으로 옮겨졌는데(G08) lab_checks 의 초점 검사(G01)가 그 단추에 `ScrollContainer.ensure_control_visible` 을 불러 화면 검사 로그에 엔진 `ERROR: Must be an ancestor of the control.` 2줄(CI 는 실패로 봄). 스크롤 안의 칸만 스크롤 | 병합 직후 첫 전체 실행 로그 → 고친 뒤 0줄 |
+| J02 | 띠 범위 글이 그림 오른쪽 여백을 쓰게 되며(G12) 1280 창 기술 단계 그래프가 1,212틱에서 가로축 이름 "0" 하나만(통합 I04 의 되풀이 — 검사가 없던 것, U09). 실제 이름 자리로 고름: 양 끝 이름은 안쪽으로 붙이고, 겹치면 더 넓은 간격, 하나뿐이면 둘 이상 들어가는 가장 넓은 간격. `last_x_labels` 기록, 2.5배·8px 를 이름 붙은 상수로 | graph_checks "가로축 이름"(폭 4가지 × 틱 범위 6가지 × 틱·세대 축 × 세 그래프) — 옛 코드 3개 실패(1,212틱 "0" 만, 세대 축 "0.5"·"1.0" 사이 7px) |
+| J03 | G33 의 지도 몫(LabMain `_fit_title`, 그래프 묶음이 남긴 것) — 예설정 이름만 줄이고 씨앗은 남김, 꼬리가 길면 씨앗까지 남기고 끝을 줄임 | lab_checks "좁은 비교 지도 이름" — 옛 코드 1개 실패(두 이름이 "시연·검사용(아주 빠른 발견) · 씨앗 N" 을 끝에서 잘라 같아 보임) |
+| J04 | G55 의 연대기 몫 — 머리 줄 설명이 안 들어가면 짧은 판 "틱 · 평균 세대 · 사건"(전체는 말풍선) | chronicle_checks "머리 줄 설명" — 옛 코드 1개 실패(320·331 폭에서 183px 글이 148·159px 칸) |
+| J05 | G44 의 파라미터 패널 몫 — 비교 중 스냅숏 저장 기본 이름 `-seed<A>-vs-seed<B>` | integration4 ⑤ — 옛 코드 1개 실패 |
+| J06 | G03 뒤 필요 없어진 graph_capture 의 "멸종 뒤 200틱 더" 우회 삭제(멸종 줄을 Experiment 가 씀), 이 보고서 4단계 5절의 A/B 색 표기·5단계 B08 의 web_checks 수, `MIN_CHECKS` 를 병합 뒤 실제 수로(graph 119·chronicle 86·lab 231·integration4 59) | 캡처(graphs-edge 의 멸종 표시)·run_view_tests |
+
+**고치지 않은 것(까닭)**
+
+| ID | 남은 것 | 까닭 |
+| --- | --- | --- |
+| G54 | 파라미터 패널 "지금 실험" 카드("시연·검사용(아주 빠른 / 발견)")·알림("(평균 / 8.1세대)")의 줄바꿈 | 이 둘은 Godot `Label` 자동 줄바꿈(`UiTheme.keep_words` 가 음절 사이만 막음)이라 "덜 끊기" 가 없다. 괄호 안·숫자 앞 빈칸을 낱말 잇개로 단단히 묶으면 1280 창 왼쪽 자리의 카드 이름이 세 줄이 되는 등 득실을 따로 정해야 한다. 연대기 목록(직접 접음)은 고쳤고, 규칙은 `ChroniclePanel.wrap_text` 에 있음 |
+| G52 | 같은 지도 크기에서 패널만 숨긴 프레임 시간 대조(U10) | `perf_capture` 에 그 장면이 없고, 여러 작업이 godot 를 함께 돌리는 공유 기계의 새 수치는 3절 표와 견줄 수 없음. 문장은 "가르지 못했다" 로 고침 |
+| G14 | 명령줄·실행기·스냅숏의 씨앗 범위 검사 | 시뮬레이션·실행기·스냅숏이 모든 정수 씨앗을 받는 것이 계약. 패널이 그 씨앗을 그대로 보이고 다시 쓰게 고친 것으로 충분(검증자의 방안 A) |
+| G35 | 비교 모드를 다시 켤 때 B 칸 = A 사본, 스냅숏 열기는 묻지 않음 | 앞의 것은 VIEW-API 계약(오래 돈 B 는 끌 때 확인 대화 상자가 지킴). 스냅숏은 파일을 고른 것이 확인이고, FileDialog 신호 안에서 두 번째 독점 대화 상자를 띄우면 엔진 오류가 남 |
+| G07 | perf_capture 의 마우스 쓸기 장면 | graph_checks 가 마우스 한 번에 계산 1번·선 다시 그리기 없음·이분 탐색을 헤드리스로 확인 — 실제 GPU 프레임 시간은 U02″ 와 같은 까닭으로 미검증 |
 
 # 1단계 3/5: 실험실 화면·분석 도구 통합 (v0.1.0-dev)
 

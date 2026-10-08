@@ -44,6 +44,11 @@ const TICK_LEN := 3.0
 const MAX_DECIMALS := 6
 ## 가로 눈금 이름 간격 배수(기본 간격 × 이 값들 가운데 가장 작은 것으로 이름이 겹치지 않게)
 const LABEL_STEP_MULTS: Array[float] = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0]
+## 가로 눈금 이름 사이 최소 여백(픽셀), 그림 폭이 넉넉한 간격(graph.x_label_min_px)의 이 배수보다 좁으면 "좁은 그림"
+## (넉넉한 간격 대신 겹치지 않을 만큼만 띄움 — 통합 I04), 단위 글자("틱") 앞 여백
+const X_LABEL_PAD := 8.0
+const NARROW_LABEL_FACTOR := 2.5
+const X_UNIT_GAP := 6.0
 
 
 ## 마우스 값만 그리는 겹(그래프와 같은 크기, 마우스는 통과). 마우스가 움직이면 이것만 다시 그린다 —
@@ -159,6 +164,8 @@ var last_extinct: Array[Dictionary] = []
 var last_cursor: Array[Dictionary] = []
 ## 마지막으로 그린 저장고·밭 띠 눈금 범위 글(검사용): {lane, text, rect}
 var last_lane_labels: Array[Dictionary] = []
+## 마지막으로 그린 가로축 이름(검사용): {text, value, rect}
+var last_x_labels: Array[Dictionary] = []
 ## 마지막으로 그린 출생·사망 견본 글(검사용, 없으면 "")
 var last_flow_key := ""
 ## 마지막 마우스 세로선 픽셀(검사용, 없으면 NaN)
@@ -699,6 +706,7 @@ func _draw() -> void:
 	last_extinct.clear()
 	last_cursor.clear()
 	last_lane_labels.clear()
+	last_x_labels.clear()
 	last_flow_key = ""
 	# 마우스 겹은 선·범위가 바뀌면 함께 다시(점 높이가 세로 범위를 따름)
 	_hover_layer.queue_redraw()
@@ -781,32 +789,84 @@ func _draw_x_axis(labels: bool) -> void:
 	var uw := _font.get_string_size(unit, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs).x
 	var base_y := plot.end.y + _x_label_gap + _ascent
 	draw_string(_font, Vector2(size.x - uw - 1.0, base_y), unit, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, _c_dim)
-	var right_lim := size.x - uw - 6.0
+	var right_lim := size.x - uw - X_UNIT_GAP
 	var integer := panel.x_mode == GraphPanel.X_TICK
 	# 이름이 겹치지 않는 가장 작은 간격 배수
 	var widest := _font.get_string_size(fmt_num(_x1, 0) + "0", HORIZONTAL_ALIGNMENT_LEFT, -1, _fs).x
-	var need := maxf(_x_label_min, widest + 8.0)
+	var need := maxf(_x_label_min, widest + X_LABEL_PAD)
 	# 좁은 그림(1280 창의 아래 자리, 통합 때 더함): 넉넉한 간격이면 이름이 "0" 하나만 남으므로 겹치지 않을 만큼만 띄움
-	if plot.size.x < need * 2.5:
-		need = widest + 8.0
-	var ls := _xstep
-	for m in LABEL_STEP_MULTS:
-		ls = _xstep * m
-		if ls * _sx >= need:
+	if plot.size.x < need * NARROW_LABEL_FACTOR:
+		need = widest + X_LABEL_PAD
+	var pick := LABEL_STEP_MULTS.size() - 1
+	for i in LABEL_STEP_MULTS.size():
+		if _xstep * LABEL_STEP_MULTS[i] * _sx >= need:
+			pick = i
 			break
-	var d := 0 if integer else decimals_for(ls)
+	var placed := _x_label_layout(_xstep * LABEL_STEP_MULTS[pick], integer, base_y, right_lim)
+	# 소수 이름("0.5")은 위 어림(정수 글자 폭)보다 넓을 수 있다: 겹치면 더 넓은 간격으로
+	while not _x_labels_apart(placed) and pick < LABEL_STEP_MULTS.size() - 1:
+		pick += 1
+		placed = _x_label_layout(_xstep * LABEL_STEP_MULTS[pick], integer, base_y, right_lim)
+	# 그래도 이름이 하나뿐이면(예전: 1280 창 기술 단계 그래프의 1,212틱에서 "0" 만 — 띠 범위 글 자리만큼 그림이 좁아진 뒤),
+	# 이름이 둘 이상이고 서로 X_LABEL_PAD 이상 떨어지는 가장 넓은 간격으로 낮춘다(4단계 검토 통합 때 고침)
+	if placed.size() < 2:
+		for i in range(pick - 1, -1, -1):
+			var alt := _x_label_layout(_xstep * LABEL_STEP_MULTS[i], integer, base_y, right_lim)
+			if alt.size() < 2:
+				continue
+			if not _x_labels_apart(alt):
+				break
+			pick = i
+			placed = alt
+			break
+	var ls := _xstep * LABEL_STEP_MULTS[pick]
 	var v := ceilf(_x0 / ls - 1e-9) * ls
 	var guard := 0
 	while v <= _x1 + ls * 1e-6 and guard < 200:
 		guard += 1
 		var px := roundf(data_to_px(v)) + 0.5
 		draw_line(Vector2(px, yb), Vector2(px, yb + TICK_LEN), _c_axis, 1.0)
+		v += ls
+	for l in placed:
+		var r: Rect2 = l.rect
+		draw_string(_font, Vector2(r.position.x, base_y), str(l.text), HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, _c_dim)
+	last_x_labels = placed
+
+
+## 간격 ls 의 가로축 이름 자리 {text, value, rect}: 눈금 가운데(양 끝에서는 안쪽으로 붙임), 단위 글자 앞(right_lim)까지.
+func _x_label_layout(ls: float, integer: bool, base_y: float, right_lim: float) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var d := 0 if integer else decimals_for(ls)
+	var v := ceilf(_x0 / ls - 1e-9) * ls
+	var guard := 0
+	while v <= _x1 + ls * 1e-6 and guard < 200:
+		guard += 1
+		var px := roundf(data_to_px(v)) + 0.5
 		var t := fmt_num(v, d)
 		var tw := _font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs).x
-		var lx := clampf(px - tw * 0.5, 0.0, size.x - tw)
-		if lx + tw <= right_lim:
-			draw_string(_font, Vector2(lx, base_y), t, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, _c_dim)
+		# 눈금 가운데, 양 끝에서는 안쪽으로 붙임(오른쪽은 단위 글자 앞까지) — 이름이 자기 눈금을 덮을 때만 씀
+		var lx := clampf(px - tw * 0.5, 0.0, maxf(right_lim - tw, 0.0))
+		var r := Rect2(lx, base_y - _ascent, tw, _lh)
+		var covers := lx <= px and lx + tw >= px and r.end.x <= right_lim
+		# 안쪽으로 붙인 끝 이름이 앞 이름에 붙으면 뺌(간격이 좁아서가 아니라 끝이라서 붙은 것)
+		var pulled := lx < px - tw * 0.5 - 0.5
+		if covers and pulled and not out.is_empty():
+			var prev: Rect2 = out.back().rect
+			covers = r.position.x - prev.end.x >= X_LABEL_PAD
+		if covers:
+			out.append({text = t, value = v, rect = r})
 		v += ls
+	return out
+
+
+## 이웃한 이름 사이가 모두 X_LABEL_PAD 이상
+func _x_labels_apart(labels: Array[Dictionary]) -> bool:
+	for i in range(1, labels.size()):
+		var a: Rect2 = labels[i - 1].rect
+		var b: Rect2 = labels[i].rect
+		if b.position.x - a.end.x < X_LABEL_PAD:
+			return false
+	return true
 
 
 ## 개체 수 그래프 위쪽 띠의 출생·사망 견본 + 단위("— 출생  — 사망  20틱당"). 단위까지 들어가지 않으면 단위만 뺌

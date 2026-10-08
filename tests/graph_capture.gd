@@ -127,7 +127,7 @@ func _extras(xa: Experiment, xb: Experiment) -> void:
 	while dead.world.extinct_tick < 0 and guard < 5000:
 		dead.step()
 		guard += 1
-	dead.step_n(200)
+	# 멸종한 틱의 기록 줄(개체 수 0)은 Experiment.step() 이 쓴다(4단계 검토 G03) — 멸종 표시를 위해 더 돌리지 않음
 	print("멸종: 틱 %d, 기록 %d줄" % [dead.world.extinct_tick, dead.rows().size()])
 	_panel.load_experiments([dead])
 	var e1 := await _grab(SMALL, GraphPanel.GRAPH_TRAIT, 0.97)

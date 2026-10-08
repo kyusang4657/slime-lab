@@ -74,6 +74,8 @@ class MapPane:
 	var toasts: VBoxContainer
 	## 표지 폭을 마지막으로 맞춘 조건(바뀔 때만 다시 잼)
 	var fit_key := ""
+	## 실험 이름 전체(title.text 는 폭에 맞춰 줄인 글일 수 있음 — 예설정 이름만 줄이고 " · 씨앗 N …" 은 남김)
+	var full_title := ""
 	var width := 0.0
 
 
@@ -1636,7 +1638,8 @@ func _update_titles() -> void:
 	for k in mini(_panes.size(), experiments.size()):
 		var p := _panes[k]
 		p.tag.visible = is_comparing()
-		p.title.text = experiments[k].label if is_comparing() else _title
+		p.full_title = experiments[k].label if is_comparing() else _title
+		p.title.text = p.full_title
 		p.fit_key = ""
 	_layout_maps()
 
@@ -1679,20 +1682,49 @@ func _layout_maps() -> void:
 	_refit_toasts()
 
 
-## 표지 폭 맞춤: 실험 이름 = min(한 줄 폭, 지도 폭 − 양쪽 여백 − 이름표·표지·단추 몫), 넘치면 "…". 조건이 바뀔 때만 잰다.
+## 표지 폭 맞춤: 실험 이름 = min(한 줄 폭, 지도 폭 − 양쪽 여백 − 이름표·표지·단추 몫). 넘치면 예설정 이름만 "…" 로 줄이고
+## " · 씨앗 N · 바꾼 값" 꼬리는 남긴다(4단계 검토 G33 — 예전엔 끝을 잘라 1280 창 비교에서 씨앗만 다른 두 지도의 이름이 같아 보였음,
+## 그래프 범례와 같은 나눔 `GraphPanel.split_name`). 꼬리도 안 들어가면 예설정 이름을 빼고 꼬리 끝을 줄이되 씨앗까지는 남기고,
+## 그것도 안 들어가면 끝을 자름. 조건이 바뀔 때만 잰다.
 func _fit_title(p: MapPane) -> void:
-	var key := "%s|%s|%s|%s|%s|%s|%s|%.0f" % [p.title.text, p.tag.visible, p.paused.visible, p.extinct.visible, p.extinct.text,
+	var key := "%s|%s|%s|%s|%s|%s|%s|%.0f" % [p.full_title, p.tag.visible, p.paused.visible, p.extinct.visible, p.extinct.text,
 			p.north.visible, p.north.text, p.width]
 	if key == p.fit_key or not p.title.is_inside_tree():
 		return
 	p.fit_key = key
 	var font := p.title.get_theme_font("font")
 	var fs := p.title.get_theme_font_size("font_size")
-	var natural := ceilf(font.get_string_size(p.title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x) + 1.0
+	var wid := func(s: String) -> float: return ceilf(font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x) + 1.0
+	p.title.text = p.full_title
 	p.title.custom_minimum_size.x = 0.0
 	var chrome := p.head.get_combined_minimum_size().x - p.title.get_combined_minimum_size().x
-	var room := p.width - 2.0 * UiConfig.num("lab.map_overlay_margin")
-	p.title.custom_minimum_size.x = maxf(0.0, minf(natural, room - chrome))
+	var room := maxf(0.0, p.width - 2.0 * UiConfig.num("lab.map_overlay_margin") - chrome)
+	var natural: float = wid.call(p.full_title)
+	var parts := GraphPanel.split_name(p.full_title, "")
+	var mid := parts[1]
+	var tail := parts[2]
+	if natural > room and tail != "":
+		var ell := GraphPanel.ELLIPSIS
+		var short := ""
+		if float(wid.call(ell + tail)) <= room:
+			# 예설정 이름만 줄임: "시연·검사… · 씨앗 1"
+			var n := mid.length()
+			while n > 0 and float(wid.call(mid.left(n).strip_edges() + ell + tail)) > room:
+				n -= 1
+			short = mid.left(n).strip_edges() + ell + tail
+		else:
+			# 꼬리(씨앗 + 바꾼 값)도 길면 예설정 이름을 빼고 꼬리 끝을 줄임 — 씨앗까지는 늘 보임: "… · 씨앗 2 · 돌연…"
+			var seed_end := tail.find(" · ", GraphPanel.SEED_MARK.length())
+			var keep := tail.length() if seed_end < 0 else seed_end
+			var m := tail.length()
+			while m > keep and float(wid.call(ell + tail.left(m).strip_edges(false, true) + ell)) > room:
+				m -= 1
+			if float(wid.call(ell + tail.left(m).strip_edges(false, true) + ell)) <= room:
+				short = ell + tail.left(m).strip_edges(false, true) + ell
+		if short != "":
+			p.title.text = short
+			natural = wid.call(short)
+	p.title.custom_minimum_size.x = minf(natural, room)
 	p.head.reset_size()
 
 

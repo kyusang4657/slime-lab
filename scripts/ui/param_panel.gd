@@ -1427,14 +1427,19 @@ func open_snapshot_dialog(save: bool) -> FileDialog:
 	return d
 
 
-## 저장 파일 기본 이름 snapshot-<날짜-시각>-seed<N>-tick<T>.json(시각은 이름에만 씀).
+## 저장 파일 기본 이름 snapshot-<날짜-시각>-seed<N>-tick<T>.json(시각은 이름에만 씀). 비교 중이면 두 씨앗
+## "-seed<A>-vs-seed<B>"(LabMain.default_export_dir 와 같은 규칙 — 4단계 검토 G44: 예전엔 A 씨앗만이라 -B.json 에도 A 씨앗).
 func _default_snapshot_name() -> String:
 	var t := Time.get_datetime_dict_from_system()
 	var stamp := "%04d%02d%02d-%02d%02d%02d" % [t.year, t.month, t.day, t.hour, t.minute, t.second]
 	var x: Experiment = _lab.experiment(0) if _lab != null and is_instance_valid(_lab) else null
 	if x == null:
 		return "snapshot-%s.json" % stamp
-	return "snapshot-%s-seed%d-tick%d.json" % [stamp, x.seed_value, x.world.tick]
+	var seeds := "seed%d" % x.seed_value
+	var xb := _lab.experiment(1)
+	if xb != null:
+		seeds += "-vs-seed%d" % xb.seed_value
+	return "snapshot-%s-%s-tick%d.json" % [stamp, seeds, x.world.tick]
 
 
 ## 저장: 혼자면 그 파일, 비교 중이면 <이름>-A.json·<이름>-B.json 두 파일. 성공 알림은 LabMain 이 띄운다.

@@ -31,6 +31,9 @@ const COLOR_KEYS: Array[String] = ["other", "discovery", "building", "farm_lost"
 const TITLE := "연대기"
 ## 머리 줄 설명(열 이름 — 줄 안의 세대는 "평균" 을 줄여 씀). 누르면 하는 일은 줄의 풍선 도움말에
 const HINT := "틱 · 평균 세대 · 사건 — 최신이 위"
+## 좁은 자리(1280 창 = 연대기 약 331px)에서 HINT 가 다 들어가지 않을 때 쓰는 짧은 판(열 이름만 — 전체는 말풍선).
+## 예전엔 "틱 · 평균 세대 · 사건 — 최…" 로 잘렸음(4단계 검토 G55)
+const HINT_SHORT := "틱 · 평균 세대 · 사건"
 const EMPTY_TEXT := "아직 기록된 사건이 없습니다"
 const EMPTY_FILTERED := "이 종류의 사건이 아직 없습니다"
 ## 줄 머리 글자("틱 N · 평균 G세대 · 문장"). 평균 세대는 저장된 그대로(사건의 mean_gen 은 0.01 단위 = chronicle.csv) —
@@ -75,6 +78,23 @@ func _init() -> void:
 	_build()
 
 
+## 머리 줄 설명: 다 들어가는 가장 긴 판(HINT → HINT_SHORT, 그것도 안 들어가면 HINT_SHORT 를 "…" 로). 칸 폭은 글과
+## 무관(늘어나는 칸 + 잘라 그림)이라 글을 바꿔도 다시 불리지 않음.
+func _fit_hint() -> void:
+	var font := _hint.get_theme_font("font")
+	var fs := _hint.get_theme_font_size("font_size")
+	var want := HINT_SHORT
+	if font != null and font.get_string_size(HINT, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x <= _hint.size.x:
+		want = HINT
+	if _hint.text != want:
+		_hint.text = want
+
+
+## 머리 줄 설명 글(검사용)
+func hint_text() -> String:
+	return _hint.text
+
+
 func _build() -> void:
 	var head := HBoxContainer.new()
 	head.name = "Head"
@@ -89,6 +109,9 @@ func _build() -> void:
 	_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hint.clip_text = true
 	_hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_hint.tooltip_text = HINT
+	_hint.mouse_filter = Control.MOUSE_FILTER_PASS
+	_hint.resized.connect(_fit_hint)
 	head.add_child(_hint)
 	_filter_btn = OptionButton.new()
 	_filter_btn.name = "Filter"

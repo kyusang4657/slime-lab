@@ -268,7 +268,7 @@ func _compare() -> void:
 				tagged[tag] = true
 	check(bool(tagged.A) or bool(tagged.B), "비교 모드 알림에 이름표(%s)" % str(tagged))
 	var mb := lab._map_area.get_node_or_null("MapContainerB") as Control
-	check(mb != null and absf(lab._map_container.size.x - mb.size.x) <= 1.0 and lab._map_title.text == lab.experiment(0).label,
+	check(mb != null and absf(lab._map_container.size.x - mb.size.x) <= 1.0 and lab._panes[0].full_title == lab.experiment(0).label,
 			"지도 둘 나란히(%s | %s)" % [str(lab._map_container.size), str(mb.size) if mb != null else "-"])
 	await _click_slime_on(1, false)
 	check(lab.selected_index() == 1 and lab.info_panel.current_tag() == "B" and lab.map_view_of(1).ring_info().visible and not lab.map_view.ring_info().visible,
