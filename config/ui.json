@@ -290,7 +290,10 @@
 		"changed_stripe_width": 3,
 		"chip_size": 10,
 		"dialog_width": 760,
-		"dialog_height": 520
+		"dialog_height": 520,
+		"confirm_discard_ticks": 2000,
+		"confirm_width": 440,
+		"footer_error_lines": 3
 	},
 	"graph": {
 		"redraw_hz": 5.0,
