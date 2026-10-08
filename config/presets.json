@@ -24,7 +24,7 @@
 	},
 	"fast_civ": {
 		"label": "빠른 문명",
-		"_comment": "연구용: 발견이 진화 도중에 열리고 100세대 안에 씨앗 1~12 모두 농사. 근거·씨앗별 결과는 docs/TUNING-fast_civ.md",
+		"_comment": "연구용: 씨앗 12개 중 11개는 발견이 진화 도중에 열림(씨앗 7 은 첫 세대 폭발로 2세대 안에 채집·저장·농사), 씨앗 1~12 모두 100세대 안에 농사(중앙값 15.9세대). 근거·씨앗별 결과는 docs/TUNING-fast_civ.md",
 		"set": {
 			"discovery.forage_threshold": 280,
 			"discovery.store_threshold": 30.0,
@@ -35,6 +35,7 @@
 	},
 	"demo_fast": {
 		"label": "시연·검사용(아주 빠른 발견)",
+		"_comment": "예전 fast_civ 값. 씨앗 1~12 의 농사 중앙값 2.1세대(대부분 첫 세대 폭발), 기본 씨앗 1 은 21.7세대(약 1,640틱) — 화면 검사·캡처가 씨앗 1 을 씀",
 		"set": {
 			"discovery.forage_threshold": 120,
 			"discovery.store_threshold": 30.0,
