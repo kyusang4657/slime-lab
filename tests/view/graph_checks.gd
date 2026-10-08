@@ -4,7 +4,7 @@ extends RefCounted
 ## 비교 모드는 패널 단위로(LabMain.start_compare 를 거친 종단은 integration4_checks), 실험 둘을 직접 만들어 LabMain 이 내는 것과 같은 호출로 몬다:
 ##   x.tag = "A"/"B" → panel.load_experiments([a, b])(= experiments_changed) → 진행할 때마다 append_row(k, rows().back())(= recorded).
 
-const MIN_CHECKS := 60
+const MIN_CHECKS := 114
 ## 합성 줄 수(긴 실행 흉내: 실험 둘 × 이만큼)와 그 줄 간격(틱)
 const LONG_ROWS := 6000
 const LONG_EVERY := 20
@@ -15,9 +15,14 @@ const DEMO_TICKS := 1700
 
 func run(t) -> void:
 	_static_checks(t)
+	_color_checks(t)
 	_series_checks(t)
 	await _lab_checks(t)
 	await _compare_checks(t)
+	await _gen_compare_checks(t)
+	await _extinct_compare_checks(t)
+	await _narrow_checks(t)
+	await _synthetic_checks(t)
 	await _long_checks(t)
 
 
@@ -77,7 +82,127 @@ func _static_checks(t) -> void:
 		on += dashes[k].distance_to(dashes[k + 1])
 	var want := 100.0 * UiConfig.num("graph.dash_px") / (UiConfig.num("graph.dash_px") + UiConfig.num("graph.dash_gap_px"))
 	t.check(dashes.size() >= 4 and absf(on - want) <= UiConfig.num("graph.dash_px"), "점선 켬 길이 %.1f ≈ %.1f" % [on, want])
+	_dash_checks(t, gv)
+	_y_tick_checks(t, gv)
 	gv.free()
+
+
+## 점선(B): 한 열 안의 뾰족한 값이 무늬 자리(끔 구간)에 들어도 꼭짓점까지 그림(G21), 모두 틈에 든 조각은 빈 결과(G24)
+func _dash_checks(t, gv: GraphView) -> void:
+	var dash := UiConfig.num("graph.dash_px")
+	var gap := UiConfig.num("graph.dash_gap_px")
+	var period := dash + gap
+	gv.plot = Rect2(0, 0, 300, 120)
+	# 무늬 자리 10곳(한 칸 = dash + gap)마다: 한 열 안의 오르내림(바닥 → 꼭짓점 → 바닥)과 꼭짓점에서 끝나는 가파른 조각
+	var spike_ok := true
+	var end_ok := true
+	var worst := 0.0
+	for p in 10:
+		var x0 := 30.0 + period * float(p) / 10.0
+		var d1 := gv._xdash(PackedVector2Array([Vector2(x0, 100), Vector2(x0 + 0.3, 40), Vector2(x0 + 0.6, 100)]))
+		var top := INF
+		for q in d1:
+			top = minf(top, q.y)
+		spike_ok = spike_ok and top <= 40.0 + 0.01
+		var d2 := gv._xdash(PackedVector2Array([Vector2(x0, 100), Vector2(x0 + 3.0, 20)]))
+		var top2 := INF
+		for q in d2:
+			top2 = minf(top2, q.y)
+		worst = maxf(worst, top2 - 20.0)
+		end_ok = end_ok and top2 <= 20.0 + gap + 0.01
+	t.check(spike_ok, "점선: 한 열 안의 뾰족한 값은 무늬 자리 10곳 모두 꼭짓점까지 그림")
+	t.check(end_ok, "점선: 꼭짓점에서 끝나는 가파른 조각도 무늬 자리와 무관하게 꼭짓점 dash_gap 안까지(가장 나쁜 %.1fpx)" % worst)
+	# 무늬 틈에 통째로 든 짧은 가로 조각 → 빈 결과(그리기 쪽은 draw_multiline 을 부르지 않음 — 아래 비교 검사)
+	var g := gv._xdash(PackedVector2Array([Vector2(dash + 0.5, 10), Vector2(dash + 2.0, 10)]))
+	t.check(g.is_empty(), "점선: 틈에 든 짧은 가로 조각은 빈 결과")
+
+
+## 세로 눈금: 많아야 y_ticks_max 개, 간격 ≥ y_tick_min_px — 평평한 값·거의 평평한 값도(G46). 그림이 간격 둘보다 낮으면
+## 간격은 보지 않음(0 을 사이에 둔 자료는 늘 두 칸 이상이라 그보다 낮은 그림에서는 지킬 수 없음 — 실제 그래프는 90px 이상).
+func _y_tick_checks(t, gv: GraphView) -> void:
+	var tmax := UiConfig.integer("graph.y_ticks_max")
+	var tmin := UiConfig.num("graph.y_tick_min_px")
+	var cases: Array[Vector4] = [Vector4(3.0, 3.0, 0, 0), Vector4(0.978, 1.004, 0, 0), Vector4(0.998, 1.0005, 0, 0), Vector4(1.0, 1.0, 0, 0),
+			Vector4(0.0, 263.0, 1, 1), Vector4(0.0, 1.0, 1, 1), Vector4(12.3, 97.1, 0, 0), Vector4(-4.2, 3.3, 0, 0), Vector4(0.0, 87.0, 1, 1),
+			Vector4(40.0, 230.0, 0, 0), Vector4(0.0, 12345.0, 1, 1)]
+	var bad := PackedStringArray()
+	for c in cases:
+		for h: float in [30.0, 60.0, 90.0, 120.0, 150.0, 200.0, 260.0]:
+			gv._set_y_range(c.x, c.y, c.z > 0.5, c.w > 0.5, h)
+			var n := gv._y_ticks.size()
+			var spacing := h / float(maxi(1, n - 1))
+			if n > tmax or n < 2 or (h >= 2.0 * tmin and spacing < tmin - 1e-6):
+				bad.append("%s~%s h%d → %d개" % [str(c.x), str(c.y), int(h), n])
+	t.check(bad.is_empty(), "세로 눈금 ≤ %d개·간격 ≥ %dpx (평평한 3.0 · 0.978~1.004 등) %s" % [tmax, int(tmin), ", ".join(bad)])
+	gv._set_y_range(3.0, 3.0, false, false, 120.0)
+	t.check(gv._y_ticks.size() <= tmax and gv._y_ticks[0] < 3.0 and gv._y_ticks[gv._y_ticks.size() - 1] > 3.0,
+			"평평한 3.0(높이 120): 눈금 %s" % str(gv._y_ticks))
+	t.check(is_equal_approx(GraphView.next_nice(1.0), 2.0) and is_equal_approx(GraphView.next_nice(2.0), 2.5) and is_equal_approx(GraphView.next_nice(2.0, true), 5.0)
+			and is_equal_approx(GraphView.next_nice(0.05), 0.1) and is_equal_approx(GraphView.next_nice(250.0), 500.0), "다음 눈금 간격(1·2·2.5·5 × 10^k)")
+
+
+# ── 실험 색(G32): A·B 는 뜻 색(경고·강조·위험)과도 구별되고 색각 이상에도 안전, 이름표 글자가 읽힘 ──
+## dataviz 검사기와 같은 식: OKLab 거리 × 100, 색각 이상은 Machado-Oliveira-Fernandes(2009) 심도 1.0(제1·제2 색맹 중 작은 값).
+## 문턱: 정상 시각 ≥ 15, 색각 이상 ≥ 8, 바탕 대비 ≥ 4.5(이름표 = 실험 색 바탕 + 바탕색 굵은 글자).
+const MACHADO := {
+	"protan": [Vector3(0.152286, 1.052583, -0.204868), Vector3(0.114503, 0.786281, 0.099216), Vector3(-0.003882, -0.048116, 1.051998)],
+	"deutan": [Vector3(0.367322, 0.860646, -0.227968), Vector3(0.280085, 0.672501, 0.047413), Vector3(-0.011820, 0.042940, 0.968881)],
+}
+
+
+func _color_checks(t) -> void:
+	var a := UiConfig.color("graph.series_a")
+	var b := UiConfig.color("graph.series_b")
+	var bg := UiTheme.color("background")
+	var bad := PackedStringArray()
+	for pair in [["A", a], ["B", b]]:
+		var c: Color = pair[1]
+		for key in ["warn", "accent", "danger"]:
+			var s := UiTheme.color(key)
+			var dn := _de(c, s, "")
+			var dc := minf(_de(c, s, "protan"), _de(c, s, "deutan"))
+			if dn < 15.0 or dc < 8.0:
+				bad.append("%s↔%s 정상 %.1f 색각 %.1f" % [pair[0], key, dn, dc])
+		var lc := c.srgb_to_linear().get_luminance()
+		var lb := bg.srgb_to_linear().get_luminance()
+		var con := (maxf(lc, lb) + 0.05) / (minf(lc, lb) + 0.05)
+		if con < 4.5:
+			bad.append("%s 바탕 대비 %.2f" % [pair[0], con])
+	var births := UiConfig.color("graph.births")
+	for p in [[a, b], [a, births], [b, births]]:
+		if _de(p[0], p[1], "") < 15.0 or minf(_de(p[0], p[1], "protan"), _de(p[0], p[1], "deutan")) < 8.0:
+			bad.append("%s↔%s" % [Color(p[0]).to_html(false), Color(p[1]).to_html(false)])
+	t.check(bad.is_empty(), "실험 색 A %s · B %s: 경고·강조·위험·출생 색과 정상 ΔE ≥ 15·색각 이상 ΔE ≥ 8, 바탕 대비 ≥ 4.5 %s"
+			% [a.to_html(false), b.to_html(false), ", ".join(bad)])
+
+
+## 두 색의 OKLab 거리 × 100(kind = "" 정상, "protan"·"deutan" 모의)
+static func _de(c1: Color, c2: Color, kind: String) -> float:
+	return 100.0 * _oklab(_sim(c1, kind)).distance_to(_oklab(_sim(c2, kind)))
+
+
+static func _sim(c: Color, kind: String) -> Vector3:
+	var l := Vector3(_s2lin(c.r), _s2lin(c.g), _s2lin(c.b))
+	if kind == "":
+		return l
+	var m: Array = MACHADO[kind]
+	var r0: Vector3 = m[0]
+	var r1: Vector3 = m[1]
+	var r2: Vector3 = m[2]
+	return Vector3(clampf(r0.dot(l), 0.0, 1.0), clampf(r1.dot(l), 0.0, 1.0), clampf(r2.dot(l), 0.0, 1.0))
+
+
+static func _s2lin(v: float) -> float:
+	return v / 12.92 if v <= 0.04045 else pow((v + 0.055) / 1.055, 2.4)
+
+
+static func _oklab(l: Vector3) -> Vector3:
+	var lm := pow(0.4122214708 * l.x + 0.5363325363 * l.y + 0.0514459929 * l.z, 1.0 / 3.0)
+	var mm := pow(0.2119034982 * l.x + 0.6806995451 * l.y + 0.1073969566 * l.z, 1.0 / 3.0)
+	var sm := pow(0.0883024619 * l.x + 0.2817188376 * l.y + 0.6299787005 * l.z, 1.0 / 3.0)
+	return Vector3(0.2104542553 * lm + 0.7936177850 * mm - 0.0040720468 * sm,
+			1.9779984951 * lm - 2.4285922050 * mm + 0.4505937099 * sm,
+			0.0259040371 * lm + 0.7827717662 * mm - 0.8086757660 * sm)
 
 
 # ── 줄 쌓기: 멸종·평균 세대 이어 쓰기 ──
@@ -96,6 +221,59 @@ func _series_checks(t) -> void:
 	t.check(is_nan(s.cols[GraphPanel.C_SIZE][1]) and s.cols[GraphPanel.C_POP][1] == 0.0, "개체가 없으면 평균은 빈 값(NaN), 개체 수는 0")
 	t.check(s.gen_x[1] == 2.5 and s.hi[GraphPanel.C_SIZE] == 1.1 and s.lo[GraphPanel.C_SIZE] == 1.1, "세대 축은 마지막 평균 세대를 이어 씀, 범위는 NaN 제외")
 
+	# 출생·사망 = flow_per_ticks 틱당(G20): 기록 간격 20 과 100 의 같은 빠르기가 같은 값
+	var w := UiConfig.num("graph.flow_per_ticks")
+	var fa := _flow_series(20, 4, 3, 30)
+	var fb := _flow_series(100, 20, 15, 6)
+	var rate_ok := true
+	for i in range(1, fb.size()):
+		var ra := fa.tick.find(fb.tick[i])
+		rate_ok = rate_ok and is_equal_approx(fb.cols[GraphPanel.C_BIRTHS][i], fa.cols[GraphPanel.C_BIRTHS][ra])
+		rate_ok = rate_ok and is_equal_approx(fb.cols[GraphPanel.C_DEATHS][i], fa.cols[GraphPanel.C_DEATHS][ra])
+	t.check(rate_ok and is_equal_approx(fa.cols[GraphPanel.C_BIRTHS][5], 4.0 * w / 20.0) and is_equal_approx(fb.hi[GraphPanel.C_BIRTHS], fa.hi[GraphPanel.C_BIRTHS]),
+			"출생·사망은 %d틱당: 기록 간격 20(출생 4) = 간격 100(출생 20) → %s / %s" % [int(w), str(fa.cols[GraphPanel.C_BIRTHS][5]), str(fb.cols[GraphPanel.C_BIRTHS][3])])
+
+	# 세대 축 가장 가까운 줄(G07): 정렬해 둔 값의 이분 탐색 = 모두 훑기(차이가 같으면 뒤 줄), 되돌아가는 값·같은 값·멸종 뒤 이어 씀
+	var gs := GraphPanel.Series.new(null)
+	var gen := 0.0
+	for i in 400:
+		gen += 0.05 * sin(float(i) * 0.31) + 0.03
+		var g := snappedf(gen, 0.05)
+		var pop := 0 if i >= 380 else 10
+		gs.append({tick = i * 20, population = pop, mean_gen = g})
+	var near_ok := true
+	var sorted_ok := true
+	for i in gs.gen_sorted.size() - 1:
+		sorted_ok = sorted_ok and (gs.gen_sorted[i] < gs.gen_sorted[i + 1] or (gs.gen_sorted[i] == gs.gen_sorted[i + 1] and gs.gen_order[i] < gs.gen_order[i + 1]))
+	for q in 300:
+		var x := gs.gen_lo - 0.3 + (gs.gen_hi - gs.gen_lo + 0.6) * float(q) / 299.0
+		if q % 7 == 0:
+			x = gs.gen_x[(q * 13) % gs.size()]
+		elif q % 11 == 0:
+			x = (gs.gen_x[(q * 17) % gs.size()] + gs.gen_x[(q * 5) % gs.size()]) * 0.5
+		near_ok = near_ok and gs.nearest_gen_row(x) == _brute_nearest(gs.gen_x, x)
+	t.check(sorted_ok and near_ok and gs.gen_sorted.size() == gs.size(), "세대 축 가장 가까운 줄: 이분 탐색 = 모두 훑기(300곳, 같은 값·되돌아감·멸종 포함)")
+
+
+## 기록 간격 every 틱마다 출생 births·사망 deaths 인 합성 기록 n 줄
+func _flow_series(every: int, births: int, deaths: int, n: int) -> GraphPanel.Series:
+	var s := GraphPanel.Series.new(null)
+	for i in n:
+		s.append({tick = i * every, population = 50, births = births if i > 0 else 0, deaths = deaths if i > 0 else 0, mean_gen = 1.0})
+	return s
+
+
+## 모두 훑어 차이가 가장 작은 줄(같으면 뒤 줄) — 예전 세대 축 방식
+func _brute_nearest(gx: PackedFloat64Array, x: float) -> int:
+	var best := 0
+	var best_d := INF
+	for i in gx.size():
+		var d := absf(gx[i] - x)
+		if d <= best_d:
+			best_d = d
+			best = i
+	return best
+
 
 # ── 실험실에 묶기: 기록·지우기·시점·가로축·발견·마우스 ──
 func _lab_checks(t) -> void:
@@ -111,6 +289,11 @@ func _lab_checks(t) -> void:
 	t.check(panel.graph_count() == 3, "그래프 3개")
 	var x := lab.experiments[0]
 	t.check(panel.series_points(0, 0) == x.rows().size() and x.rows().size() == 1, "묶자마자 지금 실험의 기록을 읽음")
+	# 저장고·밭이 아직 0 이면 띠의 범위 글을 쓰지 않음(예전: 아무것도 없는데 "1" 이 선 끝 옆에, G12)
+	panel.redraw_now()
+	await t.frames(2)
+	t.check(panel.view(GraphPanel.GRAPH_CIV).last_lane_labels.is_empty() and panel.series[0].hi[GraphPanel.C_STORES] == 0.0,
+			"저장고·밭 0 → 띠 범위 글 없음(거짓 \"1\" 없음)")
 	# 바로 다시 그려 두면(_since = 0) 아래 간격 검사가 실제 프레임 시간과 무관하다
 	panel.redraw_now()
 	var redraws := panel.redraw_count
@@ -134,6 +317,21 @@ func _lab_checks(t) -> void:
 	t.check(panel.cursor_tick == 200, "cursor_tick_requested → 시점 표시")
 	lab.request_cursor(-1)
 	t.check(panel.cursor_tick == -1, "-1 → 시점 표시 지움")
+	# 시점 표시선이 실제로 그 틱 자리에 그려짐(G40 — 예전 검사는 cursor_tick 값만 봄): 세 그래프 모두, -1·범위 밖이면 없음
+	lab.request_cursor(200)
+	await t.frames(2)
+	var cur_ok := true
+	for g in 3:
+		var vg := panel.view(g)
+		cur_ok = cur_ok and vg.last_cursor.size() == 1 and int(vg.last_cursor[0].tick) == 200 and int(vg.last_cursor[0].series) == -1 \
+				and is_equal_approx(float(vg.last_cursor[0].x), roundf(vg.data_to_px(200.0)))
+	t.check(cur_ok, "시점 표시선이 세 그래프 모두 틱 200 자리에 그려짐 (%s)" % str(panel.view(0).last_cursor))
+	lab.request_cursor(99999)
+	await t.frames(2)
+	var off_ok := panel.view(0).last_cursor.is_empty()
+	lab.request_cursor(-1)
+	await t.frames(2)
+	t.check(off_ok and panel.view(0).last_cursor.is_empty() and panel.view(2).last_cursor.is_empty(), "범위 밖 틱·-1 → 시점 표시선 없음")
 
 	# 발견: demo_fast 는 1,636틱에 농사까지
 	lab.step_ticks(DEMO_TICKS - 400)
@@ -152,9 +350,19 @@ func _lab_checks(t) -> void:
 		mk_ok = mk_ok and absf(float(m.x) - want) < 0.01
 	t.check(mk_ok, "기술 단계 그래프의 발견 세로선이 발견 틱 자리(%d개)" % v2.last_markers.size())
 	t.check(v2.last_markers.any(func(m: Dictionary) -> bool: return m.labeled), "발견 이름이 적어도 하나 보임")
+	# 저장고·밭 띠의 범위 글(G12): "0~N" 꼴, 그 띠 상자 안 세로 가운데(아래 띠의 글이 위 띠 선 끝 옆에 붙지 않음)
+	var lane_ok := v2.last_lane_labels.size() >= 1 and s0.hi[GraphPanel.C_STORES] > 0.0
+	for ll in v2.last_lane_labels:
+		var lr: Rect2 = v2._lane_rects[int(ll.lane)]
+		var rc: Rect2 = ll.rect
+		lane_ok = lane_ok and str(ll.text).begins_with("0~") and rc.get_center().y > lr.position.y + 1.0 and rc.get_center().y < lr.end.y - 1.0
+		if int(ll.lane) == 1:
+			lane_ok = lane_ok and rc.position.y > v2._lane_rects[0].end.y + 0.5
+	t.check(lane_ok, "저장고·밭 띠 범위 글 = \"0~N\", 자기 띠 안 (%s)" % str(v2.last_lane_labels.map(func(d: Dictionary) -> String: return str(d.text))))
 
-	# 가로축 바꾸기: 알려진 점(마지막 줄)의 가로 픽셀
+	# 마우스는 마우스 겹만 다시 그림(G23), 마우스 값은 가로 값이 바뀔 때 한 번만 계산(G07)
 	var v0 := panel.view(GraphPanel.GRAPH_POP)
+	await _hover_cost_checks(t, panel, "틱 축")
 	var k := s0.size() - 1
 	var p_tick := v0.point_px(0, k, GraphPanel.C_POP)
 	var b := panel.x_bounds()
@@ -178,6 +386,27 @@ func _lab_checks(t) -> void:
 		var mm := s0.marker_for(int(m.stage))
 		gm_ok = gm_ok and absf(float(m.x) - (roundf(v2.data_to_px(float(mm.gen))) + 0.5)) < 0.01 and float(mm.gen) > 0.0
 	t.check(gm_ok, "세대 축의 발견 세로선 = 연대기의 발견 평균 세대 자리")
+	# 세대 축의 시점 표시 = 그 사건의 평균 세대(G06): 발견 틱이면 발견 세로선과 같은 자리, 다른 사건이면 그 연대기 줄의 평균 세대
+	# (예전: 가장 가까운 기록 줄의 세대 — 발견 세로선과 어긋남)
+	var mk_store := s0.marker_for(SimWorld.STAGE_STORE)
+	lab.request_cursor(int(mk_store.tick))
+	await t.frames(2)
+	var lc := v2.last_cursor
+	t.check(lc.size() == 1 and is_equal_approx(float(lc[0].data_x), float(mk_store.gen))
+			and is_equal_approx(float(lc[0].x) + 0.5, float(v2.last_markers.filter(func(m: Dictionary) -> bool: return int(m.stage) == SimWorld.STAGE_STORE)[0].x)),
+			"세대 축 시점 표시(저장 발견 틱) = 발견 세로선 자리 %s" % str(lc))
+	var ev := {}
+	for e: Dictionary in w.chronicle:
+		if str(e.kind) != "discovery" and str(e.kind) != "extinction" and s0.markers.all(func(m: Dictionary) -> bool: return float(m.tick) != float(e.tick)) \
+				and int(e.tick) > int(s0.tick[1]):
+			ev = e
+			break
+	lab.request_cursor(int(ev.get("tick", -1)))
+	await t.frames(2)
+	t.check(not ev.is_empty() and v2.last_cursor.size() == 1 and is_equal_approx(float(v2.last_cursor[0].data_x), float(ev.mean_gen)),
+			"세대 축 시점 표시(%s, 틱 %s) = 그 연대기 사건의 평균 세대 %s" % [str(ev.get("kind")), str(ev.get("tick")), str(ev.get("mean_gen"))])
+	lab.request_cursor(-1)
+	await _hover_cost_checks(t, panel, "세대 축")
 	# 세대 축의 가장 가까운 줄 = 차이가 가장 작은 줄
 	var gx := s0.gen_x[k / 2] + 0.03
 	var best := 0
@@ -215,6 +444,18 @@ func _lab_checks(t) -> void:
 	for l in v0.last_lines:
 		cols0.append(int(l.col))
 	t.check(cols0.has(GraphPanel.C_BIRTHS) and cols0.has(GraphPanel.C_DEATHS) and cols0.has(GraphPanel.C_POP), "출생·사망 선을 켬")
+	var thin_ok := true
+	for l in v0.last_lines:
+		if int(l.col) == GraphPanel.C_BIRTHS or int(l.col) == GraphPanel.C_DEATHS:
+			thin_ok = thin_ok and is_equal_approx(float(l.width), UiConfig.num("graph.thin_width"))
+	t.check(thin_ok, "출생·사망 선 굵기 = graph.thin_width")
+	# 출생·사망 단위가 그래프에 보임(G20): 값 읽기 머리 "· 출생·사망 20틱당", 위쪽 띠 견본(단위는 들어갈 폭이면 — 넓은 그래프는 _synthetic_checks)
+	v0.hover_at(Vector2(v0.data_to_px(s0.tick[row]), v0.plot.get_center().y))
+	var unit := panel.flow_unit()
+	var head0: String = str(v0.readout_lines()[0].text) if not v0.readout_lines().is_empty() else ""
+	t.check(v0.last_flow_key.contains("출생") and v0.last_flow_key.contains("사망") and head0.ends_with("출생·사망 %s" % unit),
+			"출생·사망 단위: 견본 \"%s\" · 값 읽기 \"%s\"" % [v0.last_flow_key, v0.readout_text()])
+	panel.clear_hover()
 	t.check(v0.y_range().y >= s0.hi[GraphPanel.C_BIRTHS] and v0.y_range().x == 0.0, "개체 수 세로축은 0 부터, 출생 최댓값 포함")
 	t.check(v1.last_lines.size() == 1 and int(v1.last_lines[0].col) == GraphPanel.C_SENSE, "평균 특성 = 고른 열(감각)")
 	var sense := s0.cols[GraphPanel.C_SENSE][0]
@@ -234,6 +475,49 @@ func _lab_checks(t) -> void:
 	t.check(panel.series.size() == 1 and panel.series_points(0, 0) == 1 and panel.series[0].markers.is_empty(), "새 실험 → 지우고 새 기록 1줄")
 	t.check(panel.legend_texts() == PackedStringArray([lab.experiments[0].display_name()]), "범례 = 실험 이름")
 	lab.queue_free()
+	await t.frames(1)
+
+
+## 마우스가 움직일 때: 선·눈금 그래프(GraphView)는 다시 그리지 않고 마우스 겹만(G23), 마우스 값 계산은 한 번(G07 —
+## 예전엔 그리기마다 세 그래프 + 값 읽기가 각자 4번, 세대 축은 매번 모든 줄을 훑음), 세로로만·같은 줄 안이면 아무것도 안 그림.
+func _hover_cost_checks(t, panel: GraphPanel, what: String) -> void:
+	panel.redraw_now()
+	await t.frames(2)
+	var v0 := panel.view(GraphPanel.GRAPH_POP)
+	var s0 := panel.series[0]
+	var draws: Array[int] = []
+	var hovers: Array[int] = []
+	for g in 3:
+		draws.append(panel.view(g).draw_count)
+		hovers.append(panel.view(g).hover_draw_count())
+	var comp0 := panel.hover_computes
+	var px := v0.data_to_px(panel.row_x(0, s0.size() * 2 / 3))
+	var r := panel.nearest_row(0, v0.px_to_data(px))
+	# 같은 줄로 남는 작은 가로 움직임
+	var nudge := 0.0
+	for dx: float in [0.2, -0.2, 0.05, -0.05]:
+		if panel.nearest_row(0, v0.px_to_data(px + dx)) == r:
+			nudge = dx
+			break
+	v0.hover_at(Vector2(px, v0.plot.get_center().y))
+	await t.frames(2)
+	var same_draw := true
+	var hover_once := true
+	for g in 3:
+		same_draw = same_draw and panel.view(g).draw_count == draws[g]
+		hover_once = hover_once and panel.view(g).hover_draw_count() == hovers[g] + 1
+	t.check(same_draw and hover_once and panel.hover_rows()[0] == r and v0.readout_text() != "",
+			"%s 마우스: 선 그래프는 그대로, 세 그래프의 마우스 겹만 한 번씩 다시 그림" % what)
+	t.check(panel.hover_computes - comp0 == 1, "%s 마우스 값 계산 한 번(세 그래프·값 읽기가 나눠 씀): %d번" % [what, panel.hover_computes - comp0])
+	# 세로로만, 그리고 같은 줄 안(0.2px)에서 움직이면 다시 그리지 않음
+	v0.hover_at(Vector2(px, v0.plot.position.y + 2.0))
+	v0.hover_at(Vector2(px + nudge, v0.plot.end.y - 2.0))
+	await t.frames(2)
+	var still := true
+	for g in 3:
+		still = still and panel.view(g).draw_count == draws[g] and panel.view(g).hover_draw_count() == hovers[g] + 1
+	t.check(still and panel.hover_rows()[0] == r, "%s 세로로만·같은 줄 안에서 움직이면 다시 그리지 않음" % what)
+	panel.clear_hover()
 	await t.frames(1)
 
 
@@ -286,9 +570,17 @@ func _compare_checks(t) -> void:
 	v.hover_at(Vector2(v.data_to_px(200.0), v.plot.get_center().y))
 	var lines := v.readout_lines()
 	t.check(lines.size() == 3 and str(lines[1].text).begins_with("A ") and str(lines[2].text).begins_with("B "), "값 읽기에 A·B 함께: %s" % v.readout_text())
+	# 시점 표시(G40: 예전 검사는 cursor_tick 값과 draw_count > 0 만 봐서 선을 안 그려도 통과): 틱 축은 세로선 하나가 그 틱 자리에
 	panel.set_cursor_tick(300)
 	await t.frames(2)
-	t.check(panel.cursor_tick == 300 and v.draw_count > 0, "시점 표시 그림")
+	var cur_ok := true
+	for g in 3:
+		var vg := panel.view(g)
+		cur_ok = cur_ok and vg.last_cursor.size() == 1 and is_equal_approx(float(vg.last_cursor[0].x), roundf(vg.data_to_px(300.0)))
+	t.check(panel.cursor_tick == 300 and cur_ok, "비교 틱 축 시점 표시: 세 그래프에 세로선 하나씩, 틱 300 자리 %s" % str(v.last_cursor))
+	panel.set_cursor_tick(-1)
+	await t.frames(2)
+	t.check(v.last_cursor.is_empty(), "시점 표시 -1 → 세로선 없음")
 	panel.load_experiments([])
 	await t.frames(2)
 	t.check(panel.series.is_empty() and panel.series_points(0, 0) == 0 and v.last_lines.is_empty() and v.draw_count > 0, "실험 없음: 빈 그래프(오류 없음)")
@@ -297,6 +589,239 @@ func _compare_checks(t) -> void:
 	await t.frames(2)
 	t.check(v.last_lines.size() == 1 and int(v.last_lines[0].points) == 1, "줄 하나: 점 하나로 그림")
 	t.check(panel.x_bounds().y - panel.x_bounds().x >= UiConfig.num("graph.x_min_span_ticks"), "줄 하나여도 가로축 최소 폭")
+	host.queue_free()
+	await t.frames(1)
+
+
+## 패널을 따로 띄울 자리(테마 + 크기)
+func _host(t, sz: Vector2) -> Control:
+	var host := Control.new()
+	host.theme = UiTheme.build()
+	host.size = sz
+	t.root.add_child(host)
+	return host
+
+
+# ── 세대 축 비교: A 는 일찍 멸종(자원 없음), B 는 시연용 — 마우스·시점 표시가 A 의 줄에 묶이지 않음(G05·G06) ──
+func _gen_compare_checks(t) -> void:
+	var a: Experiment = Experiment.create("no_resources", {}, 1).experiment
+	var b: Experiment = Experiment.create("demo_fast", {}, 1).experiment
+	a.tag = "A"
+	b.tag = "B"
+	a.step_n(DEMO_TICKS)
+	b.step_n(DEMO_TICKS)
+	var host := _host(t, Vector2(1200, 240))
+	var panel := GraphPanel.new()
+	host.add_child(panel)
+	panel.size = host.size
+	panel.load_experiments([a, b])
+	panel.set_x_axis(GraphPanel.X_GEN)
+	await t.frames(2)
+	var sa := panel.series[0]
+	var sb := panel.series[1]
+	t.check(sa.extinct_row >= 0 and sb.gen_hi > sa.gen_hi + 2.0, "준비: A 멸종(최고 %.2f세대), B 는 %.2f세대까지" % [sa.gen_hi, sb.gen_hi])
+	# 마우스: A 가 이르지 못한 세대(B 의 범위 70% 자리)
+	var v := panel.view(GraphPanel.GRAPH_POP)
+	v.layout_now()
+	var gx := sb.gen_lo + (sb.gen_hi - sb.gen_lo) * 0.7
+	var mouse := v.data_to_px(gx)
+	v.hover_at(Vector2(mouse, v.plot.get_center().y))
+	await t.frames(2)
+	var st := panel.hover_state()
+	var lines := v.readout_lines()
+	t.check(st.anchor == 1 and absf(v.last_hover_px - mouse) <= UiConfig.num("graph.hover_gap_px") + 1.0,
+			"세대 축 비교 마우스: 세로선이 마우스 자리(%.1f ↔ %.1f — A 의 마지막 줄로 튀지 않음)" % [v.last_hover_px, mouse])
+	t.check(lines.size() == 3 and str(lines[0].text) == "평균 %s세대" % GraphView.fmt_num(st.anchor_x, 1) and absf(st.anchor_x - gx) < 0.5,
+			"머리 = 마우스 자리의 세대: %s" % v.readout_text())
+	t.check(lines.size() == 3 and str(lines[1].text).begins_with("A ") and str(lines[1].text).contains(GraphView.EXTINCT_TEXT)
+			and not str(lines[1].text).contains("개체") and not bool(lines[1].valid) and st.valid[0] == 0,
+			"A 줄 = 이 세대 기록 없음(멸종 틱·세대) — 멸종 전 값을 이 세대 값처럼 보이지 않음: %s" % (str(lines[1].text) if lines.size() > 1 else ""))
+	var rb := st.rows[1]
+	t.check(lines.size() == 3 and str(lines[2].text).contains("(%s세대 · 틱 %s)" % [GraphView.fmt_num(sb.gen_x[rb], 1), GraphView.fmt_num(sb.tick[rb], 0)]),
+			"B 줄 = 자기 줄의 세대·틱: %s" % (str(lines[2].text) if lines.size() > 2 else ""))
+	panel.clear_hover()
+	# 시점 표시: B 의 농사 발견 틱 → B 의 세로선 = B 의 발견 세로선 자리(예전: A 의 그 틱 세대에), A 는 그 틱의 A 세대(멸종한 세대)
+	var civ := panel.view(GraphPanel.GRAPH_CIV)
+	var mk := sb.marker_for(SimWorld.STAGE_FARM)
+	panel.set_cursor_tick(int(mk.tick))
+	await t.frames(2)
+	var cb := civ.last_cursor.filter(func(c: Dictionary) -> bool: return int(c.series) == 1)
+	var ca := civ.last_cursor.filter(func(c: Dictionary) -> bool: return int(c.series) == 0)
+	var mb := civ.last_markers.filter(func(m: Dictionary) -> bool: return int(m.series) == 1 and int(m.stage) == SimWorld.STAGE_FARM)
+	t.check(cb.size() == 1 and mb.size() == 1 and is_equal_approx(float(cb[0].x) + 0.5, float(mb[0].x)) and str(cb[0].text).begins_with("B · "),
+			"세대 축 비교 시점 표시: B 의 농사 발견 틱 → B 세로선이 B 의 발견 세로선 자리 %s / %s" % [str(cb), str(mb)])
+	t.check(ca.size() == 1 and is_equal_approx(float(ca[0].data_x), sa.extinct_gen) and str(ca[0].text).begins_with("A · "),
+			"A 세로선은 A 가 그 틱에 있던 세대(멸종한 세대 %.2f)" % sa.extinct_gen)
+	host.queue_free()
+	await t.frames(1)
+
+
+# ── 비교 멸종 표시: 어느 실험이 멸종했는지("A 멸종"·"B 멸종", B 는 점선), 같은 자리여도 이름이 겹치지 않음(G47) ──
+func _extinct_compare_checks(t) -> void:
+	var xs: Array[Experiment] = []
+	for k in 2:
+		var x: Experiment = Experiment.create("no_resources", {}, 1).experiment
+		x.tag = "A" if k == 0 else "B"
+		var guard := 0
+		while x.world.extinct_tick < 0 and guard < 3000:
+			x.step()
+			guard += 1
+		x.step_n(int(x.world.cfg.record.every))
+		xs.append(x)
+	var host := _host(t, Vector2(1200, 240))
+	var panel := GraphPanel.new()
+	host.add_child(panel)
+	panel.size = host.size
+	panel.load_experiments(xs)
+	await t.frames(2)
+	var v := panel.view(GraphPanel.GRAPH_POP)
+	var le := v.last_extinct
+	t.check(le.size() == 2 and str(le[0].text) == "A " + GraphView.EXTINCT_TEXT and str(le[1].text) == "B " + GraphView.EXTINCT_TEXT
+			and not bool(le[0].dashed) and bool(le[1].dashed), "비교 멸종 표시: \"A 멸종\"(실선)·\"B 멸종\"(점선) %s" % str(le.map(func(d: Dictionary) -> String: return str(d.text))))
+	var apart := false
+	if le.size() == 2:
+		var r0: Rect2 = le[0].rect
+		var r1: Rect2 = le[1].rect
+		apart = absf(float(le[0].x) - float(le[1].x)) < 0.01 and not r0.intersects(r1)
+	t.check(apart, "같은 자리의 두 멸종 이름이 겹치지 않음(한 줄 아래로)")
+	host.queue_free()
+	await t.frames(1)
+
+
+# ── 가장 좁은 폭(1280 창 이하): 그래프 제목이 잘리지 않음(G31), 범례는 예설정 이름만 줄이고 씨앗은 남김(G33) ──
+func _narrow_checks(t) -> void:
+	var a: Experiment = Experiment.create("demo_fast", {}, 1).experiment
+	var b: Experiment = Experiment.create("demo_fast", {}, 2).experiment
+	a.tag = "A"
+	b.tag = "B"
+	var host := _host(t, Vector2(1200, UiConfig.num("lab.bottom_panel_height")))
+	var panel := GraphPanel.new()
+	host.add_child(panel)
+	panel.load_experiments([a, b])
+	panel.set_show_flows(true)
+	var min_w := panel.get_combined_minimum_size().x
+	host.size = Vector2(min_w, host.size.y)
+	panel.size = host.size
+	await t.frames(3)
+	var max_min := 3.0 * (UiConfig.num("graph.min_width") + 2.0 * UiConfig.num("graph.card_pad_h")) + 2.0 * UiConfig.num("graph.card_gap")
+	t.check(min_w <= max_min + 0.5, "제목 줄(+ 출생·사망 켬)이 패널 최소 폭을 넓히지 않음: %.0f ≤ %.0f" % [min_w, max_min])
+	var titles_ok := true
+	var widths := PackedStringArray()
+	for g in 3:
+		var title := panel.get_node("Body/Charts/Card%d" % g).find_child("Title", true, false) as Label
+		var nat := title.get_theme_font("font").get_string_size(title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, title.get_theme_font_size("font_size")).x
+		titles_ok = titles_ok and title.is_visible_in_tree() and title.size.x + 0.5 >= nat
+		widths.append("%s %.0f/%.0f" % [title.text, title.size.x, nat])
+	t.check(titles_ok, "가장 좁은 폭 + 출생·사망 켬: 그래프 제목이 잘리지 않음 (%s)" % ", ".join(widths))
+	var shown := panel.legend_shown()
+	t.check(shown.size() == 2 and shown[0].begins_with("A · ") and shown[0].ends_with("씨앗 1") and shown[1].begins_with("B · ") and shown[1].ends_with("씨앗 2")
+			and (shown[0].contains(GraphPanel.ELLIPSIS) or shown[1].contains(GraphPanel.ELLIPSIS)),
+			"좁은 범례: 예설정 이름만 줄이고 이름표·씨앗은 남김 %s" % str(shown))
+	# 좁은 그래프의 값 읽기: 비교 세대 축 줄("… (0.0세대 · 틱 0)")을 그래프 폭에 맞게 접음(글은 그대로)
+	panel.set_x_axis(GraphPanel.X_GEN)
+	var civ := panel.view(GraphPanel.GRAPH_CIV)
+	civ.layout_now()
+	civ.hover_at(Vector2(civ.data_to_px(0.0) + 1.0, civ.plot.get_center().y))
+	var raw := civ.readout_lines()
+	var key_space := UiConfig.num("graph.legend_key_px") + UiConfig.num("graph.gutter_gap")
+	var room := civ.size.x - UiConfig.num("graph.tip_pad") * 2.0 - 2.0
+	var wrapped := civ.wrap_readout(raw, room, key_space)
+	var fit_ok := wrapped.size() > raw.size()
+	var font := UiTheme.regular_font()
+	var fs := UiConfig.integer("graph.axis_font_size")
+	for l in wrapped:
+		var lw := font.get_string_size(str(l.text), HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x + (key_space if int(l.series) >= 0 else 0.0)
+		fit_ok = fit_ok and lw <= room + 0.5
+	var joined := ""
+	for l in wrapped:
+		joined += (" " if not bool(l.first) else ("\n" if joined != "" else "")) + str(l.text)
+	var orig := "\n".join(PackedStringArray(raw.map(func(d: Dictionary) -> String: return str(d.text))))
+	t.check(fit_ok and joined == orig, "좁은 그래프 값 읽기: %d줄 → %d줄로 접어 폭 %.0f 안, 글은 그대로" % [raw.size(), wrapped.size(), room])
+	host.queue_free()
+	await t.frames(1)
+
+
+# ── 합성 기록 비교: 기록 간격이 다른 A(20)·B(100)의 출생·사망과 B 의 자기 틱(G20), B 의 점선이 모두 무늬 틈이면 그리지 않음(G24) ──
+func _synthetic_checks(t) -> void:
+	var sa := _flow_series(20, 4, 3, 101)
+	var sb := _flow_series(100, 20, 15, 21)
+	sa.tag = "A"
+	sb.tag = "B"
+	sa.name = "A · 합성 · 씨앗 1"
+	sb.name = "B · 합성 · 씨앗 2"
+	var host := _host(t, Vector2(1200, 240))
+	var panel := GraphPanel.new()
+	host.add_child(panel)
+	panel.size = host.size
+	var both: Array[GraphPanel.Series] = [sa, sb]
+	panel.load_series(both)
+	panel.set_show_flows(true)
+	await t.frames(2)
+	var v := panel.view(GraphPanel.GRAPH_POP)
+	v.layout_now()
+	v.hover_at(Vector2(v.data_to_px(1360.0), v.plot.get_center().y))
+	var lines := v.readout_lines()
+	var txt := v.readout_text()
+	t.check(lines.size() == 3 and str(lines[0].text).begins_with("틱 1,360 · ") and not str(lines[1].text).contains("(틱") and str(lines[2].text).ends_with("(틱 1,400)"),
+			"기록 간격이 다르면 B 줄에 B 의 틱: %s" % txt)
+	t.check(lines.size() == 3 and str(lines[1].text).contains("출생 4 · 사망 3") and str(lines[2].text).contains("출생 4 · 사망 3"),
+			"같은 빠르기(20틱에 4)면 기록 간격 20·100 이 같은 값: %s" % txt)
+	t.check(v.last_flow_key.contains(panel.flow_unit()), "넓은 그래프: 출생·사망 견본에 단위 \"%s\"" % v.last_flow_key)
+	panel.clear_hover()
+	panel.set_show_flows(false)
+	# B 가 무늬 틈 안의 두 줄(틱 T, T+2)뿐: 점선 조각이 모두 비어 그리지 않음(예전: 빈 배열로 draw_multiline → 엔진 ERROR)
+	var civ := panel.view(GraphPanel.GRAPH_CIV)
+	civ.layout_now()
+	var dash := UiConfig.num("graph.dash_px")
+	var period := dash + UiConfig.num("graph.dash_gap_px")
+	var tt := -1
+	for k in range(200, 1800):
+		var p1 := civ.data_to_px(float(k)) - civ.plot.position.x
+		var p2 := civ.data_to_px(float(k + 2)) - civ.plot.position.x
+		if fposmod(p1, period) >= dash + 0.3 and floorf(p1 / period) == floorf(p2 / period) and fposmod(p2, period) <= period - 0.3:
+			tt = k
+			break
+	var sb2 := GraphPanel.Series.new(null)
+	sb2.tag = "B"
+	sb2.name = "B · 짧은 기록 · 씨앗 3"
+	sb2.append({tick = tt, population = 10, mean_gen = 1.0})
+	sb2.append({tick = tt + 2, population = 10, mean_gen = 1.0})
+	var skipped := civ.dash_skipped
+	var pair: Array[GraphPanel.Series] = [sa, sb2]
+	panel.load_series(pair)
+	await t.frames(2)
+	t.check(tt >= 0 and civ.dash_skipped > skipped and civ.last_lines.any(func(l: Dictionary) -> bool: return int(l.series) == 1 and int(l.col) == GraphPanel.C_STAGE),
+			"B 의 점선 조각이 모두 무늬 틈(틱 %d~%d)이면 그리지 않고 건너뜀(%d번)" % [tt, tt + 2, civ.dash_skipped - skipped])
+	panel.queue_free()
+	# 선 굵기는 ui.json 에서(G28 — 예전엔 저장고·밭을 line_width × 0.75 로 코드에): 띠·얇은 선 굵기를 잠시 다른 값으로 만든 패널
+	var gcfg: Dictionary = UiConfig.data()["graph"]
+	var keep_lane: Variant = gcfg["lane_line_width"]
+	var keep_thin: Variant = gcfg["thin_width"]
+	gcfg["lane_line_width"] = 2.75
+	gcfg["thin_width"] = 1.25
+	var p2 := GraphPanel.new()
+	gcfg["lane_line_width"] = keep_lane
+	gcfg["thin_width"] = keep_thin
+	host.add_child(p2)
+	p2.size = host.size
+	var only_a: Array[GraphPanel.Series] = [sa]
+	p2.load_series(only_a)
+	p2.set_show_flows(true)
+	await t.frames(2)
+	var widths: Array[String] = []
+	var w_ok := true
+	for g in [GraphPanel.GRAPH_POP, GraphPanel.GRAPH_CIV]:
+		for l in p2.view(g).last_lines:
+			var c := int(l.col)
+			var want := -1.0
+			if c == GraphPanel.C_STORES or c == GraphPanel.C_FARMS:
+				want = 2.75
+			elif c == GraphPanel.C_BIRTHS or c == GraphPanel.C_DEATHS:
+				want = 1.25
+			if want > 0.0:
+				widths.append("%d:%s" % [c, str(l.width)])
+				w_ok = w_ok and is_equal_approx(float(l.width), want)
+	t.check(w_ok and widths.size() == 4, "선 굵기 = graph.lane_line_width(저장고·밭)·graph.thin_width(출생·사망) %s" % str(widths))
 	host.queue_free()
 	await t.frames(1)
 
@@ -355,6 +880,15 @@ func _long_checks(t) -> void:
 	t.check(extra > 0 and v0.rebuild_count == rebuilt and v0.line_runs(0, GraphPanel.C_POP).used == LONG_ROWS + extra, "범위 안 새 줄 %d개: 다시 묶지 않고 더함" % extra)
 	print("    그래프 그리기(%d줄 × 2, 세 그래프 합): 처음 %d µs · 새 줄만 %d µs" % [LONG_ROWS, full_us, inc_us])
 	t.check(inc_us < DRAW_BOUND_US, "새 줄 뒤 그리기 %d µs < %d µs" % [inc_us, DRAW_BOUND_US])
+	# 세대 축 6,000줄 × 2: 가장 가까운 줄 = 모두 훑기와 같은 답(이분 탐색), 마우스는 겹만·계산 한 번(G07·G23)
+	panel.set_x_axis(GraphPanel.X_GEN)
+	var s1 := panel.series[1]
+	var near_ok := true
+	for q in 40:
+		var gq := s1.gen_lo + (s1.gen_hi - s1.gen_lo) * float(q) / 39.0 + 0.0037
+		near_ok = near_ok and panel.nearest_row(1, gq) == _brute_nearest(s1.gen_x, gq)
+	t.check(near_ok, "세대 축 %d줄: 가장 가까운 줄 = 모두 훑기(40곳)" % s1.size())
+	await _hover_cost_checks(t, panel, "세대 축 %d줄 × 2" % LONG_ROWS)
 	host.queue_free()
 	await t.frames(1)
 
