@@ -15,7 +15,8 @@
 		"day_ticks": 60,
 		"daylight_fraction": 0.6,
 		"twilight_ticks": 6,
-		"season_days": 2
+		"season_days": 2,
+		"night_light_threshold": 0.5
 	},
 	"seasons": {
 		"growth": [

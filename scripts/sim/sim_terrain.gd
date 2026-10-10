@@ -14,9 +14,21 @@ const TWO_POW_32 := 4294967296.0
 ## 잡음 층마다 씨앗을 다르게 섞는 값.
 const SALT_DETAIL := 1
 const SALT_ROCK := 2
+## 씨앗의 위 32비트를 꺼내는 자리 이동.
+const SEED_HI_SHIFT := 32
 ## smoothstep t*t*(3 - 2t) 의 계수.
 const SMOOTH_A := 3.0
 const SMOOTH_B := 2.0
+
+
+## 지형 씨앗: 64비트 씨앗의 위 32비트를 섞어 아래 32비트에 접는다(2^32 차이 나는 씨앗도 다른 지도).
+## 위 32비트가 0 이면(씨앗 0 ~ 2^32 − 1) 씨앗 그대로라 지금까지의 지도·역사 해시가 같다. 섞기는 홀수 곱셈과
+## 오른쪽 xorshift 라 위 32비트마다 다른 값이 된다(아래 32비트가 같은 두 씨앗은 위 32비트가 다르면 지도도 다름).
+static func terrain_seed(seed_value: int) -> int:
+	var hi := (seed_value >> SEED_HI_SHIFT) & MASK32
+	var m := (hi * HASH_MIX) & MASK32
+	m = m ^ (m >> HASH_SHIFT_B)
+	return (seed_value & MASK32) ^ m
 
 
 static func hash01(ix: int, iy: int, s: int) -> float:
@@ -57,6 +69,7 @@ static func generate(cfg: Dictionary, seed_value: int) -> Dictionary:
 	var rcell := int(m.rock_noise_cell)
 	var rock := float(m.rock_level)
 	var floor_f := float(m.fertility_floor)
+	var ts := terrain_seed(seed_value)
 	var tiles := PackedByteArray()
 	tiles.resize(w * h)
 	var fert := PackedFloat64Array()
@@ -64,12 +77,12 @@ static func generate(cfg: Dictionary, seed_value: int) -> Dictionary:
 	for y in h:
 		for x in w:
 			var c := y * w + x
-			var raw := (1.0 - dw) * value_noise(x, y, cell, seed_value) + dw * value_noise(x, y, dcell, seed_value + SALT_DETAIL)
+			var raw := (1.0 - dw) * value_noise(x, y, cell, ts) + dw * value_noise(x, y, dcell, ts + SALT_DETAIL)
 			if raw < water:
 				tiles[c] = SimGrid.TILE_WATER
 				fert[c] = 0.0
 				continue
-			if value_noise(x, y, rcell, seed_value + SALT_ROCK) > rock:
+			if value_noise(x, y, rcell, ts + SALT_ROCK) > rock:
 				tiles[c] = SimGrid.TILE_ROCK
 				fert[c] = 0.0
 				continue
