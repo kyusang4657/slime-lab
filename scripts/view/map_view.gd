@@ -52,10 +52,6 @@ const SIDE_EPS := 0.001
 const VOLUME_EXP := -0.5
 ## 고리 메시 바깥 반지름(SlimeGeo.ring_mesh, 배율 1). 화면 최소 크기를 반지름으로 바꿀 때 쓴다.
 const RING_OUTER := 1.0
-## 겹침 둘레 반지름의 상한(칸) = stack_max() 를 클래스를 읽을 때 한 번 계산해 둔 값. 예전 상수 이름을 쓰는 검사
-## (tests/view/lab_checks.gd)를 위해 남긴다 — 새 코드는 stack_max() 를 쓴다.
-static var STACK_MAX := 0.0
-
 var world: SimWorld
 var follow_selected := false
 
@@ -299,10 +295,6 @@ var _dragged := false
 var _press_pos := Vector2.ZERO
 ## 묶은 뒤 사용자가(또는 focus_on·따라가기가) 카메라를 움직였는지. 아니면 뷰포트 크기가 바뀔 때 다시 맞춘다.
 var _camera_touched := false
-
-
-static func _static_init() -> void:
-	STACK_MAX = stack_max()
 
 
 func _init() -> void:
@@ -1530,6 +1522,7 @@ func _update_slimes(alpha: float) -> void:
 	var carry_col := _drop_col
 	# 밤에는 슬라임 색을 조금 밝혀 어둠 속에서도 계통 색이 읽히게
 	var gain := lerpf(_night_boost, 1.0, clampf(world.light, 0.0, 1.0))
+	var stage := world.stage
 	_sel_found = false
 	for i in n:
 		var id := ids[i]
@@ -1565,8 +1558,10 @@ func _update_slimes(alpha: float) -> void:
 			hy = _hop * s * hop_s
 			stretch = 1.0 + _squash * sq_s
 		else:
+			# 먹기·줍기·심기 눌림. 아직 열리지 않은 줍기·심기(발견 전의 효과 없는 시도)는 정보 창처럼 "하는 중" 으로 보이지 않게
+			# 숨쉬기만(InfoPanel.is_attempt — 검토 I86 의 지도 몫)
 			var a := act[i]
-			if a == SimBrain.ACT_EAT or a == SimBrain.ACT_GATHER or a == SimBrain.ACT_PLANT:
+			if a == SimBrain.ACT_EAT or ((a == SimBrain.ACT_GATHER or a == SimBrain.ACT_PLANT) and not InfoPanel.is_attempt(a, stage)):
 				stretch = 1.0 - _bob * bob_s
 			else:
 				stretch = 1.0 + _breath_amp * sin(_anim_time * _breath_w + TAU * _hash01(id, SALT_BREATH))

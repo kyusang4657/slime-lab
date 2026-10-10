@@ -2134,7 +2134,7 @@ func test_light_curve() -> void:
 	var labels: Dictionary = SimConfig.load_json("res://config/sim-labels.json")
 	var hf := str(labels["time.daylight_fraction"].help)
 	var ht := str(labels["time.twilight_ticks"].help)
-	check(not hf.contains("빛 1)") and hf.contains("빛이 0 보다 큰 몫") and ht.contains("하루 빛 합 = 낮 틱 − 이 값"),
+	check(not hf.contains("빛 1)") and hf.contains("빛이 0 보다 큰 몫") and ht.contains("하루 빛 합 = 낮 틱 - 이 값"),
 			"이름표: 낮 비율 = 빛이 0 보다 큰 몫, twilight 는 하루 빛 합을 줄임: %s / %s" % [hf, ht])
 	done()
 

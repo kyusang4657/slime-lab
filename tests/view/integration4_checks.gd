@@ -6,7 +6,7 @@ extends RefCounted
 ## ⑤ 스냅숏 저장 → 열기 = 같은 상태·해시(비교 모드의 -A/-B 파일도) ⑥ 소리 상자 ↔ LabSound.enabled ⑦ 한국어 낱말 단위 줄바꿈.
 ## 창은 최소 창(lab.min_width × lab.min_height — 검토 J29 뒤 1280×640).
 
-const MIN_CHECKS := 60
+const MIN_CHECKS := 61
 ## "세계 그대로" 비교(스냅숏 모든 절 — 틱을 진행하지 않은 채 역사 해시를 견주면 아무것도 증명하지 못함, 검토 I89)
 const WorldCompare := preload("res://tests/view/world_compare.gd")
 const DT := 1.0 / 60.0
@@ -185,6 +185,13 @@ func _chronicle_click(t, lab: LabMain) -> void:
 	var actor := int(it.actor)
 	t.check(lab.selected_id() == actor and lab.selected_index() == 1, "누르면 B 의 행위자 #%d 선택(지금 #%d · 실험 %d)" % [actor, lab.selected_id(), lab.selected_index()])
 	t.check(lab.graph_panel.cursor_tick == int(it.tick), "그래프 시점 표시 = 그 줄의 틱 %d(지금 %d)" % [int(it.tick), lab.graph_panel.cursor_tick])
+	# 값만이 아니라 세 그래프가 실제로 그 틱에 시점 표시선을 그림(GraphView.last_cursor — 검토 I15)
+	await t.frames(2)
+	var drawn := true
+	for g in 3:
+		var cur: Array = lab.graph_panel.view(g).last_cursor
+		drawn = drawn and cur.any(func(c: Dictionary) -> bool: return int(c.tick) == int(it.tick))
+	t.check(drawn, "세 그래프 모두 틱 %d 에 시점 표시선을 그림(%s)" % [int(it.tick), str(lab.graph_panel.view(0).last_cursor)])
 	t.check(lab.info_panel.current_id() == actor and lab.info_panel.current_tag() == "B", "정보 창 = #%d, 머리 이름표 B" % actor)
 	var alive := lab.experiment(1).world.index_of_id(actor) >= 0
 	var ring_b: Dictionary = lab.map_view_of(1).ring_info()

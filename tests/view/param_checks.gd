@@ -12,15 +12,17 @@ extends RefCounted
 ## 두뇌 열지도 범례 끝 글(weight_clamp 를 반올림하지 않음 — I44).
 ## 비교 시작 인자는 start_compare·stop_compare 를 가로채는 가짜 실험실(FakeLab)로도 확인한다(패널 단위 — 종단은 integration4_checks).
 
-const MIN_CHECKS := 254
+const MIN_CHECKS := 256
 ## 임시 폴더는 프로세스마다 따로(저장소 사본 여럿에서 함께 돌려도 서로 지우지 않게 — I37, run_tests.tmp_dir 와 같은 규칙)
 var TMP_DIR := "user://test_param-%d" % OS.get_process_id()
 var SNAP_PATH := TMP_DIR.path_join("snap.json")
 const MAIN_KEYS: Array[String] = ["mutation.rate", "resources.scale", "population.initial"]
-## 0 으로 나누는 설정 키(I01). SimConfig.validate 가 막으면(검토 고침 g1a — sim-labels 범위가 "(검사)") 고급 설정에 0 을
+## 0 으로 나누는 설정 키(I01). SimConfig.validate 가 모두 막으므로(검토 고침 g1a — sim-labels 범위가 "(검사)") 고급 설정에 0 을
 ## 적으면 그 줄 아래 오류여야 하고, 패널의 오류는 언제나 SimConfig.build 의 오류와 같아야 한다.
 const ZERO_DIVISOR_KEYS: Array[String] = ["map.noise_cell", "map.noise_detail_cell", "map.rock_noise_cell", "carry.max",
 		"plants.max_food", "sense.crowd_norm", "store.capacity", "body.energy_per_size", "brain.weight_clamp"]
+## "(검사)" 범위 수 키의 최소 수(검토 고침 g1a 뒤 모든 수 키의 범위가 검사 — 병합 때 68개, 예전 23개)
+const CHECKED_RANGE_MIN := 60
 const INT64_MAX := 9223372036854775807
 const INT64_MIN := -9223372036854775807 - 1
 ## 2^53 + 1: 실수(float64)로는 정확히 못 적는 첫 정수(예전 SpinBox 칸은 …992 로 보였음 — J18)
@@ -29,9 +31,9 @@ const SEED_2P53_PLUS1 := 9007199254740993
 const FONT_FILES: Array[String] = ["res://assets/fonts/NanumGothic-Regular.ttf", "res://assets/fonts/NanumGothic-Bold.ttf"]
 const FONT_SCAN_DIRS: Array[String] = ["res://scripts/ui", "res://scripts/view", "res://scripts/sim", "res://scenes", "res://config"]
 const FONT_SCAN_EXT: Array[String] = ["gd", "tscn", "json"]
-## 이 검사 묶음(g4) 밖에서 고치기로 넘긴 파일(handoff: config/sim-labels.json 말풍선의 '−'(U+2212) → '-'). 지금은 건너뛰되,
-## 그 파일에서 없는 글자가 사라지면 이 목록에서 지우라고 실패한다(목록이 남아 검사가 줄어든 채 잊히지 않게).
-const FONT_PENDING: Array[String] = ["res://config/sim-labels.json"]
+## 다른 묶음이 고치기로 한 파일을 잠시 건너뛰는 목록(지금은 없음 — config/sim-labels.json 말풍선의 '−'(U+2212)는 병합 때
+## '-' 로 고침). 목록의 파일에서 없는 글자가 사라지면 목록에서 지우라고 실패한다(목록이 남아 검사가 줄어든 채 잊히지 않게).
+const FONT_PENDING: Array[String] = []
 
 
 ## start_compare·stop_compare 호출을 기록만 하는 실험실(나머지는 진짜 LabMain).
@@ -223,14 +225,14 @@ func _layout(t, lab: LabMain, p: ParamPanel) -> void:
 		t.check(sc.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED, "[%s] 가로 스크롤 없음" % state)
 		if state != "보통":
 			t.check(sc.get_v_scroll_bar().max_value > sc.size.y + 1.0, "[%s] 세로로 넘치면 스크롤(내용 %.0f > %.0f)" % [state, sc.get_v_scroll_bar().max_value, sc.size.y])
-		# 1280×720·자리 펼침: 주요 단추(새 실험/나란히 시작)·되돌리기·비교 모드 단추가 스크롤하지 않아도 화면 안
+		# 최소 창(1280×640)·자리 펼침: 주요 단추(새 실험/나란히 시작)·되돌리기·비교 모드 단추가 스크롤하지 않아도 화면 안
 		# (예전에는 비교 모드를 켜면 B 칸이 끼어 나란히 시작·비교 끄기 단추가 스크롤 아래로 밀려 안 보였음)
 		var main_btn := p.control("apply" if state == "보통" else "start_compare") as Control
 		t.check(_on_screen(t, main_btn) and _on_screen(t, p.control("compare") as Control) and _on_screen(t, p.control("revert") as Control),
 				"[%s] 주요 단추·비교 모드 단추가 화면 안(스크롤 없이) %s" % [state, str(main_btn.get_global_rect())])
 		var nt := p.control("next_title") as Label
-		t.check(nt.is_visible_in_tree() and nt.text == (ParamPanel.TEXT_NEXT if state == "보통" else ParamPanel.TEXT_NEXT_COMPARE),
-				"[%s] 다음 실험 제목 보임: %s" % [state, nt.text])
+		t.check(nt.is_visible_in_tree() and UiTheme.plain_text(nt.text) == (ParamPanel.TEXT_NEXT if state == "보통" else ParamPanel.TEXT_NEXT_COMPARE),
+				"[%s] 다음 실험 제목 보임: %s" % [state, UiTheme.plain_text(nt.text)])
 	var card_b := p.control("card:1") as Control
 	t.check(card_b.visible and (p.control("start_compare") as Control).visible and not (p.control("apply") as Control).visible, "비교 모드: B 칸·나란히 시작 보임, 새 실험 숨음")
 	t.check((p.control("card_side:1") as Label).text == ParamPanel.TEXT_COL_NEXT, "비교 전 칸 머리 = \"다음 조건\"(지도는 아직 하나)")
@@ -295,6 +297,10 @@ func _invalid(t, lab: LabMain, p: ParamPanel) -> void:
 	t.check(err.contains("map.width"), "범위 밖 값 → 오류: " + err)
 	t.check(p.row_error("map.width", 0, true).contains("map.width"), "오류가 그 칸 아래에: " + p.row_error("map.width", 0, true))
 	t.check(p.error_text() != "" and p.status_text().contains("오류"), "패널 오류 글·상태 줄")
+	# 자동 줄바꿈 글(상태 줄·줄 아래·바닥 오류·다음 실험 제목·고급 설정 안내)은 낱말 단위로 접음(UiTheme.keep_words — 검토 I49:
+	# 예전엔 정보 창만 맞춰, 패널 글은 좁은 폭에서 "범/위" 처럼 한글 낱말 가운데서 끊겼음)
+	var split := _split_words(p)
+	t.check(split.is_empty() and p.row_error("map.width", 0, true) != "", "자동 줄바꿈 글은 낱말 단위(keep_words) — 잇개 없는 글: %s" % str(split))
 	t.check((p.control("apply") as Button).disabled, "오류가 있으면 새 실험 단추를 못 씀")
 	var toasts0 := lab.visible_toasts().size()
 	var r := p.apply()
@@ -321,6 +327,17 @@ func _invalid(t, lab: LabMain, p: ParamPanel) -> void:
 	t.check(e2.contains("population.cap") and p.row_error("population.initial").contains("population.initial"), "초기 개체 수 > 상한 → 초기 개체 수 칸 아래 오류: " + p.row_error("population.initial"))
 
 
+## 패널 안 보이는 자동 줄바꿈 Label 가운데 낱말 잇개(UiTheme.keep_words) 없이 넣은 글(잇개를 뺀 글)
+static func _split_words(root: Node) -> Array[String]:
+	var out: Array[String] = []
+	for n in root.find_children("*", "Label", true, false):
+		var l := n as Label
+		if l.is_visible_in_tree() and l.autowrap_mode != TextServer.AUTOWRAP_OFF and l.text.strip_edges().length() > 1 \
+				and l.text != UiTheme.keep_words(UiTheme.plain_text(l.text)):
+			out.append(UiTheme.plain_text(l.text))
+	return out
+
+
 func _revert(t, lab: LabMain, p: ParamPanel) -> void:
 	var rb := p.control("revert") as Button
 	t.check(not rb.disabled, "바꾼 값이 있으면 되돌리기 가능")
@@ -342,7 +359,7 @@ func _revert(t, lab: LabMain, p: ParamPanel) -> void:
 
 ## 고급 설정에 0 을 실제 키로 적고 Enter: SimConfig.build 가 거부하는 값이면 그 줄 아래 오류·새 실험 단추 꺼짐·지금 실험
 ## 그대로(I01 — 패널 검사 = SimConfig.build 그대로). 0 으로 나누는 키(ZERO_DIVISOR_KEYS)는 이름표 범위가 "(검사)" 면 반드시
-## 줄 아래 오류(검토 고침 g1a 의 검사 규칙이 병합되면 이 길로 막힘), 아니어도 패널 오류 = SimConfig.build 오류.
+## 줄 아래 오류(검토 고침 g1a 의 검사 규칙으로 모두 막힘 — 검사), 패널 오류 = SimConfig.build 오류.
 func _advanced_zero(t, lab: LabMain, p: ParamPanel) -> void:
 	var x := lab.experiments[0]
 	p.set_advanced_open(true)
@@ -376,7 +393,9 @@ func _advanced_zero(t, lab: LabMain, p: ParamPanel) -> void:
 		(rejected if wk != "" else passing).append(key)
 		p.set_value(key, SimConfig.get_value(lab.world.cfg, key))
 	t.check(same.is_empty(), "0 으로 나누는 키 0 → 패널 줄 아래 오류 = SimConfig.build 오류(\"(검사)\" 범위면 거부) %s" % "; ".join(same))
-	print("  (참고) 0 을 SimConfig 가 거부: %s / 아직 통과(검토 고침 g1a 병합 뒤 거부되어야 함): %s" % [", ".join(rejected), ", ".join(passing)])
+	# 검토 고침 g1a 병합 뒤: 0 으로 나누는 키는 모두 SimConfig 가 거부(범위 "0 초과"·"1~…")
+	t.check(passing.is_empty() and rejected.size() == ZERO_DIVISOR_KEYS.size(),
+			"0 으로 나누는 키 %d개 모두 SimConfig 가 거부(받아들인 키: %s)" % [ZERO_DIVISOR_KEYS.size(), ", ".join(passing)])
 	t.check(p.status_text() == ParamPanel.TEXT_SAME and p.row_error("population.cap", 0, true) == "", "되돌려 적으면 줄 아래 오류 없음·지금 실험과 같음: " + p.status_text())
 	p.set_advanced_open(false)
 
@@ -407,7 +426,7 @@ func _checked_ranges(t, lab: LabMain, p: ParamPanel) -> void:
 			if not p.row_error(key, 0, true).contains(key):
 				bad.append("%s=%s 오류 없음(%s)" % [key, v, p.row_error(key, 0, true)])
 		p.set_value(key, SimConfig.get_value(lab.world.cfg, key))
-	t.check(keys >= 20 and bad.is_empty(), "\"(검사)\" 범위 키 %d개: 말풍선 범위 = 검사 범위(바로 밖 값 → 그 줄 아래 오류) %s" % [keys, "; ".join(bad)])
+	t.check(keys >= CHECKED_RANGE_MIN and bad.is_empty(), "\"(검사)\" 범위 키 %d개: 말풍선 범위 = 검사 범위(바로 밖 값 → 그 줄 아래 오류) %s" % [keys, "; ".join(bad)])
 	t.check(p.status_text() == ParamPanel.TEXT_SAME, "되돌려 적으면 지금 실험과 같음: " + p.status_text())
 	p.set_advanced_open(false)
 

@@ -371,12 +371,12 @@ func set_advanced_target(which: int) -> void:
 
 ## 상태 줄 글(지금 실험과 같음 / 바꾼 값 N개 …).
 func status_text() -> String:
-	return _status.text
+	return UiTheme.plain_text(_status.text)
 
 
 ## 패널 아래쪽 오류 글(없으면 "").
 func error_text() -> String:
-	return _error.text if _error.visible else ""
+	return UiTheme.plain_text(_error.text) if _error.visible else ""
 
 
 ## 지금 실험 요약 줄들(실험마다 "이름 / 세 값").
@@ -408,12 +408,12 @@ func row_error(key: String, which: int = 0, advanced: bool = false) -> String:
 		if which < 0 or which >= _cards.size():
 			return ""
 		var sl := _cards[which].seed_err as Label
-		return sl.text if sl.visible else ""
+		return UiTheme.plain_text(sl.text) if sl.visible else ""
 	var row: Dictionary = _adv_rows.get(key, {}) if advanced else _main_row(which, key)
 	if row.is_empty():
 		return ""
 	var l := row.err as Label
-	return l.text if l.visible else ""
+	return UiTheme.plain_text(l.text) if l.visible else ""
 
 
 ## 노드 찾기(검사·캡처용): "apply"·"start_compare"·"revert"·"compare"·"export"·"save"·"open"·"sound"·"advanced"·
@@ -864,7 +864,7 @@ func _refresh_controls() -> void:
 		if shown:
 			_refresh_card(c)
 	# 비교 모드에서도 제목을 남긴다(무엇을 눌러야 적용되는지 — 단추는 아래 고정 바닥에 늘 보임)
-	_next_title.text = TEXT_NEXT_COMPARE if _compare_on else TEXT_NEXT
+	_next_title.text = UiTheme.keep_words(TEXT_NEXT_COMPARE if _compare_on else TEXT_NEXT)
 	_apply_btn.visible = not _compare_on
 	_start_compare_btn.visible = _compare_on
 	_apply_btn.disabled = str(_cols[0].error) != ""
@@ -880,7 +880,7 @@ func _refresh_controls() -> void:
 	var ov_n := (_cols[_adv_col].overrides as Dictionary).size()
 	var mark := UiTheme.glyph_or(GLYPH_OPEN if _adv_open else GLYPH_CLOSED, "-" if _adv_open else "+")
 	_adv_toggle.text = "%s 고급 설정" % mark
-	_adv_note.text = "예설정과 다른 값 %d개" % ov_n if ov_n > 0 else "모든 설정 키(sim-defaults.json)"
+	_adv_note.text = UiTheme.keep_words("예설정과 다른 값 %d개" % ov_n if ov_n > 0 else "모든 설정 키(sim-defaults.json)")
 	_adv_box.visible = _adv_open
 	if _adv_open:
 		_refresh_advanced()
@@ -1050,14 +1050,15 @@ func _refresh_status() -> void:
 		else:
 			text = (TEXT_PENDING_COMPARE if _compare_on else TEXT_PENDING) % n
 			col = _c_accent
-	_status.text = text
+	_status.text = UiTheme.keep_words(text)
 	_tint(_status, col)
 	if _action_error != "":
 		errs.append(_action_error)
 	_set_err(_error, "\n".join(errs))
-	# 바닥의 오류 글은 줄 수를 묶어 두므로 전체는 말풍선으로
-	if _error.tooltip_text != _error.text:
-		_error.tooltip_text = _error.text
+	# 바닥의 오류 글은 줄 수를 묶어 두므로 전체는 말풍선으로(낱말 잇개를 뺀 글)
+	var tip := UiTheme.plain_text(_error.text)
+	if _error.tooltip_text != tip:
+		_error.tooltip_text = tip
 
 
 ## 강조 띠·이름 색: 지금 실험과 다르면 강조 색 띠, 오류가 가리키면 위험 색 이름.
@@ -1074,9 +1075,12 @@ static func _tint(c: Control, col: Color) -> void:
 		c.add_theme_color_override("font_color", col)
 
 
+## 오류 글(자동 줄바꿈)은 낱말 단위로 접는다(UiTheme.keep_words — 한글 낱말 가운데서 끊지 않게, 검토 I49).
+## 글을 돌려주는 함수(row_error·error_text)는 UiTheme.plain_text 로 잇개를 뺀다.
 func _set_err(l: Label, text: String) -> void:
-	if l.text != text:
-		l.text = text
+	var k := UiTheme.keep_words(text)
+	if l.text != k:
+		l.text = k
 	l.visible = text != ""
 
 
@@ -1981,7 +1985,7 @@ func _build_advanced() -> void:
 	_adv_box.add_theme_constant_override("separation", _row_gap)
 	_body.add_child(_adv_box)
 	# 줄 이름은 설정 키 그대로(설계 10절) — 한국어 이름·뜻·단위·범위는 말풍선(config/sim-labels.json, docs/CONFIG.md)
-	var hint := _dim_label("키 이름에 마우스를 올리면 한국어 이름·뜻·단위·범위")
+	var hint := _dim_label(UiTheme.keep_words("키 이름에 마우스를 올리면 한국어 이름·뜻·단위·범위"))
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.add_theme_font_size_override("font_size", _fs_small)
 	_adv_box.add_child(hint)

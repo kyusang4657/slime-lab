@@ -1181,23 +1181,16 @@ func _text_has_focus() -> bool:
 
 
 ## 글 칸(파라미터 패널의 숫자·씨앗 칸)에 초점이 있을 때 그 칸 밖(지도·단추·다른 패널)을 누르면 초점을 푼다.
-## 단추·지도는 초점을 받지 않아(FOCUS_NONE — 스페이스가 단추를 누르지 않게) Godot 가 초점을 풀지 않으므로, 풀지 않으면
-## 단축키가 계속 꺼진 채 스페이스·숫자가 칸에 들어가 다음 새 실험에 확정됐다(씨앗 42 → 423). 초점이 빠지면 ParamPanel 이
-## 그 칸을 확정한다. SpinBox 안의 글 칸이면 SpinBox 전체(위·아래 화살표 포함)를 칸 안으로 본다. 대화 상자가 떠 있으면 그대로.
+## 지도(와 초점을 받지 않는 컨트롤)는 누를 때 Godot 가 초점을 풀지 않으므로, 풀지 않으면 단축키가 계속 꺼진 채 스페이스·숫자가 칸에 들어가 다음 새 실험에 확정됐다(씨앗 42 → 423). 초점이 빠지면 ParamPanel 이
+## 그 칸을 확정한다(씨앗 칸도 글 칸 — 패널에 SpinBox 는 없음, 검토 고침 g4). 대화 상자가 떠 있으면 그대로.
 ## pos = 뿌리 뷰포트 좌표(_input 의 사건 위치).
 func _release_text_focus(pos: Vector2) -> void:
 	var f := get_viewport().gui_get_focus_owner()
 	if not (f is LineEdit or f is TextEdit) or _dialog_open():
 		return
-	var host: Control = f
-	if f.get_parent() is SpinBox:
-		host = f.get_parent() as Control
 	var p := get_viewport().get_canvas_transform().affine_inverse() * pos
-	if host.get_global_rect().has_point(p):
+	if f.get_global_rect().has_point(p):
 		return
-	# SpinBox 는 초점이 빠질 때 글자를 지연 호출로 확정한다 — 같은 누름의 단추(새 실험)가 옛 값을 쓰지 않게 지금 확정
-	if host is SpinBox:
-		(host as SpinBox).apply()
 	f.release_focus()
 
 
@@ -1631,11 +1624,10 @@ func speed_text() -> String:
 
 
 ## 위쪽 막대의 낮/밤: 빛이 밤 문턱 아래면 밤. 화면이 이 문턱을 읽는 곳은 여기 한 곳뿐이다(캡처·검사도 이 함수 —
-## 검토 I77). 문턱은 시뮬레이션의 밤 판정(감지 반경을 줄이는 규칙)과 같은 값이어야 하며, 규칙 쪽 설정 키
-## time.night_light_threshold(sim-defaults.json, g1a)가 들어오면 world.cfg 의 그 값을 읽는다. 지금은 화면 설정
-## lab.day_light_threshold(규칙의 0.5 와 같은 값).
+## 검토 I77). 문턱은 시뮬레이션의 밤 판정(감지 반경을 줄이는 규칙)과 같은 설정 키 time.night_light_threshold —
+## 그 세계의 cfg(SIM-API 읽기 전용)에서 읽는다.
 static func is_night(w: SimWorld) -> bool:
-	return w.light < UiConfig.num("lab.day_light_threshold")
+	return w.light < float(w.cfg.time.night_light_threshold)
 
 
 ## 하루 틱 수(날 표시용). SIM-API 의 읽기 전용 cfg(time.day_ticks)를 읽기만 한다.

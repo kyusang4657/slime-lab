@@ -56,7 +56,6 @@
 		"toast_stripe_width": 4,
 		"map_overlay_margin": 10,
 		"map_msaa": 2,
-		"day_light_threshold": 0.5,
 		"toast_gap": 10,
 		"toast_max_width": 640,
 		"toast_error_seconds": 10.0,

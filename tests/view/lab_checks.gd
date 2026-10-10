@@ -7,7 +7,7 @@ const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 285
+const MIN_CHECKS := 287
 ## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
 const B_MUTATION := 0.07
 ## 최소 창(lab.min_width × lab.min_height = 1280×640)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기,
@@ -247,23 +247,41 @@ func _fits_height(lab: LabMain) -> bool:
 			and lab.info_panel.get_global_rect().end.y <= bottom and (main_btn == null or main_btn.get_global_rect().end.y <= bottom)
 
 
-## 낮/밤 문턱은 화면에서 한 곳(LabMain.is_night)만 읽는다 — 규칙 쪽 밤 판정 설정 키가 들어오면 그곳만 바꾸면 되게(검토 I77:
-## 화면 설정·캡처가 따로 읽어 위쪽 막대 표시와 규칙이 갈라질 수 있었음). 이 검사 파일은 빼고 scripts/·tests/ 를 훑음.
+## 낮/밤 문턱은 규칙의 밤 판정과 같은 설정 키 time.night_light_threshold(그 세계의 cfg)이고, 화면에서는 한 곳
+## (LabMain.is_night)만 읽는다(검토 I77: 예전엔 화면 설정 lab.day_light_threshold 를 따로 읽어, 규칙의 문턱을 바꾸면
+## 위쪽 막대 표시와 규칙이 갈라졌음). 화면 쪽 파일(scripts/ui·scripts/view·tests/view·tests 바로 아래의 캡처·ui_driver —
+## 규칙 검사 run_tests.gd 와 이 검사 파일은 빼고)을 훑고, 문턱을 바꾼 세계에서 is_night 가 그 문턱을 따르는지 본다.
 func _night_threshold(t) -> void:
-	var key := "lab." + "day_light_threshold"
+	var key := "night_light_threshold"
 	var hits: Array[String] = []
-	for dir in ["res://scripts", "res://tests"]:
-		_grep(dir, key, hits)
-	t.check(hits.size() == 1 and hits[0] == "res://scripts/ui/lab_main.gd", "낮/밤 문턱(%s)을 읽는 곳은 LabMain.is_night 하나: %s" % [key, str(hits)])
+	for dir in ["res://scripts/ui", "res://scripts/view", "res://tests/view"]:
+		_grep(dir, key, hits, true)
+	_grep("res://tests", key, hits, false)
+	t.check(hits.size() == 1 and hits[0] == "res://scripts/ui/lab_main.gd", "화면에서 밤 문턱(%s)을 읽는 곳은 LabMain.is_night 하나: %s" % [key, str(hits)])
+	t.check(not UiConfig.section("lab").has("day_light_threshold"), "화면 설정에 따로 둔 낮/밤 문턱(lab.day_light_threshold)이 없음")
+	# 문턱 0.9: 빛이 0.5~0.9 인 틱은 밤(예전 화면 문턱 0.5 로는 낮)
+	var w: SimWorld = t.make_world({"time.night_light_threshold": 0.9})
+	var seen := {}
+	var follows := w != null
+	for i in (int(w.cfg.time.day_ticks) if w != null else 0):
+		if LabMain.is_night(w) != (w.light < 0.9):
+			follows = false
+		if w.light >= 0.5 and w.light < 0.9:
+			seen.between = true
+		w.step()
+	t.check(follows and seen.has("between"), "is_night 는 세계 설정의 밤 문턱(0.9)을 따름 — 빛 0.5~0.9 도 밤(%s)" % str(seen.has("between")))
 
 
-static func _grep(dir: String, needle: String, hits: Array[String]) -> void:
+## dir 아래 .gd 가운데 needle 을 담은 파일(규칙 검사 run_tests.gd·이 검사 파일은 뺌). deep = 하위 폴더까지.
+static func _grep(dir: String, needle: String, hits: Array[String], deep: bool) -> void:
 	for f in DirAccess.get_files_at(dir):
 		var path := dir.path_join(f)
-		if f.ends_with(".gd") and path != "res://tests/view/lab_checks.gd" and FileAccess.get_file_as_string(path).count(needle) > 0:
+		if f.ends_with(".gd") and not path in ["res://tests/view/lab_checks.gd", "res://tests/run_tests.gd"] \
+				and FileAccess.get_file_as_string(path).count(needle) > 0:
 			hits.append(path)
-	for d in DirAccess.get_directories_at(dir):
-		_grep(dir.path_join(d), needle, hits)
+	if deep:
+		for d in DirAccess.get_directories_at(dir):
+			_grep(dir.path_join(d), needle, hits, deep)
 
 
 func _run_loop(t, lab: LabMain) -> void:
@@ -572,8 +590,7 @@ func _command_keys(t, lab: LabMain) -> void:
 	var f := lab.get_viewport().gui_get_focus_owner()
 	t.check(f != null and pp.is_ancestor_of(f) and f == lab.first_focus(), "초점이 없을 때 Tab → 파라미터 패널 첫 칸(%s)" % (str(f.name) if f != null else "없음"))
 	# 글 칸에 초점이 있는 채 씨앗을 적고 Ctrl+N → 그 값을 확정하고 새 실험(단추와 같음)
-	var spin := pp.control("seed:0") as SpinBox
-	var sle := spin.get_line_edit() if spin != null else null
+	var sle := pp.control("seed:0") as LineEdit
 	if sle != null:
 		sle.grab_focus()
 		sle.text = "77"
@@ -695,24 +712,26 @@ func _reveal(pp: ParamPanel, c: Control) -> void:
 
 ## 파라미터 패널 글 칸에 적은 뒤 칸 밖(새 실험 단추·지도)을 누르면 초점이 풀려 단축키가 바로 동작하고, 친 키가 칸에
 ## 들어가 다음 실험에 확정되지 않는다(고치기 전: 씨앗 "42" + 스페이스·"4" → "42 4", 멈춤·배속 그대로).
-## 씨앗 위·아래 화살표를 눌러도 같음. 초점을 가진 칸 자체를 누르면 초점 그대로.
+## 씨앗 칸은 글 칸(LineEdit — 검토 고침 g4: 예전 SpinBox 의 식 계산·실수 반올림을 없앰). 초점을 가진 칸 자체를 누르면 초점 그대로.
+## 실제 앱에서는 마우스를 뗄 때 select_all_on_focus 가 글자 전체를 고르지만 push_input 은 Input 의 단추 상태를 바꾸지 않아
+## 엔진이 누르는 순간 고른 뒤 누른 자리에 커서를 둔다 — 그래서 누른 뒤 직접 전체를 고른다.
 func _focus_release(t, lab: LabMain) -> void:
 	var pp := lab.param_panel
-	var spin := pp.control("seed:0") as SpinBox
+	var sle := pp.control("seed:0") as LineEdit
 	var field := pp.control("field:mutation.rate:0") as LineEdit
 	var apply_btn := pp.control("apply") as Control
-	t.check(spin != null and field != null and apply_btn != null, "파라미터 패널의 씨앗 칸·돌연변이율 칸·새 실험 단추")
-	if spin == null or field == null or apply_btn == null:
+	t.check(sle != null and field != null and apply_btn != null, "파라미터 패널의 씨앗 칸·돌연변이율 칸·새 실험 단추")
+	if sle == null or field == null or apply_btn == null:
 		return
 	var steps: Array = UiConfig.value("speed.steps")
 	lab.set_paused(false)
 	lab.set_speed(int(steps[0]))
 	var map_mid := lab._map_container.get_global_rect().get_center()
-	var sle := spin.get_line_edit()
-	_reveal(pp, spin)
+	_reveal(pp, sle)
 	await t.frames(2)
 	_click(t, sle.get_global_rect().get_center())
 	await t.frames(1)
+	sle.select_all()
 	_type(t, "42")
 	await t.frames(1)
 	t.check(sle.has_focus() and sle.text == "42", "씨앗 칸을 눌러 \"%s\" 입력(초점 %s)" % [sle.text, str(sle.has_focus())])
@@ -729,19 +748,19 @@ func _focus_release(t, lab: LabMain) -> void:
 	t.check(lab.is_paused() and lab.target_speed() == int(steps[3]) and sle.text == "42",
 			"그 뒤 스페이스 → 멈춤, 4 → %d배, 씨앗 칸 글자 그대로 \"%s\"" % [lab.target_speed(), sle.text])
 	t.check(int(pp.current_settings(0).seed) == 42, "다음 실험 씨앗도 42 그대로(%s)" % str(pp.current_settings(0).seed))
-	# 씨앗 위 화살표 → 칸에 초점(엔진) → 지도를 누르면 풀림
-	_reveal(pp, spin)
+	# 씨앗 칸에 "43"(Enter 없음) → 지도를 누르면 확정·초점이 풀려 스페이스가 동작
+	_reveal(pp, sle)
 	await t.frames(2)
-	var sr := spin.get_global_rect()
-	_click(t, Vector2(sr.end.x - 4.0, sr.position.y + sr.size.y * 0.25))
+	_click(t, sle.get_global_rect().get_center())
 	await t.frames(1)
-	var after_arrow := int(spin.value)
+	sle.select_all()
+	_type(t, "43")
 	_click(t, map_mid)
 	await t.frames(1)
 	var paused0 := lab.is_paused()
 	_key(t, KEY_SPACE)
-	t.check(after_arrow == 43 and not sle.has_focus() and lab.is_paused() != paused0,
-			"씨앗 화살표(%d) 뒤 지도를 누르면 초점이 풀려 스페이스가 동작" % after_arrow)
+	t.check(int(pp.current_settings(0).seed) == 43 and not sle.has_focus() and lab.is_paused() != paused0,
+			"씨앗 칸 43 뒤 지도를 누르면 확정(씨앗 %s)·초점이 풀려 스페이스가 동작" % str(pp.current_settings(0).seed))
 	# 돌연변이율 칸: 칸 안을 다시 눌러도 초점 그대로, 지도를 누르면 그 값이 확정되고 단축키 동작
 	_reveal(pp, field)
 	await t.frames(2)
@@ -954,7 +973,7 @@ func _ff_pause(t, lab: LabMain) -> void:
 	var w := lab.world
 	lab.select_slime(w.s_id[w.population() / 2])
 	var tl := UiConfig.num("map.tile_size")
-	var bound := maxf(MapView.STACK_MAX, UiConfig.num("map.store_slime_offset")) * tl + 0.01
+	var bound := maxf(MapView.stack_max(), UiConfig.num("map.store_slime_offset")) * tl + 0.01
 	lab.set_fast_forward(true)
 	for i in 10:
 		lab.advance_frame(DT)
@@ -1470,7 +1489,7 @@ func _compare(t, lab: LabMain) -> void:
 		total += n
 	t.check(same and total > 0 and xa.world.tick == xb.world.tick, "8배 60프레임: 프레임마다 A·B 가 같은 틱 수(합 %d틱)" % total)
 	var tl := UiConfig.num("map.tile_size")
-	var bound := maxf(MapView.STACK_MAX, UiConfig.num("map.store_slime_offset")) * tl + 0.01
+	var bound := maxf(MapView.stack_max(), UiConfig.num("map.store_slime_offset")) * tl + 0.01
 	t.check(lab.map_view_of(1)._has_prev and _max_drift_of(lab, 1) <= tl + bound,
 			"B 지도도 틱마다 보간 기억·프레임마다 갱신(가장 먼 %.2f칸)" % _max_drift_of(lab, 1))
 	# 두 쪽 모두 발견할 때까지: 사건은 실험마다, 알림 앞에 이름표

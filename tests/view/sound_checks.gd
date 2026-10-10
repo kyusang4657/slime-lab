@@ -225,8 +225,7 @@ func _with_lab(t) -> void:
 
 ## 첫 밭 알림·소리는 세계에서 한 번(검토 I26): 밭을 모두 잃고 다시 심어도 실험실(알림·LabSound 가 받는 events_tagged)에
 ## "첫 밭" 사건이 다시 오지 않는다. 화면은 사건 종류마다 같은 알림·소리를 내므로(사건 수 = 첫 밭 강조 알림·저장고 소리 수)
-## 한 번인지는 시뮬레이션이 정한다 — 시뮬레이션 쪽 고침(첫 밭 틱 first_farm_tick)이 들어온 세계면 꼭 한 번, 그 전 규칙의
-## 세계면 화면이 세계의 사건보다 더 받지 않는지만(병합 전 이 가지 — 병합 뒤에는 늘 앞의 경우).
+## 한 번인지는 시뮬레이션이 정한다(첫 밭 틱 first_farm_tick — 세계의 연대기에도 한 번, 실험실이 받은 것도 한 번).
 func _first_farm_once(t) -> void:
 	var lab: LabMain = load("res://scenes/lab.tscn").instantiate()
 	t.root.add_child(lab)
@@ -261,11 +260,9 @@ func _first_farm_once(t) -> void:
 	var in_world := 0
 	for e: Dictionary in w.chronicle:
 		in_world += 1 if str(e.kind) == "first_farm" else 0
-	var once_rule := "first_farm_tick" in w
-	var want := 1 if once_rule else in_world
-	t.check(lost > 0 and replant > lost and got.first_farm == want and got.first_farm == in_world,
-			"밭을 모두 잃고(틱 %d) 다시 심어도(틱 %d) 실험실이 받은 첫 밭 사건 %d번(기대 %d — %s, 세계의 연대기 %d번)"
-			% [lost, replant, got.first_farm, want, "첫 밭은 세계에서 한 번" if once_rule else "시뮬레이션 고침 전 규칙", in_world])
+	t.check(lost > 0 and replant > lost and got.first_farm == 1 and in_world == 1,
+			"밭을 모두 잃고(틱 %d) 다시 심어도(틱 %d) 실험실이 받은 첫 밭 사건 %d번(기대 1 — 첫 밭은 세계에서 한 번, 세계의 연대기 %d번)"
+			% [lost, replant, got.first_farm, in_world])
 	lab.queue_free()
 	await t.frames(1)
 	await t.root.get_tree().create_timer(DRAIN_S).timeout
