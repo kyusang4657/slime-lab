@@ -9,9 +9,10 @@
    이름 `w.X` — `SimWorld` 로 적은 변수·인자, `var w := x.world`(…`if … else null` 포함)·`var w2 = w` 처럼 세계를 받은 변수.
    함수 안에서 생긴 이름은 그 함수 안에서만, 멤버 선언이면 파일 전체(다른 함수의 `w` 는 폭일 수 있음). 기록기(`SimRecorder` 로
    적은 이름·`recorder.X`)와 정적 이름(`SimConfig.X`·`SimSnapshot.X` 등)도 같은 방식. 주석·문자열 안은 보지 않는다.
-   또 화면은 세계를 바꾸지 않는다(VIEW-API 규칙 1): 세계에 닿은 멤버에 대입(`=`·`+=`·`[i] =`)·고치는 호출(`append`·`clear`·
-   `resize` 등)·진행 호출(`step`·`step_n`·`setup`·`sample`·`drain_events`)은 실패 — 진행·기록은 Experiment(`setup`·`step`·`step_n`·
-   `sample`)와 LabMain(`drain_events`)만. 세계 멤버를 받은 변수(`var c := w.cfg`, `for e in w.chronicle`)를 고치는 것도 실패.
+   또 화면은 세계를 바꾸지 않는다(VIEW-API 규칙 1): 세계에 닿은 멤버에 대입(`=`·`+=`·`[i] =`)·읽기 허용 목록(`READ_ONLY_CALLS` —
+   `size`·`get`·`duplicate` 등) 밖의 메서드 호출·진행 호출(`step`·`step_n`·`setup`·`sample`·`drain_events`)은 실패 — 진행·기록은
+   Experiment(`setup`·`step`·`step_n`·`sample`)와 LabMain(`drain_events`)만. 세계 멤버를 받은 변수(`var c := w.cfg`,
+   `for e in w.chronicle`)를 고치는 것도 실패. (예전엔 고치는 메서드의 금지 목록이라 `get_or_add`·`encode_u8`·`call` 을 놓쳤음.)
    한계: 이름으로만 따라가므로 사전·배열에 넣었다 꺼낸 세계나 다른 함수가 돌려준 세계는 보지 못한다.
 3. 문서(DESIGN·VIEW-API·ANALYSIS)에 백틱으로 적은 `ui.절.키` 는 config/ui.json 에 실제로 있다(키 이름이 낡지 않게).
 4. 사용자 데이터 폴더 이름이 영문(project.godot `custom_user_dir_name`) — 경로에 한글이 들어가면 엔진 FileDialog 가 거짓
@@ -129,12 +130,21 @@ _CHAIN = r"(?:\s*\[[^\]\n]*\]|\.[A-Za-z_]\w*)*"
 _ASSIGN_RE = re.compile(r"^\s*(?:@\w+\s+)*(?:static\s+)?(?:var\s+)?(" + _IDENT + r")\s*(?::\s*[\w\[\]]*\s*)?:?=(?!=)\s*(.+?)\s*$")
 _FOR_RE = re.compile(r"^\s*for\s+(" + _IDENT + r")\s*(?::\s*[\w\[\]]+\s*)?\s+in\s+(.+?)\s*:\s*$")
 _WRITE_AFTER = re.compile(_CHAIN + r"\s*(?:\*\*|<<|>>|[-+*/%&|^])?=(?!=)")
-MUTATING_CALLS = (
-    "append", "append_array", "push_back", "push_front", "pop_back", "pop_front", "pop_at", "insert", "erase",
-    "remove_at", "clear", "resize", "fill", "sort", "sort_custom", "reverse", "shuffle", "merge", "assign", "set",
-    "set_indexed", "make_read_only",
+# 세계 멤버(사슬)와 그것을 받은 변수에 붙여 불러도 되는 메서드 — 읽기만 하는 것의 허용 목록. 이 밖의 호출은 세계를 바꿀 수 있는
+# 것으로 셈(검토 I36: 예전엔 고치는 메서드의 금지 목록 append·clear … 이라 get_or_add·encode_u8·call 같은 꼴을 놓쳤다).
+# 화면 코드가 새 읽기 메서드를 쓰면 세계를 바꾸지 않는지 확인하고 여기에 더할 것.
+READ_ONLY_CALLS = (
+    "size", "is_empty", "has", "has_all", "get", "keys", "values", "duplicate", "slice", "find", "rfind", "count",
+    "back", "front", "min", "max", "hash", "is_read_only", "begins_with", "ends_with", "contains", "merged",
+    "recursive_equal", "to_byte_array", "hex_encode", "get_string_from_utf8", "bsearch", "get_state_string",
 )
-_MUT_AFTER = re.compile(_CHAIN + r"\.(?:" + "|".join(MUTATING_CALLS) + r")\s*\(")
+_CALL_AFTER = re.compile(_CHAIN + r"\.([A-Za-z_]\w*)\s*\(")
+
+
+def _mutating_call(rest: str) -> str:
+    """세계 멤버 바로 뒤(사슬을 지나) 허용 목록 밖 메서드를 부르면 그 이름, 아니면 ""."""
+    m = _CALL_AFTER.match(rest)
+    return m.group(1) if m and m.group(1) not in READ_ONLY_CALLS else ""
 # 세계를 진행하거나 상태를 바꾸는 호출과, 그것을 불러도 되는 파일(VIEW-API 규칙 1: 진행·기록(`sample`)은 Experiment = 세계 + 기록기,
 # 사건 비우기는 LabMain)
 WORLD_DRIVE_CALLS = ("step", "step_n", "setup", "sample", "drain_events")
@@ -219,15 +229,15 @@ def scan_sim_access(text: str, fname: str = "x.gd") -> dict[str, list]:
                     rest = ln[m.end():]
                     if _WRITE_AFTER.match(rest):
                         found["writes"].append((lineno, f"세계 멤버에 대입: {member}"))
-                    elif _MUT_AFTER.match(rest):
-                        found["writes"].append((lineno, f"세계 멤버를 고치는 호출: {member}{rest.split('(')[0]}"))
+                    elif _mutating_call(rest):
+                        found["writes"].append((lineno, f"세계 멤버에 읽기 허용 목록 밖 호출: {member}{rest.split('(')[0]}"))
                     elif member in WORLD_DRIVE_CALLS and re.match(r"\s*\(", rest) \
                             and member not in WORLD_DRIVE_ALLOWED.get(fname, set()):
                         found["writes"].append((lineno, f"세계를 진행·변경하는 호출: {member}()"))
             if held:
                 for m in re.finditer(r"(?<![\w.])(" + _alt(held) + r")(?=\s*[.\[])", ln):
                     rest = ln[m.end():]
-                    if _WRITE_AFTER.match(rest) or _MUT_AFTER.match(rest):
+                    if _WRITE_AFTER.match(rest) or _mutating_call(rest):
                         found["writes"].append((lineno, f"세계 멤버를 받은 {m.group(1)} 을(를) 고침"))
             for m in re.finditer(r"(?<![\w.])(" + "|".join(STATIC_CLASSES) + r")\.(" + _IDENT + r")", ln):
                 found["static"].append((lineno, f"{m.group(1)}.{m.group(2)}"))
@@ -294,7 +304,8 @@ class TestSimApiBoundary(unittest.TestCase):
 
     def test_scanner_catches_known_forms(self) -> None:
         """검사기 자체가 4단계의 접근 꼴을 잡는지(정규식이 다시 눈멀지 않게). 예전 정규식(맨 `world.`·`_world.` 만)은
-        아래 세계 멤버 11개 중 3개(`kid`·`baz` 도 못 봄)만, 고치기는 하나도 잡지 못했다."""
+        아래 세계 멤버 11개 중 3개(`kid`·`baz` 도 못 봄)만, 고치기는 하나도 잡지 못했다. 33·34·36줄은 고치는 메서드 금지 목록이
+        놓치던 꼴(허용 목록으로 바꿔 잡음)."""
         src = "\n".join([
             "extends Control",                                                        # 1
             "var lab: Node",                                                          # 2
@@ -327,6 +338,12 @@ class TestSimApiBoundary(unittest.TestCase):
             "\tvar w := size.x",                                                      # 29
             "\tvar text := SimSnapshot.to_text(lab.world)",                           # 30
             "\tprint(w.abs(), text.length())",                                        # 31
+            "func g(w: SimWorld) -> void:",                                           # 32
+            "\tw.cfg.get_or_add(\"x\", 1)",                                           # 33 허용 목록 밖(없는 키를 더함)
+            "\tw.tiles.encode_u8(0, 3)",                                              # 34 허용 목록 밖(바이트를 씀)
+            "\tvar d := w.cfg.time",                                                  # 35
+            "\td.call(\"clear\")",                                                    # 36 받은 사전에 허용 목록 밖 호출
+            "\tprint(w.chronicle.size(), w.s_genome.duplicate().size(), d.get(\"k\"), w.cfg.has(\"time\"))",  # 37 읽기
         ])
         found = scan_sim_access(src, "panel.gd")
         members = {m for _l, m in found["SimWorld"]}
@@ -339,7 +356,7 @@ class TestSimApiBoundary(unittest.TestCase):
         self.assertEqual({m for _l, m in found["SimRecorder"]}, {"secret"})
         self.assertIn("SimConfig.hidden_helper", {s for _l, s in found["static"]})
         write_lines = sorted({ln for ln, _w in found["writes"]})
-        self.assertEqual(write_lines, [16, 17, 18, 19, 21, 23], found["writes"])
+        self.assertEqual(write_lines, [16, 17, 18, 19, 21, 23, 33, 34, 36], found["writes"])
         # 진행 호출은 Experiment·LabMain 만
         drive = "func s(w: SimWorld) -> void:\n\tw.step()\n\tw.drain_events()\n"
         self.assertEqual(scan_sim_access(drive, "experiment.gd")["writes"], [(3, "세계를 진행·변경하는 호출: drain_events()")])

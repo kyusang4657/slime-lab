@@ -1,15 +1,41 @@
 extends SceneTree
 ## 헤드리스 자동 검사:  godot --headless --path . --script res://tests/run_tests.gd
 ## 이전 프로젝트(little-monster-village)의 방식: check(조건, 설명)을 쌓고 마지막 줄에 RESULT 를 출력한다.
-## 테스트 함수가 끝까지 실행되지 않으면(스크립트 오류) 실패로 센다.
-## 선택 인자: --only=test_이름(쉼표로 여러 개)  --skip-slow
+## 테스트 함수가 끝까지 실행되지 않으면(스크립트 오류) 실패로 센다: 검사 함수는 끝에서 done() 을 부르고, 오류로 중간에 끊기면
+## 그 줄에 닿지 않는다(Godot 은 오류 난 함수만 멈추고 계속 돌므로 — 예전엔 검사를 하나도 하지 않은 함수만 잡았음, I33).
+## 선택 인자: --only=test_이름(쉼표로 여러 개, 모르는 이름이 있으면 아무것도 돌리지 않고 실패 — J15)  --skip-slow
 
 const SIM_DIR := "res://scripts/sim"
 ## 매직 넘버 검사에서 빼는 파일: 설정 로더(범위 검사의 상한·하한은 시뮬레이션 수치가 아님)
 const MAGIC_EXEMPT: Array[String] = ["sim_config.gd"]
-## 코드에 그대로 써도 되는 수
-const MAGIC_ALLOWED: Array[String] = ["0", "1", "2", "0.0", "1.0", "0.5", "2.0"]
-const FORBIDDEN_MATH: Array[String] = ["sin", "cos", "tan", "exp", "log", "pow", "tanh", "atan", "atan2", "randfn", "randf_range", "randi_range"]
+## 코드에 그대로 써도 되는 수(DESIGN 7.1 의 목록 — 음수 −1 은 1 로 셈). 이 표기 그대로만 받는다: 1_000·.25·0b1011·1e6·2.0 처럼
+## 다른 꼴로 적은 수는 모두 매직 넘버(예전 정규식은 밑줄·앞 0 없는 소수·2진수를 보지 못했음, I36).
+const MAGIC_ALLOWED: Array[String] = ["0", "1", "2", "0.0", "1.0", "0.5"]
+## 수 글자(16진·2진·밑줄·앞 0 없는 소수·지수 표기까지). 앞뒤가 이름·점이면 수가 아님(t2·x.size).
+const NUM_PATTERN := "(?<![A-Za-z_0-9.])(0[xX][0-9a-fA-F_]+|0[bB][01_]+|[0-9][0-9_]*(\\.[0-9_]*)?([eE][+-]?[0-9][0-9_]*)?|\\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?)(?![A-Za-z_0-9.])"
+## 시뮬레이션 코드가 받는 이 없이 부르는 전역 함수·생성자의 허용 목록(I36 — 예전엔 sin·pow 같은 금지 목록이라 asin·ease·
+## db_to_linear·전역 randf()/randi()·seed() 를 놓쳤음). 시뮬레이션 파일에 정의한 함수는 저절로 허용. 이름을 더할 때는 플랫폼마다
+## 같은 비트인지(사칙연산·sqrt·비교·정수 연산뿐인지) 확인할 것 — README·DESIGN D10 "사칙연산·sqrt 만".
+const ALLOWED_GLOBAL_CALLS: Array[String] = [
+	"int", "float", "str", "bool", "typeof", "type_string", "range", "String", "PackedByteArray", "PackedInt32Array",
+	"PackedFloat32Array", "PackedFloat64Array", "PackedStringArray", "absf", "absi", "minf", "maxf", "mini", "maxi",
+	"clampf", "clampi", "floorf", "sqrt", "snappedf", "is_finite", "is_inf", "is_nan", "push_error", "error_string",
+]
+## 받는 이가 있는 메서드 호출(.이름()의 허용 목록 — 배열·사전·글자·파일·JSON·정규식 다루기와 SimRng 안의 RandomNumberGenerator.randi 뿐.
+## Vector2.rotated·angle·from_angle·slerp·lerp 같은 수학 메서드는 없음). 시뮬레이션 파일에 정의한 함수는 저절로 허용.
+const ALLOWED_METHODS: Array[String] = [
+	"append", "append_array", "base64_to_raw", "begins_with", "close", "contains", "copy_absolute", "create_from_string",
+	"duplicate", "erase", "file_exists", "fill", "get", "get_error", "get_file", "get_file_as_string", "get_length",
+	"get_open_error", "get_setting", "get_string", "has", "hex_decode", "hex_encode", "is_empty", "is_valid_int", "join",
+	"keys", "length", "make_dir_recursive_absolute", "merge", "new", "num", "open", "parse", "parse_string", "path_join",
+	"randi", "raw_to_base64", "remove_absolute", "rename_absolute", "replace", "resize", "search_all", "sha256_text", "size",
+	"slice", "split", "store_buffer", "store_string", "stringify", "to_byte_array", "to_float32_array", "to_float64_array",
+	"to_int", "to_int32_array", "to_utf8_buffer",
+]
+## 뒤에 괄호가 와도 함수 호출이 아닌 GDScript 낱말(func 는 이름 없는 함수).
+const GD_KEYWORDS: Array[String] = ["if", "elif", "while", "for", "match", "return", "and", "or", "not", "in", "is", "as", "func"]
+## 난수 생성기를 직접 만들 수 있는 유일한 파일(나머지는 씨앗을 받은 SimRng 만 — DESIGN 7절).
+const RNG_FILE := "sim_rng.gd"
 ## 농사 도달 검사(S15): 이 예설정·씨앗 조합 중 하나라도 평균 100세대 안에 농사(3단계)에 도달해야 한다.
 ## 연구용 fast_civ 를 먼저 본다(씨앗 1: 2,040틱·평균 28.5세대에 농사 — docs/TUNING-fast_civ.md, 검토 고침 g1b 의 규칙 고침 뒤 다시 잼).
 ## 규칙 고침 전에는 3,321틱·49.0세대 — 식물 갱신 간격 사이의 빛을 더하도록 바꾼 J02 가 기본 역사를 바꿈(나머지는 채집 발견 뒤 — 바닥 먹이·저장고·밭이 생긴 뒤의 역사만).
@@ -27,14 +53,26 @@ const FAST_CIV_SEED1_FARM_GEN := 28.5
 ## 씨앗 1~3 만 본다: 씨앗 7 은 지금 값에서도 알려진 예외(채집·저장·농사 0.23·0.34·1.89세대 — 첫 세대 폭발,
 ## TUNING-fast_civ.md "목표와 다른 점").
 const FAST_CIV_MIN_FORAGE_GEN := 2.0
-## 성능 기록: 개체·틱당 마이크로초가 이 값의 두 배를 넘으면 실패(CI 기계 차이를 감안한 느슨한 상한).
-const PERF_TARGET_US := 25.0
+## 성능(I34): 실제 시계 수치(개체·틱당 µs·틱/초)는 기록만 하고, 합격 기준은 같은 프로세스에서 번갈아 잰 기준 일(두뇌 순전파 모양의
+## 곱셈·덧셈 고리) 한 번에 대한 배수 — 기계가 느리거나 다른 일로 바쁘면 둘이 함께 느려지므로 기계 속도에 덜 묶인다.
+## 지금 기본·씨앗 2(평균 169마리)는 개체·틱당 기준 일 약 700번(이 컨테이너, 26~29µs). 예전 기준 "개체·틱당 < 50µs" 는
+## Actions 28µs 로 여유가 두 배가 안 되는 실제 시계 단언이었다.
+const PERF_MAX_RATIO := 1750.0
+const PERF_REF_LEN := 256
+const PERF_REF_REPS := 2000
+const PERF_ROUNDS := 8
+## 연결 요소 계산(test_components_fast)의 상한: 같은 크기 지도를 한 번 훑는 거리장(BFS) 시간의 이 배수(지금 약 0.9배, 예전
+## 계산은 요소 수 × 칸 수라 수천 배).
+const COMPONENTS_MAX_RATIO := 10.0
+## 실행기 자체를 검사하는 함수(기본 목록에는 없고 --only 로만 — test_runner_guards 가 따로 띄운 실행기에서 부름).
+const SELF_TESTS: Array[String] = ["selftest_abort_midway"]
 
 var _pass := 0
 var _fail := 0
 var _report: Array[String] = []
 var _only: PackedStringArray = []
 var _skip_slow := false
+var _finished := false
 
 
 func _init() -> void:
@@ -56,18 +94,42 @@ func _init() -> void:
 		"test_empty_start", "test_mate_once_per_tick", "test_store_max_count", "test_first_farm_once", "test_store_takes_pile",
 		"test_child_energy_cap", "test_store_built_in_act", "test_spoil_lifetime", "test_growth_interval",
 		"test_farm_abandon_any_growth", "test_light_curve", "test_store_not_on_farm", "test_action_names", "test_harsh_winter",
+		"test_farm_rule_values", "test_civ_rule_values", "test_runner_guards",
 	]
-	for t in tests:
-		if not _only.is_empty() and not _only.has(t):
+	# --only 의 이름은 모두 있는 검사여야 한다(J15): 오타 난 이름을 말없이 빼고 '0개·0 failed·종료 코드 0' 으로 끝나지 않게
+	var unknown := PackedStringArray()
+	for name in _only:
+		if not tests.has(name) and not SELF_TESTS.has(name):
+			unknown.append("\"%s\"" % name)
+	if not unknown.is_empty():
+		printerr("  실패: --only 에 모르는 검사 이름: %s (검사 목록은 tests/run_tests.gd 의 tests)" % ", ".join(unknown))
+		print("RESULT: 0 checks passed, 1 failed")
+		quit(1)
+		return
+	var order := tests.duplicate()
+	order.append_array(SELF_TESTS)
+	var ran := 0
+	for t in order:
+		# 실행기 자체를 검사하는 함수(SELF_TESTS)는 --only 로 이름을 댈 때만
+		if (_only.is_empty() and SELF_TESTS.has(t)) or (not _only.is_empty() and not _only.has(t)):
 			continue
+		ran += 1
 		var before := _fail
 		var checks := _pass + _fail
 		var t0 := Time.get_ticks_msec()
+		_finished = false
 		call(t)
-		if _pass + _fail == checks:
+		var did := _pass + _fail - checks
+		if not _finished:
 			_fail += 1
-			printerr("  실패: %s 가 끝까지 실행되지 않음(스크립트 오류)" % t)
+			printerr("  실패: %s 가 끝까지 실행되지 않음(스크립트 오류 — 검사 %d개 뒤 끊김)" % [t, did])
+		elif did == 0:
+			_fail += 1
+			printerr("  실패: %s 가 검사를 하나도 하지 않음" % t)
 		_report.append("%s %s (%.1fs)" % ["PASS" if _fail == before else "FAIL", t, float(Time.get_ticks_msec() - t0) / 1000.0])
+	if ran == 0:
+		_fail += 1
+		printerr("  실패: 돌린 검사가 없음")
 	print("\n".join(_report))
 	print("RESULT: %d checks passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -79,6 +141,11 @@ func check(cond: bool, what: String) -> void:
 	else:
 		_fail += 1
 		printerr("  실패: " + what)
+
+
+## 검사 함수의 끝(그리고 일부러 일찍 끝내는 return 앞)에서 부른다 — 실행기가 이것으로 함수가 끝까지 돌았는지 본다.
+func done() -> void:
+	_finished = true
 
 
 func cfg_with(sets: Dictionary = {}, preset: String = "default") -> Dictionary:
@@ -180,33 +247,99 @@ func test_config() -> void:
 	var j = JSON.parse_string(JSON.stringify(c2))
 	check(SimConfig.deep_equal(j, c2) and SimConfig.validate(j) == "", "설정이 JSON 으로 그대로 왕복")
 	check(SimConfig.parse_value("0.3") == 0.3 and SimConfig.parse_value("[1,2]") == [1.0, 2.0] and SimConfig.parse_value("글자") == "글자", "명령줄 값 해석")
+	done()
 
 
-## 매직 넘버·금지 수학 함수 정적 검사(시뮬레이션 코드).
+## 매직 넘버·허용 목록 밖 함수 정적 검사(시뮬레이션 코드). 먼저 검사기 자체가 알려진 꼴을 잡는지 본다(정규식이 다시 눈멀지 않게).
 func test_static_rules() -> void:
+	# 검사기 자기 검사(I36): 한 줄씩 넣어 잡히는지 — 위반 꼴은 하나 이상, 허용 꼴은 하나도 없어야 함
+	var probe_defined := {"_helper": true}
+	var bad_lines := PackedStringArray([
+		"var a := 1_000 * x", "var b := .25 * x", "var c := 0b1011 * x", "var d := 1e6 * x", "var e := 37 * x", "var f := 2.0 * x",
+		"var g := 0x1F", "x = x ** 0.5", "x **= 2", "x = x * randf()", "x = float(randi() % 2)", "x = randf_range(0.0, 1.0)",
+		"seed(1)", "randomize()", "x = asin(y) + acos(y)", "x = sinh(y)", "x = ease(t, e)", "x = db_to_linear(y)", "x = sin(y)",
+		"x = pow(y, 2)", "x = lerpf(a, b, t)", "var v := Vector2.from_angle(a)", "v = v.rotated(b)", "x = v.angle()",
+		"var r := RandomNumberGenerator.new()",
+	])
+	var missed := PackedStringArray()
+	for ln in bad_lines:
+		var hit := _scan_sim_lines("probe.gd", PackedStringArray([ln]), probe_defined)
+		if hit.magic.is_empty() and hit.calls.is_empty():
+			missed.append(ln)
+	check(missed.is_empty(), "검사기가 위반 꼴 %d개를 모두 잡음(놓친 줄: %s)" % [bad_lines.size(), " | ".join(missed)])
+	var ok_lines := PackedStringArray([
+		"var a := minf(x, 1.0) * 0.5 + 2 - 1", "x = sqrt(y) - 0.0", "s = \"37 sin( randf() 1_000\"  # .25 asin(", "arr.append(0)",
+		"x = _helper(y)", "const K := 37", "var t2 := s_x.size()", "var w := int(cfg.map.width)", "if (a and b) or not (c):",
+		"var f2 := func(v): return v",
+	])
+	var noisy := PackedStringArray()
+	for ln in ok_lines:
+		var hit := _scan_sim_lines("probe.gd", PackedStringArray([ln]), probe_defined)
+		if not hit.magic.is_empty() or not hit.calls.is_empty():
+			noisy.append("%s → %s" % [ln, str(hit)])
+	check(noisy.is_empty(), "허용 꼴은 잡지 않음(잘못 잡은 줄: %s)" % " | ".join(noisy))
+	check(_scan_sim_lines(RNG_FILE, PackedStringArray(["var _r := RandomNumberGenerator.new()"]), {}).calls.is_empty(),
+			"RandomNumberGenerator 는 %s 안에서만 받음" % RNG_FILE)
+	# 실제 시뮬레이션 코드
 	var files := DirAccess.get_files_at(SIM_DIR)
 	check(files.size() >= 8, "시뮬레이션 파일을 찾음 (%d)" % files.size())
-	var num_re := RegEx.create_from_string("(?<![A-Za-z_0-9.])(0x[0-9a-fA-F]+|\\d+\\.\\d+(e-?\\d+)?|\\d+(e-?\\d+)?)(?![A-Za-z_0-9])")
-	var fn_re := RegEx.create_from_string("(?<![A-Za-z_0-9.])(" + "|".join(FORBIDDEN_MATH) + ")\\s*\\(")
-	var magic: Array[String] = []
-	var forbidden: Array[String] = []
+	var sources := {}
+	var defined := {}
+	var def_re := RegEx.create_from_string("^\\s*(?:static\\s+)?func\\s+([A-Za-z_]\\w*)")
 	for f in files:
 		if not f.ends_with(".gd"):
 			continue
-		var lines := FileAccess.get_file_as_string(SIM_DIR.path_join(f)).split("\n")
-		for li in lines.size():
-			var code := _strip_line(lines[li])
-			if code.strip_edges() == "":
-				continue
-			for m in fn_re.search_all(code):
-				forbidden.append("%s:%d %s" % [f, li + 1, m.get_string()])
-			if MAGIC_EXEMPT.has(f) or code.strip_edges().begins_with("const "):
-				continue
-			for m in num_re.search_all(code):
-				if not MAGIC_ALLOWED.has(m.get_string()):
-					magic.append("%s:%d %s" % [f, li + 1, m.get_string()])
+		sources[f] = FileAccess.get_file_as_string(SIM_DIR.path_join(f)).split("\n")
+		for ln: String in sources[f]:
+			var m := def_re.search(ln)
+			if m != null:
+				defined[m.get_string(1)] = true
+	var magic: Array[String] = []
+	var calls: Array[String] = []
+	for f: String in sources:
+		var hit := _scan_sim_lines(f, sources[f], defined)
+		calls.append_array(hit.calls)
+		if not MAGIC_EXEMPT.has(f):
+			magic.append_array(hit.magic)
 	check(magic.is_empty(), "시뮬레이션 코드에 매직 넘버 없음: " + ", ".join(magic))
-	check(forbidden.is_empty(), "플랫폼마다 다를 수 있는 수학 함수 없음: " + ", ".join(forbidden))
+	check(calls.is_empty(), "시뮬레이션 코드의 함수 호출·연산자가 허용 목록 안(플랫폼마다 다를 수 있는 수학·전역 난수 없음): " + ", ".join(calls))
+	done()
+
+
+## 정적 검사 한 파일분: {magic = [...], calls = [...]}. magic 은 MAGIC_ALLOWED 밖의 수(const 줄 제외), calls 는 허용 목록 밖의
+## 호출(전역·메서드)·거듭제곱 연산자(**)·SimRng 밖의 RandomNumberGenerator. defined = 시뮬레이션 파일에 정의된 함수 이름(허용).
+func _scan_sim_lines(fname: String, lines: PackedStringArray, defined: Dictionary) -> Dictionary:
+	var num_re := RegEx.create_from_string(NUM_PATTERN)
+	var call_re := RegEx.create_from_string("(?<![A-Za-z_0-9])([A-Za-z_][A-Za-z_0-9]*)\\s*\\(")
+	var magic: Array[String] = []
+	var calls: Array[String] = []
+	for li in lines.size():
+		var code := _strip_line(lines[li])
+		if code.strip_edges() == "":
+			continue
+		var at := "%s:%d " % [fname, li + 1]
+		if code.contains("**"):
+			calls.append(at + "**")
+		if fname != RNG_FILE and code.contains("RandomNumberGenerator"):
+			calls.append(at + "RandomNumberGenerator")
+		for m in call_re.search_all(code):
+			var name := m.get_string(1)
+			var k := m.get_start(1) - 1
+			while k >= 0 and code[k] == " ":
+				k -= 1
+			var is_method := k >= 0 and code[k] == "."
+			if defined.has(name) or GD_KEYWORDS.has(name):
+				continue
+			if is_method and not ALLOWED_METHODS.has(name):
+				calls.append(at + "." + name + "(")
+			elif not is_method and not ALLOWED_GLOBAL_CALLS.has(name):
+				calls.append(at + name + "(")
+		if code.strip_edges().begins_with("const "):
+			continue
+		for m in num_re.search_all(code):
+			if not MAGIC_ALLOWED.has(m.get_string()):
+				magic.append(at + m.get_string())
+	return {magic = magic, calls = calls}
 
 
 ## 주석·문자열을 지운 코드 한 줄.
@@ -275,6 +408,7 @@ func test_rng() -> void:
 	check(absf(mean) < 0.03 and absf(var_ - 1.0) < 0.05, "정규 근사 평균 %.3f 분산 %.3f" % [mean, var_])
 	check(lo >= 0.0 and hi < 1.0, "균등 범위 [0,1)")
 	check(below_ok and a.below(0) == 0, "below 범위")
+	done()
 
 
 func test_terrain() -> void:
@@ -321,6 +455,7 @@ func test_terrain() -> void:
 	var ref := _components_ref(raw, w, h)
 	check(got.sizes.size() > 50 and got.labels == ref.labels and got.sizes == ref.sizes,
 			"연결 요소 번호·크기 = 요소마다 거리장으로 센 값(잘게 갈라진 지형, 요소 %d개)" % got.sizes.size())
+	done()
 
 
 ## 연결 요소의 참값: 요소마다 거리장을 새로 만든다(예전 SimGrid.components — 느리지만 뻔한 계산).
@@ -367,6 +502,20 @@ func test_brain_layout_forward() -> void:
 		psum += p
 	check(is_equal_approx(psum, 1.0) and r.probs[3] > r.probs[0], "확률 합 1, 먹기 확률이 가장 큼")
 	check(SimBrain.softsign(0.0) == 0.0 and SimBrain.softsign(-1.0) == -0.5, "softsign")
+	# 기억 2(I12): 은닉 0 이 기억 입력 0(번호 12)만 2.0 으로 받음 → 2/3, 기억 출력 0(번호 8)이 은닉 0 을 3.0 으로 받음 → 2.0.
+	# 행동은 기본 출력 8개에서만 고름(기억 출력이 가장 커도 행동이 아님)
+	var gm := PackedFloat32Array()
+	gm.resize(L2.genes)
+	gm[SimBrain.BASE_INPUTS] = 2.0
+	gm[L2.w2_offset + SimBrain.BASE_OUTPUTS * L2.n_hid + 0] = 3.0
+	var im := PackedFloat64Array()
+	im.resize(L2.n_in)
+	im[SimBrain.BASE_INPUTS] = 1.0
+	var rm := SimBrain.forward(L2, gm, 0, im, 4)
+	check(is_equal_approx(rm.hidden[0], 2.0 / 3.0) and is_equal_approx(rm.out[SimBrain.BASE_OUTPUTS], 2.0) and rm.out[SimBrain.BASE_OUTPUTS + 1] == 0.0
+			and rm.action == SimBrain.ACT_FORWARD and rm.probs.size() == SimBrain.BASE_OUTPUTS,
+			"기억 2: 기억 입력 → 은닉 → 기억 출력 값(%.3f), 행동은 기본 출력에서만" % rm.out[SimBrain.BASE_OUTPUTS])
+	done()
 
 
 func test_brain_genetics() -> void:
@@ -379,31 +528,34 @@ func test_brain_genetics() -> void:
 	var t: int = L.trait_offset
 	check(a[t + SimBrain.TRAIT_SIZE] == float(cfg.traits.size_init) and a[t + SimBrain.TRAIT_SENSE] == float(cfg.traits.sense_init), "초기 특성 = 초기값")
 	check(SimBrain.crossover(L, a, a, rng) == a, "같은 부모 교차 = 그대로")
-	# 덩어리 보존: a = +1, b = -1 이면 은닉 j 의 들어오는·나가는 가중치 부호가 같아야 한다
-	var pa := PackedFloat32Array()
-	pa.resize(L.genes)
-	pa.fill(1.0)
-	var pb := PackedFloat32Array()
-	pb.resize(L.genes)
-	pb.fill(-1.0)
-	var mixed_any := false
-	var block_ok := true
-	for trial in 20:
-		var c := SimBrain.crossover(L, pa, pb, rng)
-		var signs := {}
-		for j in L.n_hid:
-			var sgn: float = c[j * L.n_in]
-			signs[sgn] = true
-			for i in L.n_in:
-				if c[j * L.n_in + i] != sgn:
-					block_ok = false
-			for q in L.n_out:
-				if c[L.w2_offset + q * L.n_hid + j] != sgn:
-					block_ok = false
-		if signs.size() == 2:
-			mixed_any = true
-	check(block_ok, "교차가 뉴런 덩어리를 깨지 않음")
-	check(mixed_any, "교차가 두 부모를 섞음")
+	# 덩어리 보존: a = +1, b = -1 이면 은닉 j 의 들어오는·나가는 가중치 부호가 같아야 한다 — 기억 0 과 2(기억 입력·출력 가중치도
+	# 그 은닉 뉴런의 덩어리, I12)
+	for mem: int in [0, 2]:
+		var Lm := SimBrain.layout(cfg_with({"brain.memory_units": mem}))
+		var pa := PackedFloat32Array()
+		pa.resize(Lm.genes)
+		pa.fill(1.0)
+		var pb := PackedFloat32Array()
+		pb.resize(Lm.genes)
+		pb.fill(-1.0)
+		var mixed_any := false
+		var block_ok := true
+		for trial in 20:
+			var c := SimBrain.crossover(Lm, pa, pb, rng)
+			var signs := {}
+			for j in Lm.n_hid:
+				var sgn: float = c[j * Lm.n_in]
+				signs[sgn] = true
+				for i in Lm.n_in:
+					if c[j * Lm.n_in + i] != sgn:
+						block_ok = false
+				for q in Lm.n_out:
+					if c[Lm.w2_offset + q * Lm.n_hid + j] != sgn:
+						block_ok = false
+			if signs.size() == 2:
+				mixed_any = true
+		check(block_ok, "기억 %d: 교차가 뉴런 덩어리를 깨지 않음(입력 %d·출력 %d)" % [mem, Lm.n_in, Lm.n_out])
+		check(mixed_any, "기억 %d: 교차가 두 부모를 섞음" % mem)
 	var cfg0 := cfg_with({"mutation.rate": 0.0})
 	var g0 := a.duplicate()
 	check(SimBrain.mutate(cfg0, L, g0, rng) == 0 and g0 == a, "돌연변이율 0 → 바뀌지 않음")
@@ -423,6 +575,7 @@ func test_brain_genetics() -> void:
 	# float32 반올림: 저장 배열 값은 float32 로 정확히 표현됨
 	var f32 := PackedFloat32Array([g1[5]])
 	check(f32[0] == g1[5], "유전자 값이 float32")
+	done()
 
 
 func test_policy() -> void:
@@ -431,38 +584,70 @@ func test_policy() -> void:
 	check(SimBrain.policy_weight(-1e9, 4) >= 0.0, "가중치는 음수가 아님")
 	var o := PackedFloat64Array([1.0, 3.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 	check(SimBrain.argmax_action(o) == 1, "같은 최댓값이면 작은 번호")
+	done()
 
 
-## SimWorld._think 의 펼친 계산이 SimBrain.forward·_quad 와 같은지.
+## SimWorld._think 의 펼친 계산이 SimBrain.forward·_quad 와 같은지 — 기억 0 과 2 세계 모두(I12). 기억 2 세계에서는 되먹임도:
+## 판단 전 기억 값(s_mem)이 그대로 입력 BASE_INPUTS + k 로 들어가고, 판단 뒤 s_mem = softsign(기억 출력 k).
 func test_world_think_matches() -> void:
-	var wd := world({}, 4)
-	wd.step_n(30)
-	var ok_out := true
-	var ok_quad := true
-	for i in mini(wd.population(), 60):
-		var x := wd.s_x[i]
-		var y := wd.s_y[i]
-		var hd := wd.s_head[i]
-		wd._think(i, x, y, y * wd.w + x, hd, wd.s_emax[i])
-		var r := SimBrain.forward(wd.L, wd.s_genome, i * wd._G, wd._in, wd._sharpness)
-		for q in wd._n_out:
-			if r.out[q] != wd._out[q]:
-				ok_out = false
-		var rr := wd.s_sense[i]
-		if wd.light < float(wd.cfg.time.night_light_threshold):
-			rr = maxi(1, int(float(rr) * float(wd.cfg.sense.night_factor)))
-		if wd._quad(x, y, hd, 1, rr, -rr, rr) != wd._in[SimBrain.IN_FOOD_AHEAD] or wd._quad(x, y, hd, -rr, rr, -rr, -1) != wd._in[SimBrain.IN_FOOD_LEFT] \
-				or wd._quad(x, y, hd, -rr, rr, 1, rr) != wd._in[SimBrain.IN_FOOD_RIGHT]:
-			ok_quad = false
-	check(ok_out, "세계 안 순전파 = SimBrain.forward (비트 단위)")
-	check(ok_quad, "펼친 영역 감지 = _quad (네 방향)")
-	# 정책 확률: 같은 출력이면 세계의 뽑기 가중치와 SimBrain.policy_weight 가 같다
-	wd._pick_action()
-	var same := true
-	for q in SimBrain.BASE_OUTPUTS:
-		if wd._wts[q] != SimBrain.policy_weight(wd._out[q], wd._sharpness):
-			same = false
-	check(same, "펼친 정책 가중치 = policy_weight")
+	for mem: int in [0, 2]:
+		var wd := world({"brain.memory_units": mem}, 4)
+		wd.step_n(30)
+		var ok_out := true
+		var ok_quad := true
+		var feed_bad := 0
+		var back_bad := 0
+		for i in mini(wd.population(), 60):
+			var x := wd.s_x[i]
+			var y := wd.s_y[i]
+			var hd := wd.s_head[i]
+			# 개체마다 다른 기억 값을 넣어 둠(그 값이 입력으로 들어가는지)
+			var before := PackedFloat64Array()
+			for k in mem:
+				var v := (0.3 + 0.2 * k) * (1.0 if i % 2 == 0 else -1.0)
+				wd.s_mem[i * mem + k] = v
+				before.append(v)
+			wd._think(i, x, y, y * wd.w + x, hd, wd.s_emax[i])
+			for k in mem:
+				if wd._in[SimBrain.BASE_INPUTS + k] != before[k]:
+					feed_bad += 1
+				if wd.s_mem[i * mem + k] != SimBrain.softsign(wd._out[SimBrain.BASE_OUTPUTS + k]):
+					back_bad += 1
+			var r := SimBrain.forward(wd.L, wd.s_genome, i * wd._G, wd._in, wd._sharpness)
+			for q in wd._n_out:
+				if r.out[q] != wd._out[q]:
+					ok_out = false
+			var rr := wd.s_sense[i]
+			if wd.light < float(wd.cfg.time.night_light_threshold):
+				rr = maxi(1, int(float(rr) * float(wd.cfg.sense.night_factor)))
+			if wd._quad(x, y, hd, 1, rr, -rr, rr) != wd._in[SimBrain.IN_FOOD_AHEAD] or wd._quad(x, y, hd, -rr, rr, -rr, -1) != wd._in[SimBrain.IN_FOOD_LEFT] \
+					or wd._quad(x, y, hd, -rr, rr, 1, rr) != wd._in[SimBrain.IN_FOOD_RIGHT]:
+				ok_quad = false
+		check(wd._n_out == SimBrain.BASE_OUTPUTS + mem and ok_out, "기억 %d: 세계 안 순전파 = SimBrain.forward (비트 단위, 출력 %d개)" % [mem, wd._n_out])
+		check(ok_quad, "기억 %d: 펼친 영역 감지 = _quad (네 방향)" % mem)
+		if mem > 0:
+			check(feed_bad == 0, "기억 %d: 판단 전 기억 값이 입력 %d~%d 로 들어감(틀린 값 %d)" % [mem, SimBrain.BASE_INPUTS, SimBrain.BASE_INPUTS + mem - 1, feed_bad])
+			check(back_bad == 0, "기억 %d: 판단 뒤 기억 값 = softsign(기억 출력)(틀린 값 %d)" % [mem, back_bad])
+		# 정책 확률: 같은 출력이면 세계의 뽑기 가중치와 SimBrain.policy_weight 가 같다
+		wd._pick_action()
+		var same := true
+		for q in SimBrain.BASE_OUTPUTS:
+			if wd._wts[q] != SimBrain.policy_weight(wd._out[q], wd._sharpness):
+				same = false
+		check(same, "기억 %d: 펼친 정책 가중치 = policy_weight" % mem)
+	# 되먹임이 실제 흐름에서 다음 틱 판단을 바꿈: 같은 세계 둘 중 하나만 기억 값을 바꾸면 그 개체의 다음 판단 출력이 달라짐
+	var wa := world({"brain.memory_units": 2}, 4)
+	wa.step_n(30)
+	var wb: SimWorld = SimSnapshot.from_text(SimSnapshot.to_text(wa)).world
+	var differ := 0
+	for i in mini(wa.population(), 40):
+		wb.s_mem[i * 2] = -wa.s_mem[i * 2] if wa.s_mem[i * 2] != 0.0 else 0.5
+		wa._think(i, wa.s_x[i], wa.s_y[i], wa.s_y[i] * wa.w + wa.s_x[i], wa.s_head[i], wa.s_emax[i])
+		wb._think(i, wb.s_x[i], wb.s_y[i], wb.s_y[i] * wb.w + wb.s_x[i], wb.s_head[i], wb.s_emax[i])
+		if wa._out != wb._out:
+			differ += 1
+	check(differ > 0, "기억 2: 기억 값만 다른 두 세계의 판단 출력이 다름(%d마리)" % differ)
+	done()
 
 
 # ───────────────────────── 생태 ─────────────────────────
@@ -506,6 +691,7 @@ func test_plants_light_resources() -> void:
 	var wns := empty_world({"time.season_days": 0})
 	wns._compute_time()
 	check(wns.season == -1 and wns.season_growth == 1.0, "계절 끔")
+	done()
 
 
 func test_energy_ledger() -> void:
@@ -519,6 +705,35 @@ func test_energy_ledger() -> void:
 	# GDScript 의 % 형식에는 지수 표기(%e)가 없다 → String.num_scientific
 	check(worst < 1e-6, "에너지 장부 오차 %s (없는 데서 에너지가 생기지 않음)" % String.num_scientific(worst))
 	check(wd.total_births > 0 and wd.total_deaths > 0, "600틱 동안 출생·사망이 있음")
+	# 저장분·운반분 먹기도 장부에(I32): 위 세계(기본·씨앗 9·600틱)는 채집 전이라 그 길을 지나지 않음
+	var we := empty_world()
+	var p := grass_spot(we)
+	var c := p.y * we.w + p.x
+	we.store_tiles.append(c)
+	we.store_food.append(50.0)
+	we._rebuild_stores()
+	we.stage = SimWorld.STAGE_STORE
+	var i := we.index_of_id(add_slime(we, p, 0.2))
+	var e0 := we.s_energy[i]
+	var l0 := we.led_eaten
+	we._eat(i, c, we.s_size[i], we.s_emax[i])
+	check(we.store_food[0] < 50.0 and we.s_energy[i] > e0 and absf((we.led_eaten - l0) - (we.s_energy[i] - e0)) < 1e-12, "저장고 칸에서 먹은 에너지 %.3f 가 장부에 같은 만큼" % (we.s_energy[i] - e0))
+	var q := c + 1
+	we.food[q] = 0.0
+	we.dropped[q] = 0.0
+	we.s_carry[i] = 2.0
+	e0 = we.s_energy[i]
+	l0 = we.led_eaten
+	we._eat(i, q, we.s_size[i], we.s_emax[i])
+	check(we.s_carry[i] < 2.0 and we.s_energy[i] > e0 and absf((we.led_eaten - l0) - (we.s_energy[i] - e0)) < 1e-12, "빈 칸에서 운반분을 먹은 에너지 %.3f 가 장부에 같은 만큼" % (we.s_energy[i] - e0))
+	check(absf(we.total_energy() - we.ledger_expected()) < 1e-9, "손으로 놓은 세계의 장부 오차 0")
+	# 밭 단계 실제 흐름: 저장고·운반·밭이 있는 세계를 매 틱 잼
+	var fr: Dictionary = farm_runs()[0]
+	var fw: SimWorld = fr.world
+	check(fw.stage == SimWorld.STAGE_FARM and fr.max_carry > 0.0 and fr.max_stored > 0.0 and fr.worst_ledger < 1e-6,
+			"%s·씨앗 %d·%d틱(농사, 운반 최대 %.0f·저장 최대 %.0f): 매 틱 장부 오차 %s" % [FARM_RUN_PRESET, FARM_RUN_SEED, FARM_RUN_TICKS,
+			fr.max_carry, fr.max_stored, String.num_scientific(fr.worst_ledger)])
+	done()
 
 
 func test_death_causes() -> void:
@@ -534,6 +749,7 @@ func test_death_causes() -> void:
 	check(wd.lin_cause[b] == SimWorld.CAUSE_OLD, "최대 나이 → 늙어 죽음")
 	check(wd.population() == 0 and wd.count_grid[p.y * wd.w + p.x] == 0, "죽은 개체가 칸 수에서 빠짐")
 	check(wd.is_extinct() and wd.extinct_tick == 1, "멸종 기록")
+	done()
 
 
 func test_reproduction() -> void:
@@ -582,6 +798,7 @@ func test_reproduction() -> void:
 	w4.s_dead.fill(0)
 	w4._reproduce()
 	check(w4.population() == 2 and w4.lin_pb[1] == SimWorld.NO_PARENT, "혼자 번식 켜면 분열")
+	done()
 
 
 func test_population_cap() -> void:
@@ -592,6 +809,7 @@ func test_population_cap() -> void:
 		if wd.population() > 150:
 			over = true
 	check(not over, "개체 수가 상한을 넘지 않음 (최고 %d)" % wd.peak_population)
+	done()
 
 
 # ───────────────────────── 발견·건물 ─────────────────────────
@@ -624,6 +842,7 @@ func test_discovery_forage() -> void:
 	check(wd.s_carry[i] > 0.0, "발견 후 줍기는 운반량을 늘림")
 	var events := wd.drain_events()
 	check(events.size() >= 1 and wd.drain_events().is_empty(), "화면용 사건은 한 번만 꺼내짐")
+	done()
 
 
 func test_discovery_store() -> void:
@@ -651,6 +870,7 @@ func test_discovery_store() -> void:
 	wd.s_carry[i] = thr * 1.1
 	wd._drop(i, c2)
 	check(wd.store_tiles.size() == 1, "최소 간격 안에는 저장고를 더 짓지 않음")
+	done()
 
 
 func test_storehouse_rules() -> void:
@@ -691,6 +911,7 @@ func test_storehouse_rules() -> void:
 	for k in int(wd.cfg.dropped.spoil_ticks) + 1:
 		wd._spoil_dropped()
 	check(wd.dropped[c + 1] == 0.0 and wd.drop_listed[c + 1] == 0, "바닥 먹이는 spoil_ticks 뒤 사라짐")
+	done()
 
 
 func test_farm_rules() -> void:
@@ -739,6 +960,7 @@ func test_farm_rules() -> void:
 	for k in int(w2.cfg.dropped.spoil_ticks) + 1:
 		w2._spoil_dropped()
 	check(w2.farm_sprouts == 1 and w2.base_fert[qc + 1] > f0, "저장고 근처 싹 1번, 비옥도 증가")
+	done()
 
 
 # ───────────────────────── 결정성·저장 ─────────────────────────
@@ -753,6 +975,50 @@ func run_hash(seed_value: int, ticks: int, sets: Dictionary = {}) -> Array:
 	return [wd.history_hash, rec.timeseries_csv(), wd]
 
 
+## 밭 단계 기준 실행(I09·I10·I32). demo_fast·씨앗 2 는 263틱에 농사를 열어 FARM_RUN_SNAP(600)틱에 밭 35곳·저장고 4개이고,
+## 그 뒤 farm.abandon_ticks(300) 넘게 더 돌며 밭을 심고 잃는다(600 ~ 1,000틱 버려짐 사건 20번 남짓). 같은 설정을 두 번 돌린 세계
+## (결정성)·600틱 스냅숏(왕복)·매 틱 장부 오차를 한 번에 만들고 여러 검사가 읽기만 한다(규칙 검사 시간을 아끼려고 — 약 8초).
+## 예전 결정성·왕복·장부 검사는 채집·저장 단계까지만 돌아 밭 규칙(심기·밭 성장·버려짐)과 farm_visit 를 거치지 않았다.
+const FARM_RUN_PRESET := "demo_fast"
+const FARM_RUN_SEED := 2
+const FARM_RUN_SNAP := 600
+const FARM_RUN_TICKS := 1000
+var _farm_runs: Array = []
+
+
+## [첫 실행, 둘째 실행] — 각각 {world, csv, snap(FARM_RUN_SNAP 틱 스냅숏 글), worst_ledger, max_carry, max_stored}(장부·운반·저장은 첫 실행만 잼).
+func farm_runs() -> Array:
+	if not _farm_runs.is_empty():
+		return _farm_runs
+	for k in 2:
+		var wd := world({}, FARM_RUN_SEED, FARM_RUN_PRESET)
+		var rec := SimRecorder.new()
+		var run := {snap = "", worst_ledger = 0.0, max_carry = 0.0, max_stored = 0.0}
+		while wd.tick < FARM_RUN_TICKS:
+			wd.step()
+			if wd.tick % int(wd.cfg.record.every) == 0:
+				rec.record(wd)
+			if k == 0:
+				run.worst_ledger = maxf(run.worst_ledger, absf(wd.total_energy() - wd.ledger_expected()))
+				run.max_carry = maxf(run.max_carry, wd.sum_of(wd.s_carry))
+				run.max_stored = maxf(run.max_stored, wd.sum_of(wd.store_food))
+			if wd.tick == FARM_RUN_SNAP:
+				run.snap = SimSnapshot.to_text(wd)
+		run.world = wd
+		run.csv = rec.timeseries_csv()
+		_farm_runs.append(run)
+	return _farm_runs
+
+
+## 연대기에서 kind 사건의 수(after 틱 뒤의 것만).
+static func count_events(wd: SimWorld, kind: String, after: int = -1) -> int:
+	var n := 0
+	for e in wd.chronicle:
+		if str(e.kind) == kind and int(e.tick) > after:
+			n += 1
+	return n
+
+
 func test_determinism() -> void:
 	var a := run_hash(11, 1500)
 	var b := run_hash(11, 1500)
@@ -765,12 +1031,23 @@ func test_determinism() -> void:
 	check(wa.s_genome == wb.s_genome and wa.lin_gen == wb.lin_gen, "같은 씨앗 → 같은 유전체·계통")
 	var d := run_hash(11, 1500, {"mutation.rate": 0.1})
 	check(a[0] != d[0], "파라미터가 다르면 다른 해시")
+	# 밭 단계(I10): 기본·씨앗 11 은 1,500틱에도 채집 단계라 심기·밭 성장·버려짐을 거치지 않음 — 밭을 심고 잃는 세계를 두 번
+	var fr := farm_runs()
+	var fa: SimWorld = fr[0].world
+	var fb: SimWorld = fr[1].world
+	var lost := count_events(fa, "farm_lost")
+	check(fa.stage == SimWorld.STAGE_FARM and fa.first_farm_tick >= 0 and fa.farms.size() > 0 and lost > 0,
+			"%s·씨앗 %d·%d틱: 농사 단계에서 밭을 심고 잃음(첫 밭 틱 %d, 밭 %d곳, 버려짐 사건 %d번)" % [FARM_RUN_PRESET, FARM_RUN_SEED,
+			FARM_RUN_TICKS, fa.first_farm_tick, fa.farms.size(), lost])
+	check(fa.history_hash == fb.history_hash and fr[0].csv == fr[1].csv, "밭 단계: 같은 씨앗 → 같은 역사 해시·시계열 CSV")
+	check(SimSnapshot.to_text(fa) == SimSnapshot.to_text(fb), "밭 단계: 같은 씨앗 → 같은 전체 상태(밭·farm_visit·연대기까지)")
+	done()
 
 
 func test_snapshot_roundtrip() -> void:
 	var wd := world({}, 21)
 	wd.step_n(700)
-	# 저장 발견 상태까지 포함되도록 저장고·밭을 하나씩 만든다
+	# 저장 단계(씨앗 21 은 338틱에 저장 발견)에 손으로 저장고를 하나 더 만든다 — 밭은 아래 밭 단계 왕복에서
 	var p := grass_spot(wd)
 	wd.store_tiles.append(p.y * wd.w + p.x)
 	wd.store_food.append(12.5)
@@ -779,6 +1056,7 @@ func test_snapshot_roundtrip() -> void:
 	var r := SimSnapshot.from_text(text)
 	check(r.error == "", "스냅숏 복원: " + str(r.error))
 	if r.world == null:
+		done()
 		return
 	var w2: SimWorld = r.world
 	check(SimSnapshot.to_text(w2) == text, "복원 → 다시 직렬화가 같은 글자")
@@ -794,7 +1072,37 @@ func test_snapshot_roundtrip() -> void:
 	if rm.world != null:
 		wm.step_n(100)
 		rm.world.step_n(100)
-		check(wm.history_hash == rm.world.history_hash, "기억 2 왕복 후 같은 해시")
+		check(wm.history_hash == rm.world.history_hash and SimSnapshot.to_text(wm) == SimSnapshot.to_text(rm.world), "기억 2 왕복 후 같은 해시·전체 상태")
+	# 밭 단계 왕복(I09): 600틱(밭 35곳) 스냅숏에서 이어 돌린 세계 = 끊김 없이 돌린 세계(farm.abandon_ticks 보다 길게 — 왕복한 farm_visit 로
+	# 밭을 잃음). 예전엔 저장 단계까지만 왕복해 farm_visit 를 저장·복원에서 함께 빼도 통과했다.
+	var fr := farm_runs()
+	var fa: SimWorld = fr[0].world
+	var rf := SimSnapshot.from_text(fr[0].snap)
+	check(rf.error == "" and rf.world != null and rf.world.tick == FARM_RUN_SNAP and rf.world.farms.size() > 0,
+			"밭 단계 스냅숏 복원(틱 %d, 밭 %d곳): %s" % [FARM_RUN_SNAP, rf.world.farms.size() if rf.world != null else -1, str(rf.error)])
+	if rf.world != null:
+		var wf: SimWorld = rf.world
+		var rec := SimRecorder.new()
+		while wf.tick < FARM_RUN_TICKS:
+			wf.step()
+			if wf.tick % int(wf.cfg.record.every) == 0:
+				rec.record(wf)
+		var lost := count_events(fa, "farm_lost", FARM_RUN_SNAP)
+		check(lost > 0 and FARM_RUN_TICKS - FARM_RUN_SNAP > int(fa.cfg.farm.abandon_ticks), "왕복 뒤 구간(%d틱 > 버려짐 %d틱)에 밭을 잃음(%d번)" % [
+				FARM_RUN_TICKS - FARM_RUN_SNAP, int(fa.cfg.farm.abandon_ticks), lost])
+		check(wf.history_hash == fa.history_hash and SimSnapshot.to_text(wf) == SimSnapshot.to_text(fa),
+				"밭 단계 스냅숏에서 %d틱 이어 돌린 해시·전체 상태 = 끊김 없이 돌린 것(밭 %d곳 / %d곳)" % [FARM_RUN_TICKS - FARM_RUN_SNAP, wf.farms.size(), fa.farms.size()])
+	# 구조(I09): 세계의 모든 상태 변수가 왕복 뒤 같음 — 저장·복원 양쪽에서 함께 빠진 변수는 '다시 직렬화한 글이 같음'으로는 못 잡음.
+	# 틱 안에서만 쓰는 계산 자리(SNAPSHOT_SCRATCH)만 빼고, 저장하지 않고 다시 만드는 값(s_size·store_dist·count_grid 등)도 견줌
+	var rt: SimWorld = SimSnapshot.from_text(SimSnapshot.to_text(fa)).world
+	var vars := world_state_vars(fa)
+	check(vars.size() > 60 and rt != null and world_vars_differ(fa, rt).is_empty(),
+			"밭 단계 세계(%d틱)의 상태 변수 %d개가 모두 왕복(다른 변수: %s)" % [fa.tick, vars.size(), ", ".join(world_vars_differ(fa, rt)) if rt != null else "복원 실패"])
+	var missing: Array[String] = []
+	for name in SNAPSHOT_SCRATCH:
+		if not vars.has(name) and not world_state_vars(fa, true).has(name):
+			missing.append(name)
+	check(missing.is_empty(), "왕복에서 빼는 계산 자리 이름이 모두 SimWorld 변수(낡은 이름: %s)" % ", ".join(missing))
 	# 거부
 	var d = JSON.parse_string(text)
 	d.version = 99
@@ -810,6 +1118,38 @@ func test_snapshot_roundtrip() -> void:
 	check(SimSnapshot.from_dict(d).error != "", "다른 형식 거부")
 	check(SimSnapshot.from_text("{깨짐").error != "", "깨진 JSON 거부")
 	check(SimSnapshot.hex_f64(SimSnapshot.f64_hex(0.1 + 0.2)) == 0.1 + 0.2 and SimSnapshot.hex_f64(SimSnapshot.f64_hex(1e-300)) == 1e-300, "실수 비트 왕복")
+	done()
+
+
+## 세계 변수 가운데 스냅숏에 담지 않는 것: 틱 안에서만 쓰는 계산 자리(다음 판단·번식·행동이 처음부터 다시 채움)와 화면 알림
+## 대기열(_pending_events — 연대기는 저장되고, 알림은 연 뒤 새 사건부터). 나머지는 모두 왕복 뒤 값이 같아야 한다(test_snapshot_roundtrip).
+const SNAPSHOT_SCRATCH: Array[String] = ["_in", "_hid", "_wts", "_out", "_bucket_head", "_bucket_next", "_mated", "csat", "_pending_events"]
+
+
+## SimWorld 스크립트 변수 이름들(with_scratch 가 거짓이면 SNAPSHOT_SCRATCH 를 뺌).
+static func world_state_vars(wd: SimWorld, with_scratch: bool = false) -> Array[String]:
+	var out: Array[String] = []
+	for p in wd.get_script().get_script_property_list():
+		if int(p.usage) & PROPERTY_USAGE_SCRIPT_VARIABLE and (with_scratch or not SNAPSHOT_SCRATCH.has(str(p.name))):
+			out.append(str(p.name))
+	return out
+
+
+## 두 세계에서 값이 다른 상태 변수 이름들(난수 생성기는 상태 글, 사전·배열은 정수·실수를 같게 보는 SimConfig.deep_equal 이나
+## JSON 글 — 연대기의 평균 세대는 JSON 글로 왕복하므로 글이 같으면 같음).
+static func world_vars_differ(a: SimWorld, b: SimWorld) -> Array[String]:
+	var out: Array[String] = []
+	for name in world_state_vars(a):
+		var va = a.get(name)
+		var vb = b.get(name)
+		var same := false
+		if va is SimRng and vb is SimRng:
+			same = va.get_state_string() == vb.get_state_string()
+		else:
+			same = SimConfig.deep_equal(va, vb) or (typeof(va) == TYPE_ARRAY and JSON.stringify(va) == JSON.stringify(vb))
+		if not same:
+			out.append(name)
+	return out
 
 
 func test_snapshot_files() -> void:
@@ -823,7 +1163,7 @@ func test_snapshot_files() -> void:
 	wd.step_n(100)
 	check(SimSnapshot.save_file(wd, path) == "" and FileAccess.file_exists(path + ".bak"), "두 번째 저장 → 직전 정상본 .bak")
 	var l1 := SimSnapshot.load_file(path)
-	check(l1.status == "loaded" and l1.world.history_hash == wd.history_hash, "불러오기")
+	check(l1.status == "loaded" and l1.world != null and SimSnapshot.to_text(l1.world) == SimSnapshot.to_text(wd), "불러오기(전체 상태가 같음)")
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	f.store_string("{\"format\": \"slime-lab-snapshot\", 깨진 파일")
 	f.close()
@@ -835,6 +1175,7 @@ func test_snapshot_files() -> void:
 	check(l3.status == "failed" and l3.world == null, "백업도 없으면 실패를 알림")
 	remove_tree(dir)
 	check(not DirAccess.dir_exists_absolute(dir), "끝나면 임시 폴더를 지움(%s)" % dir)
+	done()
 
 
 func test_runner() -> void:
@@ -866,8 +1207,12 @@ func test_runner() -> void:
 	check(runner.run(bad_cfg) == 2, "설정 오류 코드 2")
 	remove_tree(dir)
 	check(not DirAccess.dir_exists_absolute(dir), "끝나면 임시 폴더를 지움(숨은 .gdignore 까지, %s)" % dir)
+	done()
 
 
+## 자원 0 → 멸종, 그 원인은 굶주림(I35). 시점만 보면 번식이 일찍 멈춘 세계는 굶주림 규칙이 없어도 늙어서 그 안에 사라진다
+## (굶어 죽지 않게 한 변이: 234틱 멸종·굶주림 0·노화 250). 그래서 죽음의 대부분과 마지막 죽음이 굶주림인지도 본다
+## (씨앗 1: 221틱 멸종, 굶주림 193·노화 73 — 노화는 처음부터 나이 든 개체).
 func test_extinction_no_resources() -> void:
 	var wd := world({}, 1, "no_resources")
 	var limit := int(wd.cfg.life.max_age) + int(wd.cfg.life.max_age_jitter) + 10
@@ -875,6 +1220,19 @@ func test_extinction_no_resources() -> void:
 		wd.step()
 	check(wd.is_extinct(), "자원 0 → %d틱 안에 멸종 (t=%d)" % [limit, wd.tick])
 	check(wd.chronicle.size() > 0 and wd.chronicle[wd.chronicle.size() - 1].kind == "extinction", "연대기에 멸종 기록")
+	var starved := 0
+	var old := 0
+	var last_starved := 0
+	for id in wd.lin_cause.size():
+		if wd.lin_cause[id] == SimWorld.CAUSE_STARVED:
+			starved += 1
+			if wd.lin_death[id] == wd.extinct_tick - 1:
+				last_starved += 1
+		elif wd.lin_cause[id] == SimWorld.CAUSE_OLD:
+			old += 1
+	check(starved > old and last_starved > 0 and starved + old == wd.lin_cause.size(),
+			"자원 0 의 죽음은 대부분 굶주림, 마지막 틱의 죽음도 굶주림(굶주림 %d · 노화 %d, 마지막 틱 굶주림 %d)" % [starved, old, last_starved])
+	done()
 
 
 func test_memory_units() -> void:
@@ -888,24 +1246,57 @@ func test_memory_units() -> void:
 			check(false, "기억 값은 softsign 범위 (-1, 1)")
 	check(wd.s_mem.size() == wd.population() * 2, "기억 배열 길이 = 개체 × 2")
 	check(nonzero, "기억 값이 갱신됨")
+	done()
 
 
 func test_performance() -> void:
 	var wd := world({}, 2)
 	wd.step_n(800)
-	var t0 := Time.get_ticks_usec()
+	var g := PackedFloat32Array()
+	g.resize(PERF_REF_LEN)
+	var x := PackedFloat64Array()
+	x.resize(PERF_REF_LEN)
+	for k in PERF_REF_LEN:
+		g[k] = float(k % 7) * 0.1
+		x[k] = float(k % 5) * 0.2
+	# 기준 일과 세계 진행을 번갈아(부하가 한쪽에만 걸리지 않게) 400틱
+	var ticks_per_round := 50
+	var ref_us := 0
+	var step_us := 0
 	var st := 0
-	for k in 400:
-		st += wd.population()
-		wd.step()
-	var us := float(Time.get_ticks_usec() - t0) / float(maxi(st, 1))
-	print("  성능: 평균 개체 %.0f, 개체·틱당 %.1fµs, %.0f틱/초" % [float(st) / 400.0, us, 400.0 * 1e6 / float(Time.get_ticks_usec() - t0)])
-	check(us < PERF_TARGET_US * 2.0, "개체·틱당 %.1fµs < %.0fµs" % [us, PERF_TARGET_US * 2.0])
+	for r in PERF_ROUNDS:
+		ref_us += _perf_ref_chunk(g, x)
+		var t0 := Time.get_ticks_usec()
+		for k in ticks_per_round:
+			st += wd.population()
+			wd.step()
+		step_us += Time.get_ticks_usec() - t0
+	var ticks := PERF_ROUNDS * ticks_per_round
+	var us := float(step_us) / float(maxi(st, 1))
+	var op_us := float(ref_us) / float(PERF_ROUNDS * PERF_REF_REPS * PERF_REF_LEN)
+	var ratio := us / maxf(op_us, 1e-9)
+	print("  성능: 평균 개체 %.0f, 개체·틱당 %.1fµs, %.0f틱/초 (기준 일 %.4fµs — 개체·틱당 기준 일 %.0f번)" % [float(st) / float(ticks), us,
+			float(ticks) * 1e6 / float(maxi(step_us, 1)), op_us, ratio])
+	check(st > 0 and ratio < PERF_MAX_RATIO, "개체·틱당 비용 = 기준 일 %.0f번 < %.0f번(실제 시계 %.1fµs 는 기록만)" % [ratio, PERF_MAX_RATIO, us])
+	done()
+
+
+## 기준 일 한 덩어리(PERF_REF_REPS × PERF_REF_LEN 번 곱셈·덧셈 + softsign — 두뇌 순전파 모양)에 걸린 µs.
+func _perf_ref_chunk(g: PackedFloat32Array, x: PackedFloat64Array) -> int:
+	var t0 := Time.get_ticks_usec()
+	var s := 0.0
+	for r in PERF_REF_REPS:
+		for k in PERF_REF_LEN:
+			s += g[k] * x[k]
+		s = s / (1.0 + absf(s))
+	var us := Time.get_ticks_usec() - t0
+	return us if is_finite(s) else us + 1
 
 
 func test_farm_reachable() -> void:
 	if _skip_slow:
 		check(true, "느린 검사 건너뜀")
+		done()
 		return
 	# 연대기에서 채집 발견 사건의 평균 세대(-1 = 아직)
 	var forage_gen := func(w: SimWorld) -> float:
@@ -938,6 +1329,7 @@ func test_farm_reachable() -> void:
 	print("  농사 도달 시도: " + "; ".join(tried))
 	check(found != "", "평균 %d세대 안에 농사에 도달하는 예설정이 있음: %s" % [int(FARM_GENERATIONS), found])
 	if not FARM_PRESETS.has("fast_civ"):
+		done()
 		return
 	# fast_civ 자체가 목표대로(S15 의 "아무 예설정" 과 따로 — demo_fast 가 농사해도 이것은 실패)
 	check(fast1_tick >= 0 and fast1_gen < FARM_GENERATIONS, "fast_civ 씨앗 %d 이 평균 %d세대 안에 농사: %s" % [FARM_SEEDS[0],
@@ -959,6 +1351,7 @@ func test_farm_reachable() -> void:
 		if g < FAST_CIV_MIN_FORAGE_GEN:
 			all_late = false
 	check(all_late, "fast_civ 의 채집이 진화 도중에 열림(평균 세대 ≥ %.0f): %s" % [FAST_CIV_MIN_FORAGE_GEN, ", ".join(gens)])
+	done()
 
 
 ## 틱 사이(step 뒤·처음·스냅숏을 연 뒤)의 빛·계절은 언제나 지금 tick 을 뜻한다
@@ -990,6 +1383,7 @@ func test_time_after_step() -> void:
 	var r := SimSnapshot.from_text(SimSnapshot.to_text(w2))
 	var w3: SimWorld = r.world
 	check(w3 != null and w3.season == w2.season and w3.light == w2.light, "스냅숏을 연 세계도 같은 빛·계절")
+	done()
 
 
 ## drain_events() 가 돌려주는 사건은 연대기와 따로인 사본(받는 쪽이 고쳐 써도 연대기·기록이 그대로)
@@ -1002,10 +1396,12 @@ func test_event_copies() -> void:
 	var ev := wd.drain_events()
 	check(not ev.is_empty(), "사건이 생김(%d틱)" % wd.tick)
 	if ev.is_empty():
+		done()
 		return
 	var before := str(wd.chronicle[0].text)
 	ev[0]["text"] = "바뀜"
 	check(str(wd.chronicle[0].text) == before, "꺼낸 사건을 고쳐도 연대기는 그대로")
+	done()
 
 
 ## 멸종 사건의 평균 세대 = 마지막 개체군(마지막 틱에 죽은 개체)의 평균 세대. 예전에는 개체가 모두 사라진 뒤에 재서
@@ -1042,16 +1438,21 @@ func test_extinction_mean_gen() -> void:
 	var w3: SimWorld = r.world
 	check(w3 != null, "멸종 한 틱 전 스냅숏 복원")
 	if w3 == null:
+		done()
 		return
 	w3.step()
 	var e3: Dictionary = w3.chronicle.back() if not w3.chronicle.is_empty() else {}
-	check(w3.is_extinct() and str(e3.get("kind", "")) == "extinction" and float(e3.get("mean_gen", -1.0)) == got and w3.history_hash == wd.history_hash,
-			"스냅숏에서 이어 돌린 멸종 사건도 평균 %.2f세대 · 같은 해시" % float(e3.get("mean_gen", -1.0)))
+	# 역사 해시는 hash.every 틱마다만 바뀌어 한 틱 이어 돌린 차이를 담지 못함(이 멸종은 548틱 — 547 → 548 사이에 검사점 없음) →
+	# 해시가 아니라 전체 상태 글로 견줌(I89)
+	check(w3.is_extinct() and str(e3.get("kind", "")) == "extinction" and float(e3.get("mean_gen", -1.0)) == got
+			and SimSnapshot.to_text(w3) == SimSnapshot.to_text(wd),
+			"스냅숏에서 이어 돌린 멸종 사건도 평균 %.2f세대 · 같은 전체 상태" % float(e3.get("mean_gen", -1.0)))
 	# 번식 없이 사라진 세계(첫 세대뿐)는 0 이 맞음
 	var w0 := world({}, 1, "no_resources")
 	while not w0.is_extinct() and w0.tick < 3000:
 		w0.step()
 	check(w0.is_extinct() and float(w0.chronicle.back().mean_gen) == 0.0, "첫 세대만 살다 사라지면 평균 0세대")
+	done()
 
 
 # ───────────────────────── 설정 검사·파일(검토 고침 g1a) ─────────────────────────
@@ -1188,6 +1589,7 @@ func test_config_rules() -> void:
 	check(e1.contains("time.day_ticks = 1:") and not e1.contains("1.0") and not e1.contains(" 가 범위"), "범위 오류 문장: " + e1)
 	var e2 := str(SimConfig.build("default", {"mutation.rate": 2.0}).error)
 	check(e2.contains("mutation.rate = 2:") and e2.contains("0~1"), "실수 키 오류 문장: " + e2)
+	done()
 
 
 ## 예설정 파일을 읽지 못하면 경로를 담은 오류(J09) — '알 수 없는 예설정: default' 로 잘못 알리지 않게.
@@ -1209,6 +1611,7 @@ func test_presets_file() -> void:
 	check(SimConfig.build("default", {}).error == "" and SimConfig.preset_names().has("fast_civ"), "원래 파일로 돌리면 다시 읽음")
 	check(SimConfig.build("", {}).error == "", "예설정 없이(빈 이름) 만들기는 예설정 파일과 상관없음")
 	remove_tree(dir)
+	done()
 
 
 ## 밤 판정 문턱(I77): 시뮬레이션 코드의 0.5 가 아니라 설정 time.night_light_threshold(기본 0.5 = 예전 역사 그대로).
@@ -1241,21 +1644,34 @@ func test_night_threshold() -> void:
 		results[th] = [differ, wrong, night_used]
 	check(results[0.5][0] > 0 and results[0.5][1] == 0, "문턱 0.5 · 빛 0.8 = 낮(감지 반경 그대로): %s" % str(results[0.5]))
 	check(results[0.9][0] > 0 and results[0.9][1] == 0 and results[0.9][2] > 0, "문턱 0.9 · 빛 0.8 = 밤(감지 반경 × night_factor): %s" % str(results[0.9]))
+	done()
 
 
 ## 잘게 갈라진 큰 지도에서도 연결 요소 계산이 칸 수에 비례(I31). 예전 계산(요소마다 거리장)은 192×192 바둑판에서 십수 초.
+## 기준은 실제 시계가 아니라 같은 크기 풀밭을 한 번 훑는 거리장 시간의 배수(I34 — 예전 기준 "3,000ms 안"은 기계 속도 단언).
 func test_components_fast() -> void:
 	var n := 192
 	var t := PackedByteArray()
 	t.resize(n * n)
+	var open := PackedByteArray()
+	open.resize(n * n)
+	open.fill(SimGrid.TILE_GRASS)
 	for y in n:
 		for x in n:
 			t[y * n + x] = SimGrid.TILE_GRASS if (x + y) % 2 == 0 else SimGrid.TILE_ROCK
-	var t0 := Time.get_ticks_msec()
+	var bfs_us := 1 << 30
+	for k in 3:
+		var tb := Time.get_ticks_usec()
+		SimGrid.distance_field(open, n, n, PackedInt32Array([0]))
+		bfs_us = mini(bfs_us, Time.get_ticks_usec() - tb)
+	var t0 := Time.get_ticks_usec()
 	var comp := SimGrid.components(t, n, n)
-	var ms := Time.get_ticks_msec() - t0
+	var comp_us := Time.get_ticks_usec() - t0
 	check(comp.sizes.size() == n * n / 2 and comp.labels[1] == -1 and comp.labels[2] == 1, "바둑판 %d×%d: 요소 %d개" % [n, n, comp.sizes.size()])
-	check(ms < 3000, "연결 요소 계산 %d ms < 3000 ms(요소 %d개 — 예전 계산은 요소 수 × 칸 수)" % [ms, comp.sizes.size()])
+	var ratio := float(comp_us) / float(maxi(bfs_us, 1))
+	check(ratio < COMPONENTS_MAX_RATIO, "연결 요소 계산 %.0fms = 풀밭 거리장 한 번(%.0fms)의 %.1f배 < %.0f배(요소 %d개 — 예전 계산은 요소 수 × 칸 수)" % [
+			float(comp_us) / 1000.0, float(bfs_us) / 1000.0, ratio, COMPONENTS_MAX_RATIO, comp.sizes.size()])
+	done()
 
 
 ## 구조가 틀린 스냅숏(JSON 은 정상)은 스크립트 오류 없이 오류 문장으로 거부하고, 본 파일이 그러면 .bak 으로 복구(I04).
@@ -1328,6 +1744,7 @@ func test_snapshot_corrupt() -> void:
 		w2.step_n(150)
 		ro.world.step_n(150)
 		check(ro.world.history_hash == w2.history_hash, "옛 스냅숏에서 이어 돌린 해시 = 끊김 없이 돌린 해시")
+	done()
 
 
 ## 기록기·스냅숏 파일 쓰기(J07·I07·I19·J10): CSV 는 BOM 붙은 UTF-8, summary.json 은 CSV 를 다 쓴 뒤 마지막(못 쓰면 안 씀),
@@ -1375,6 +1792,7 @@ func test_recorder_files() -> void:
 	var e2 := SimSnapshot.save_file(wd, path)
 	check(e2 != "" and e2.contains("snapshot-20.json.tmp"), "임시 파일을 열 수 없음 → 파일 이름을 담은 실패 문장: " + e2)
 	remove_tree(sdir)
+	done()
 
 
 # ───────────────────────── 규칙 고침(검토 고침 g1b) ─────────────────────────
@@ -1402,6 +1820,7 @@ func test_empty_start() -> void:
 	var x: Experiment = r.experiment
 	check(x != null, "실험실 실험 만들기: " + str(r.error))
 	if x == null:
+		done()
 		return
 	x.step_n(5)
 	check(x.export_dir(dir.path_join("lab")).is_empty(), "실험실 결과 내보내기")
@@ -1411,6 +1830,7 @@ func test_empty_start() -> void:
 		check(lab_b.size() > 3 and lab_b == run_b, "개체 0 실험의 %s: 실험실 = 실행기(글자까지, %d줄 / %d줄)" % [fn,
 				lab_b.get_string_from_utf8().split("\n", false).size(), run_b.get_string_from_utf8().split("\n", false).size()])
 	remove_tree(dir)
+	done()
 
 
 ## 쿨다운 0 이어도 한 틱에 한 번만 짝지음(I24). 예전: 같은 칸 세 마리에서 한 번의 _reproduce 로 자식 3(개체 a 가 세 번).
@@ -1437,6 +1857,7 @@ func test_mate_once_per_tick() -> void:
 				twice += 1
 			seen[key] = true
 	check(w2.total_births > 0 and twice == 0, "기본·쿨다운 0·600틱: 한 틱에 두 번 짝지은 부모 %d번(출생 %d)" % [twice, w2.total_births])
+	done()
 
 
 ## 저장고 최대 수에는 저장 발견 때 짓는 첫 저장고도 든다(I25): 0 은 거부(예전엔 0 이어도 1개 — 1 과 같은 역사), 1 이면 그 하나뿐.
@@ -1456,6 +1877,7 @@ func test_store_max_count() -> void:
 		wd.s_carry[i] = thr
 		wd._drop(i, far)
 	check(wd.stage == SimWorld.STAGE_STORE and wd.store_tiles.size() == 1, "최대 수 1: 저장 발견 때의 저장고 하나뿐(지금 %d개)" % wd.store_tiles.size())
+	done()
 
 
 ## '첫 밭' 사건은 세계에서 한 번(I26): 밭을 모두 잃고 다시 심어도 다시 나오지 않음. 첫 밭 틱은 스냅숏에 담기고, 그 키가 없는
@@ -1505,6 +1927,7 @@ func test_first_farm_once() -> void:
 		w._act_all()
 		check(lost and w.tiles[tc] == SimGrid.TILE_FARM and count_ff.call(w) == 1 and w.first_farm_tick == 1,
 				"밭을 모두 잃고(%s) 다시 심어도 '첫 밭' 사건은 한 번(%d번)" % [str(lost), count_ff.call(w)])
+	done()
 
 
 ## 저장고를 지은 칸의 바닥 먹이 더미는 저장분으로(I27) — 예전엔 dropped 에 남아 그 칸의 입력(발밑 먹이)·먹기에 안 잡힌 채 썩음.
@@ -1548,6 +1971,7 @@ func test_store_takes_pile() -> void:
 	w3.s_dead[i3] = SimWorld.CAUSE_STARVED
 	w3._remove_dead()
 	check(w3.store_food[0] == cap and w3.dropped[sc] == 3.0, "저장고 칸에서 죽은 개체의 운반분 5 → 저장분이 용량까지(+2), 남은 3 은 바닥")
+	done()
 
 
 ## 자식 에너지는 자식의 최대 에너지까지(I28) — 넘친 몫은 장부 led_repro_loss 로(장부 그대로). 예전: 번식 비용 0.6·효율 1.0 에서
@@ -1573,6 +1997,7 @@ func test_child_energy_cap() -> void:
 				over += 1
 		worst = maxf(worst, absf(w2.total_energy() - w2.ledger_expected()))
 	check(over == 0 and worst < 1e-6, "비용 0.6·효율 1·씨앗 1·400틱: 최대 에너지를 넘은 슬라임·틱 %d, 장부 오차 %s" % [over, String.num_scientific(worst)])
+	done()
 
 
 ## 저장고 짓기·저장 발견은 ③ 의 내려놓기 순간(I29): 같은 틱 뒤 차례 개체가 그 저장고를 입력으로 본다. 파일 머리의 틱 순서 주석이
@@ -1601,6 +2026,7 @@ func test_store_built_in_act() -> void:
 			"같은 틱 뒤 차례 개체(b)의 판단에 그 저장고가 보임(저장고 가까움 %.3f)" % wd._in[SimBrain.IN_STORE_NEAR])
 	var head := FileAccess.get_file_as_string("res://scripts/sim/sim_world.gd").split("const STAGE_NONE", true, 1)[0]
 	check(head.contains("저장고 짓기와 저장 발견은 ⑦ 이 아니라 ③") and head.contains("⑦ 채집·농사 발견 판정"), "sim_world.gd 머리의 틱 순서 주석이 실제 순서(저장고는 ③)를 적음")
+	done()
 
 
 ## 바닥 먹이 수명(I30·J12): 실제 틱 흐름에서 내려놓은 틱부터 꼭 spoil_ticks 틱 뒤에 썩는다(예전 spoil_ticks − 1). 타이머는 칸마다
@@ -1632,6 +2058,7 @@ func test_spoil_lifetime() -> void:
 	check(g2 == 7 + 80 + spoil, "틱 87 에 더 놓으면 더미 전체(처음 5 포함)가 틱 %d 에 사라짐(= 87 + %d)" % [g2, spoil])
 	var help := str(SimConfig.load_json("res://config/sim-labels.json")["dropped.spoil_ticks"].help)
 	check(help.contains("마지막으로 내려놓은 틱부터") and help.contains("더 내려놓으면 더미 전체가 다시 셈"), "이름표: 썩는 시간은 칸 더미의 마지막 내려놓기부터(다시 셈): " + help)
+	done()
 
 
 ## 식물 갱신 간격은 성능용(J02): 간격과 상관없이 같은 양이 자란다(그 사이 틱마다의 빛·계절을 더함). 예전엔 갱신 틱의 빛을 간격 전체에
@@ -1648,6 +2075,7 @@ func test_growth_interval() -> void:
 		if absf(float(totals[every]) - base) > base * 1e-9:
 			bad.append("%d: %.1f" % [every, float(totals[every])])
 	check(base > 0.0 and bad.is_empty(), "갱신 간격 1·2·4·7·12·20·60 의 420틱 성장 합이 같음(간격 1: %.1f, 다른 것: %s)" % [base, ", ".join(bad)])
+	done()
 
 
 ## 밭 버려짐은 매 틱, 성장 속도와 상관없이(J03): 밭 성장 배수 0 이어도, 식물 갱신 간격이 7 이어도 마지막으로 밟은 틱 + abandon_ticks + 1
@@ -1681,6 +2109,7 @@ func test_farm_abandon_any_growth() -> void:
 				lost_tick = int(e.tick)
 		check(kept and wd.tiles[tc] == SimGrid.TILE_GRASS and wd.farms.is_empty() and lost_tick == due,
 				"%s: 밭이 틱 %d 까지 남고 틱 %d 에 풀밭으로(버려짐 사건 틱 %d)" % [str(sets), due - 1, due, lost_tick])
+	done()
 
 
 ## 빛 곡선(J11): 해 뜨고 지는 램프는 낮 구간 안쪽에 있어 하루 빛 합 = 낮 틱 − twilight, 빛 1 인 틱 = 낮 틱 − 2·twilight + 1.
@@ -1707,6 +2136,7 @@ func test_light_curve() -> void:
 	var ht := str(labels["time.twilight_ticks"].help)
 	check(not hf.contains("빛 1)") and hf.contains("빛이 0 보다 큰 몫") and ht.contains("하루 빛 합 = 낮 틱 − 이 값"),
 			"이름표: 낮 비율 = 빛이 0 보다 큰 몫, twilight 는 하루 빛 합을 줄임: %s / %s" % [hf, ht])
+	done()
 
 
 ## 밭 칸에는 저장고를 짓지 않는다(J13): farm.radius ≥ store.min_spacing 이면 예전엔 가장 많이 놓인 밭 칸 위에 저장고가 지어져
@@ -1744,6 +2174,7 @@ func test_store_not_on_farm() -> void:
 			if w2.store_at[c] != SimWorld.NO_STORE:
 				both += 1
 	check(w2.stage == SimWorld.STAGE_FARM and both == 0, "fast_civ·씨앗 2·밭 반경 12·간격 3: 1,200틱 동안 저장고이자 밭인 칸 %d(단계 %d, 저장고 %d)" % [both, w2.stage, w2.store_tiles.size()])
+	done()
 
 
 ## 행동 이름(I47): 왼쪽·오른쪽은 제자리에서 방향만 바꾼다 — 화면 이름도 "돌기"(예전 "왼쪽으로"·"오른쪽으로" 는 이동처럼 읽힘).
@@ -1764,6 +2195,7 @@ func test_action_names() -> void:
 	var nr := SimBrain.ACTION_NAMES[SimBrain.ACT_RIGHT]
 	check(not moved and turned and nl.ends_with("돌기") and nr.ends_with("돌기") and nl.begins_with("왼쪽") and nr.begins_with("오른쪽"),
 			"왼쪽·오른쪽 행동은 제자리 돌기, 이름도 \"%s\"·\"%s\"" % [nl, nr])
+	done()
 
 
 ## 예설정 harsh_winter 는 멸종 조건(J22): presets.json 의 화면 이름·_comment 가 그렇게 적고(tools/test_sim_labels.py), 적은 결과
@@ -1777,11 +2209,250 @@ func test_harsh_winter() -> void:
 			"harsh_winter 화면 이름·설명이 멸종 조건과 씨앗 1 의 멸종 틱을 적음: %s" % str(p.get("label", "")))
 	if _skip_slow:
 		check(true, "느린 검사 건너뜀")
+		done()
 		return
 	var wd := world({}, 1, "harsh_winter")
 	while not wd.is_extinct() and wd.tick < 8000:
 		wd.step()
 	check(wd.extinct_tick == HARSH_SEED1_EXTINCT, "harsh_winter 씨앗 1 은 틱 %d 에 멸종(문서 %d)" % [wd.extinct_tick, HARSH_SEED1_EXTINCT])
+	done()
+
+
+# ───────────────────────── 밭·문명 규칙 값(검토 고침 g1b 검사 보강) ─────────────────────────
+
+## 저장고 하나(p 칸)를 둔 빈 세계의 단계를 정한다.
+func with_store(wd: SimWorld, p: Vector2i, stage: int) -> int:
+	var c := p.y * wd.w + p.x
+	wd.store_tiles.append(c)
+	wd.store_food.append(0.0)
+	wd._rebuild_stores()
+	wd.stage = stage
+	return c
+
+
+## 저장고에서 걷는 거리가 dist 인 풀밭 칸과, 그 칸을 바라보고 설 수 있는 이웃: [선 칸, 방향, 대상 칸]. 없으면 [].
+func facing_at_dist(wd: SimWorld, dist: int) -> Array:
+	for c in wd.w * wd.h:
+		if wd.tiles[c] != SimGrid.TILE_GRASS or wd.store_at[c] != SimWorld.NO_STORE or wd.store_dist[c] != dist:
+			continue
+		for hd in SimGrid.DIR_COUNT:
+			var sx: int = c % wd.w - SimGrid.DX[hd]
+			var sy: int = c / wd.w - SimGrid.DY[hd]
+			if sx >= 0 and sy >= 0 and sx < wd.w and sy < wd.h and SimGrid.passable(wd.tiles[sy * wd.w + sx]):
+				return [Vector2i(sx, sy), hd, c]
+	return []
+
+
+## 슬라임 한 마리가 이번 틱에 판단 없이 act 를 하게 하고 한 번 행동시킨다.
+func act_once(wd: SimWorld, i: int, act: int, at_tick: int) -> void:
+	wd.s_last_action[i] = act
+	wd._think_every = 1000000
+	wd.tick = at_tick
+	wd._act_all()
+
+
+## 밭 규칙 값(I11): 심기는 저장고에서 걷는 거리 farm.radius 안 풀밭만, 밭 성장 속도 = 같은 비옥도 풀밭 × growth_mult·상한 × max_mult,
+## 계절 배수가 winter_floor 보다 낮으면 밭은 winter_floor 로 자람(풀밭은 계절 배수 그대로), 밭을 밟으면 버려짐 시계가 다시 셈.
+## 예전엔 반경·겨울 하한·성장 배수 줄을 지워도 규칙 검사 전체가 통과했다(밭이 생긴 뒤의 규칙은 어떤 검사도 지나지 않음).
+func test_farm_rule_values() -> void:
+	var cfg := cfg_with()
+	var radius := int(cfg.farm.radius)
+	var abandon := int(cfg.farm.abandon_ticks)
+	# (1) 심기 반경: 거리 radius + 1 은 거부(풀밭·운반량 그대로), radius 는 심음
+	var planted := {}
+	for d in [radius + 1, radius]:
+		var wd := empty_world({"plants.update_every": 1})
+		with_store(wd, grass_spot(wd), SimWorld.STAGE_FARM)
+		var f := facing_at_dist(wd, d)
+		check(not f.is_empty(), "저장고에서 거리 %d 인 풀밭과 그 앞에 설 칸이 있음" % d)
+		if f.is_empty():
+			continue
+		var i := wd.index_of_id(add_slime(wd, f[0], 0.9, 100, f[1]))
+		wd.s_carry[i] = 3.0
+		act_once(wd, i, SimBrain.ACT_PLANT, 1)
+		var c: int = f[2]
+		if d > radius:
+			check(wd.tiles[c] == SimGrid.TILE_GRASS and wd.farms.is_empty() and wd.s_carry[i] == 3.0,
+					"저장고에서 %d칸(반경 %d 밖) 풀밭에는 심지 않음(칸 %d, 밭 %d곳)" % [d, radius, wd.tiles[c], wd.farms.size()])
+		else:
+			check(wd.tiles[c] == SimGrid.TILE_FARM and wd.farms.size() == 1 and wd.s_carry[i] == 3.0 - float(cfg.farm.seed_cost),
+					"저장고에서 %d칸(반경 안)이면 심음" % d)
+			planted = {world = wd, cell = c, slime = i, stand = f[0], head = f[1]}
+	if planted.is_empty():
+		done()
+		return
+	var wf: SimWorld = planted.world
+	var fc: int = planted.cell
+	# (2) 성장 배수: 같은 비옥도(1)로 맞춘 풀밭 칸과 견줌
+	var q := -1
+	for c in wf.w * wf.h:
+		if c != fc and wf.tiles[c] == SimGrid.TILE_GRASS and wf.store_at[c] == SimWorld.NO_STORE:
+			q = c
+			break
+	wf.fert[q] = 1.0
+	wf._update_tile_rates(q)
+	check(wf.fert[fc] == 1.0 and is_equal_approx(wf.grow_rate[fc], wf.grow_rate[q] * float(cfg.farm.growth_mult))
+			and is_equal_approx(wf.food_cap[fc], wf.food_cap[q] * float(cfg.farm.max_mult)),
+			"밭 성장 속도 %.3f = 풀밭 %.3f × growth_mult %.1f, 상한 %.1f = 풀밭 %.1f × max_mult %.1f" % [wf.grow_rate[fc], wf.grow_rate[q],
+			float(cfg.farm.growth_mult), wf.food_cap[fc], wf.food_cap[q], float(cfg.farm.max_mult)])
+	# (3) 겨울 하한: 빛 1 인 겨울 틱(계절 배수 0.3 < 하한 0.4)과 여름 틱(1.2 > 하한)에 한 틱(update_every 1) 자란 양
+	var day := int(cfg.time.day_ticks)
+	var season_len := day * int(cfg.time.season_days)
+	var tw := int(cfg.time.twilight_ticks)
+	var floor_v := float(cfg.farm.winter_floor)
+	var grown := PackedStringArray()
+	var growth_ok := true
+	for si in [3, 1]:
+		var sg := float(cfg.seasons.growth[si])
+		wf.tick = season_len * si + tw
+		check(wf._light_at(wf.tick) == 1.0 and wf._season_at(wf.tick) == si, "검사 틱 %d 은 빛 1·계절 %d" % [wf.tick, si])
+		wf.food[fc] = 0.0
+		wf.food[q] = 0.0
+		wf._grow_plants()
+		var want_farm := wf.grow_rate[fc] * maxf(sg, floor_v)
+		var want_grass := wf.grow_rate[q] * sg
+		grown.append("계절 %d: 밭 %.4f(기대 %.4f) 풀밭 %.4f(기대 %.4f)" % [si, wf.food[fc], want_farm, wf.food[q], want_grass])
+		if not is_equal_approx(wf.food[fc], want_farm) or not is_equal_approx(wf.food[q], want_grass):
+			growth_ok = false
+	check(float(cfg.seasons.growth[3]) < floor_v and growth_ok,
+			"밭은 max(계절 배수, winter_floor %.1f) 로, 풀밭은 계절 배수로 자람: %s" % [floor_v, "; ".join(grown)])
+	# (4) 밭을 밟으면 버려짐 시계가 다시: 심은 틱 1 → abandon − 10 틱에 밟음 → 1 + abandon + 1 에도 남고, 밟은 틱 + abandon + 1 에 풀밭
+	var i: int = planted.slime
+	var stepped := 1 + abandon - 10
+	act_once(wf, i, SimBrain.ACT_FORWARD, stepped)
+	var on_farm := wf.s_y[i] * wf.w + wf.s_x[i] == fc
+	wf.tick = 1 + abandon + 1
+	wf._abandon_farms()
+	var kept := wf.tiles[fc] == SimGrid.TILE_FARM
+	wf.tick = stepped + abandon + 1
+	wf._abandon_farms()
+	check(on_farm and wf.farm_visit[fc] == stepped and kept and wf.tiles[fc] == SimGrid.TILE_GRASS,
+			"밭을 밟은 틱 %d 부터 다시 셈: 심은 틱 기준 기한(%d)에는 남고(%s) 밟은 틱 기준 기한(%d)에 풀밭으로" % [stepped, 1 + abandon + 1,
+			str(kept), stepped + abandon + 1])
+	done()
+
+
+## 문명 규칙 값(I11): 저장고 최대 수·최소 간격(둘째는 간격 밖이면 지음), 농사 싹은 저장고에서 discovery.farm_radius 안만 셈,
+## 채집 시도는 배부르고 먹이가 있을 때만 셈, 운반은 carry.max × 크기에서 멈춤, 죽으면 운반분이 바닥에 남음.
+## 예전엔 이 규칙들이 fast_civ 씨앗 1 의 농사 발견 시각 하나로만 걸려 어느 규칙이 깨졌는지 알 수 없었다.
+func test_civ_rule_values() -> void:
+	# (a) 저장고: 구역마다 임계만큼 내려놓음 — 간격(min_spacing) 밖이면 지음, max_count 개가 되면 더 짓지 않음
+	var wd := empty_world()
+	var spacing := int(wd.cfg.store.min_spacing)
+	var max_count := int(wd.cfg.store.max_count)
+	var rs := int(wd.cfg.discovery.region_size)
+	var thr := float(wd.cfg.discovery.store_threshold)
+	var picks := PackedInt32Array()
+	for c in wd.w * wd.h:
+		if wd.tiles[c] != SimGrid.TILE_GRASS:
+			continue
+		var ok := true
+		for o in picks:
+			if absi(o % wd.w - c % wd.w) + absi(o / wd.w - c / wd.w) < spacing or ((o % wd.w) / rs == (c % wd.w) / rs and (o / wd.w) / rs == (c / wd.w) / rs):
+				ok = false
+				break
+		if ok:
+			picks.append(c)
+		if picks.size() > max_count:
+			break
+	check(picks.size() == max_count + 1, "서로 간격 %d 밖·다른 구역인 풀밭 %d칸을 찾음(%d칸)" % [spacing, max_count + 1, picks.size()])
+	var i := wd.index_of_id(add_slime(wd, grass_spot(wd)))
+	wd.stage = SimWorld.STAGE_FORAGE
+	var counts := PackedInt32Array()
+	for c in picks:
+		wd.s_carry[i] = thr
+		wd._drop(i, c)
+		counts.append(wd.store_tiles.size())
+	check(counts.size() == max_count + 1 and counts[1] == 2 and counts[max_count - 1] == max_count and counts[max_count] == max_count,
+			"간격 밖 구역마다 저장고를 지어 %d개까지, 그다음은 짓지 않음(내려놓을 때마다 저장고 수 %s)" % [max_count, str(counts)])
+	# (b) 농사 싹은 저장고에서 걷는 거리 discovery.farm_radius 안만 셈(그 밖의 싹도 트지만 세지 않음)
+	var w2 := empty_world({"dropped.sprout_chance": 1.0})
+	with_store(w2, grass_spot(w2), SimWorld.STAGE_STORE)
+	var fr := int(w2.cfg.discovery.farm_radius)
+	var inside := facing_at_dist(w2, fr)
+	var outside := facing_at_dist(w2, fr + 1)
+	check(not inside.is_empty() and not outside.is_empty(), "저장고에서 거리 %d·%d 인 풀밭이 있음" % [fr, fr + 1])
+	if not inside.is_empty() and not outside.is_empty():
+		var f_out := w2.base_fert[outside[2]]
+		w2._put_dropped(inside[2], 2.0)
+		w2._put_dropped(outside[2], 2.0)
+		for k in int(w2.cfg.dropped.spoil_ticks) + 1:
+			w2._spoil_dropped()
+		check(w2.farm_sprouts == 1 and w2.base_fert[outside[2]] > f_out,
+				"싹 둘 가운데 반경 %d 안의 것만 농사 싹으로 셈(셈 %d, 밖의 싹도 비옥도는 오름)" % [fr, w2.farm_sprouts])
+	# (c) 채집 시도는 배부르고(forage_min_energy_frac 이상) 그 칸에 먹이가 있을 때만
+	var w3 := empty_world()
+	var p3 := grass_spot(w3)
+	var c3 := p3.y * w3.w + p3.x
+	var i3 := w3.index_of_id(add_slime(w3, p3, 1.0))
+	var frac := float(w3.cfg.discovery.forage_min_energy_frac)
+	w3.food[c3] = 5.0
+	w3.s_energy[i3] = (frac - 0.1) * w3.s_emax[i3]
+	act_once(w3, i3, SimBrain.ACT_GATHER, 1)
+	var hungry := w3.forage_attempts
+	w3.s_energy[i3] = w3.s_emax[i3]
+	w3.food[c3] = 0.0
+	w3.dropped[c3] = 0.0
+	act_once(w3, i3, SimBrain.ACT_GATHER, 2)
+	var empty_tile := w3.forage_attempts
+	w3.s_energy[i3] = w3.s_emax[i3]
+	w3.food[c3] = 5.0
+	act_once(w3, i3, SimBrain.ACT_GATHER, 3)
+	check(hungry == 0 and empty_tile == 0 and w3.forage_attempts == 1,
+			"채집 시도: 배고프면 %d, 빈 칸이면 %d, 배부르고 먹이 있으면 %d (기대 0·0·1)" % [hungry, empty_tile, w3.forage_attempts])
+	# (d) 운반 상한: 먹이가 많은 칸에서 계속 주워도 carry.max × 크기에서 멈춤
+	var w4 := empty_world()
+	var p4 := grass_spot(w4)
+	var c4 := p4.y * w4.w + p4.x
+	var i4 := w4.index_of_id(add_slime(w4, p4, 1.0))
+	w4.stage = SimWorld.STAGE_FORAGE
+	w4.dropped[c4] = 1000.0
+	for k in 30:
+		w4.s_energy[i4] = w4.s_emax[i4]
+		act_once(w4, i4, SimBrain.ACT_GATHER, k + 1)
+	var cap := float(w4.cfg.carry.max) * w4.s_size[i4]
+	check(w4.s_carry[i4] == cap and w4.dropped[c4] == 1000.0 - cap, "30번 주워도 운반량 %.1f = carry.max × 크기 %.1f" % [w4.s_carry[i4], cap])
+	# (e) 죽으면 운반분이 그 칸(저장고 아님)의 바닥 먹이로
+	w4.dropped[c4] = 0.0
+	w4.s_carry[i4] = 4.0
+	w4.s_dead[i4] = SimWorld.CAUSE_STARVED
+	w4._remove_dead()
+	check(w4.population() == 0 and w4.dropped[c4] == 4.0 and w4.drop_listed[c4] == 1, "굶어 죽은 개체의 운반분 4 → 그 칸 바닥 먹이 %.1f" % w4.dropped[c4])
+	done()
+
+
+## 검사 실행기 자체(I33·J15): 검사 몇 개를 한 뒤 스크립트 오류로 끊긴 함수는 실패(종료 코드 1), --only 에 모르는 이름이 있으면 아무것도
+## 돌리지 않고 실패. 오류를 일부러 내는 함수(selftest_abort_midway)는 이 실행기를 따로 띄워 돌린다 — 그 오류 줄이 이 실행의 로그
+## (CI 가 SCRIPT ERROR 를 찾는 곳)에 섞이지 않게 출력은 받아서 결과만 본다.
+func test_runner_guards() -> void:
+	var exe := OS.get_executable_path()
+	var proj := ProjectSettings.globalize_path("res://")
+	var cases := [
+		# [--only 값, 기대 종료 코드, 출력에 있어야 할 글, 설명]
+		["test_policy", 0, "RESULT: 4 checks passed, 0 failed", "맞는 이름 하나는 그 검사만 돌고 통과(대조)"],
+		["selftest_abort_midway", 1, "RESULT: 1 checks passed, 1 failed", "검사 1개 뒤 스크립트 오류로 끊긴 함수 → 실패"],
+		["test_policy,test_polcy", 1, "RESULT: 0 checks passed, 1 failed", "모르는 이름(오타)이 섞이면 아무것도 돌리지 않고 실패"],
+	]
+	for c in cases:
+		var out := []
+		var code := OS.execute(exe, ["--headless", "--path", proj, "--script", "res://tests/run_tests.gd", "--", "--only=" + str(c[0])], out, true)
+		var text := "\n".join(out)
+		var why := ""
+		if c[1] == 1 and c[0] == "selftest_abort_midway":
+			why = "끝까지 실행되지 않음"
+		elif c[1] == 1:
+			why = "모르는 검사 이름: \"test_polcy\""
+		check(code == c[1] and text.contains(c[2]) and (why == "" or text.contains(why)),
+				"%s: --only=%s → 종료 코드 %d(기대 %d), \"%s\"%s" % [c[3], c[0], code, c[1], c[2], " · \"" + why + "\"" if why != "" else ""])
+	done()
+
+
+## test_runner_guards 가 따로 띄운 실행기에서만 돈다(SELF_TESTS): 검사 하나를 한 뒤 일부러 스크립트 오류를 내 함수가 끊긴다.
+func selftest_abort_midway() -> void:
+	check(true, "끊기기 전 검사 하나")
+	var boom = null
+	boom.no_such_method()
+	done()
 
 
 static func _commas(n: int) -> String:
