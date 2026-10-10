@@ -24,6 +24,17 @@ const NO_SEASON := "계절 없음"
 const GLYPH_PAUSE := "‖"
 const GLYPH_DISCOVERY := "★"
 const USEC_PER_MS := 1000.0
+const USEC_PER_S := 1000000.0
+## Windows 의 배율 100% 에 해당하는 DPI(운영 체제 정의 — 150% = 144)
+const WINDOWS_BASE_DPI := 96.0
+## 창을 옮긴 뒤 창 관리자가 따라오기를 기다리는 프레임 수(_place_window)
+const PLACE_SETTLE_FRAMES := 3
+## 씨앗(int64) 범위의 글자 — 명령줄 씨앗을 to_int 전에 견줌(넘치면 엔진이 오류만 찍고 끝값으로 잘랐음)
+const INT64_MAX_TEXT := "9223372036854775807"
+const INT64_MIN_ABS_TEXT := "9223372036854775808"
+## Ctrl(맥은 Cmd) 단축키 → 파라미터 패널 단추 id(ParamPanel.control). 앞의 것부터 보이고 켜진 단추 하나를 누른다
+## (비교 모드면 "새 실험" 대신 "나란히 시작", 웹에서 숨긴 "스냅숏 열기" 는 아무것도 안 함).
+const COMMAND_KEYS := {KEY_N: ["apply", "start_compare"], KEY_S: ["save"], KEY_O: ["open"], KEY_E: ["export"]}
 ## 실제 배속 창이 이만큼 차기 전에는 "실제 —"(새 실험 직후 0배로 보이지 않게)
 const WARMUP_FRACTION := 0.25
 # 알림 앞머리(사건 문장이 스스로 설명하므로 발견·오류만 붙임. 사건 kind 는 docs/SIM-API.md)
@@ -43,6 +54,10 @@ const MAP_HINT := HINT_MOUSE + HINT_SEP + HINT_KEYS
 const HINT_KEYS_A := "스페이스 멈춤 · 1~7 속도 · F 따라가기"
 const HINT_KEYS_B := "Home 전체 보기 · Esc 선택 해제"
 const FIT_TEXT := "전체 보기"
+## 모든 실험이 멸종했을 때 위쪽 막대의 배속 자리(멸종한 세계는 더 진행하지 않음 — 실행기처럼)
+const EXTINCT_SPEED_TEXT := "멸종 · 진행 끝"
+## 죽은(기록만 남은) 개체를 고른 채 F 를 눌렀을 때의 알림(지도에 없어 따라갈 수 없음 — 검토 I41)
+const FOLLOW_DEAD_TEXT := "죽은 개체는 따라갈 수 없습니다"
 ## 자리 접기 단추(지도 오른쪽 아래). 눌림 = 자리가 보임
 const DOCK_LEFT := "left"
 const DOCK_BOTTOM := "bottom"
@@ -115,10 +130,19 @@ var _hist_ticks := 0.0
 var _speed_label_wait := 0.0
 # 세계를 바꾼 직후 첫 프레임(불러오기 시간이 든 긴 프레임)은 실제 배속 창에 넣지 않는다
 var _skip_record := false
+# 직전 _process 의 벽시계(µs, 0 = 아직 없음): 엔진이 넘기는 delta 는 8/60초에서 잘려(물리 단계 상한) 느린 프레임의
+# 실제 배속을 크게 보였다 — 프레임 시간은 벽시계 간격으로 잰다
+var _last_frame_us := 0
+# 화면 배율(창의 content_scale_factor — 논리 크기 = 창 / 배율)
+var _ui_scale := 1.0
 # 한 틱 비용 추정(µs, 지수 이동 평균): 예산을 넘기 **전에** 멈추려고 다음 틱 비용을 미리 더해 본다.
 # 한 틱 = 모든 실험을 한 틱씩(비교 모드면 A·B 둘 몫을 합친 시간)
 var _step_us_est := 0.0
 var _est_alpha := 0.2
+# 예산을 재는 시계(µs — advance_frame 의 시뮬레이션 시간·_step_once 의 한 틱 비용). 보통은 엔진 시계. 검사는 틱마다 정해진
+# 비용만큼 흐르는 가짜 시계를 넣어 예산 규칙을 기계 속도와 상관없이 잰다(검토 I34: 예전 검사는 실제 시계로 "250마리 세계의
+# 한 틱 ≤ 10.5ms" 를 단언하는 꼴이라 느린 기계에서 코드가 맞아도 실패할 수 있었음)
+var _clock_us: Callable = Time.get_ticks_usec
 var _behind_fill := 0.5
 # 실험마다 멸종을 이미 보았는지(멸종하는 순간 한 번만 알리려고), 모두 멸종해 저절로 멈췄는지(새 세계에서는 다시 재생)
 var _extinct_seen: Array[bool] = []
@@ -199,8 +223,8 @@ func _ready() -> void:
 	_build_layout()
 	# 패널은 첫 실험을 열기 전에 붙인다(첫 experiments_changed 를 받게)
 	_place_panels()
-	if DisplayServer.get_name() != "headless":
-		DisplayServer.window_set_min_size(Vector2i(UiConfig.integer("lab.min_width"), UiConfig.integer("lab.min_height")))
+	# 주 장면으로 붙은 뒤(current_scene 은 _ready 뒤에 정해짐)
+	_fit_window.call_deferred()
 	var errs := apply_args(OS.get_cmdline_user_args())
 	if errs != "":
 		# 알림을 놓쳐도 터미널에서 전체 문장(경로 포함)을 읽을 수 있게
@@ -208,8 +232,14 @@ func _ready() -> void:
 	_sync_controls()
 
 
+## 프레임 시간 = 직전 _process 와의 벽시계 간격(첫 프레임은 엔진 delta). 엔진은 _process 의 delta 를
+## max_physics_steps_per_frame ÷ physics_ticks_per_second(8/60초)에서 잘라 넘기므로 그대로 쓰면 7.5 FPS 아래에서
+## "실제 M배" 가 실제보다 크고 진행도 speed.max_frame_delta_s 보다 느렸다(검토 J04). 진행은 advance_frame 이 그대로 자른다.
 func _process(delta: float) -> void:
-	advance_frame(delta)
+	var now := Time.get_ticks_usec()
+	var dt := delta if _last_frame_us <= 0 else float(now - _last_frame_us) / USEC_PER_S
+	_last_frame_us = now
+	advance_frame(dt)
 
 
 # ════════════════════════════ 실험 ════════════════════════════
@@ -224,16 +254,28 @@ func new_experiment(preset: String, overrides: Dictionary, seed_value: int) -> S
 	return ""
 
 
-## 스냅숏 파일을 열어 붙인다(비교 모드면 끝내고 하나만). 성공 "", 실패면 오류 문장(지금 세계는 그대로). 백업에서 살렸으면 알림.
+## 스냅숏 파일을 열어 붙인다(비교 모드면 끝내고 하나만). 성공 "", 실패면 오류 문장(지금 세계는 그대로).
+## 열면 알림: 그래프·시계열 기록은 연 틱부터(스냅숏에는 세계와 연대기만 있음 — 검토 J19), 백업에서 살렸으면 경고와 원본이 깨진 이유.
 func open_snapshot(path: String) -> String:
-	var r := Experiment.from_snapshot(path)
-	if r.experiment == null:
-		var err: String = r.error
-		return err
-	_adopt_list([r.experiment])
-	# 세계를 바꾸면 앞 세계의 알림을 지우므로 백업 경고는 바꾼 뒤에 띄운다
-	if str(r.status) == "backup":
-		show_toast("원본이 깨져 백업에서 열었습니다: %s" % str(r.error), "warn")
+	return open_result(Experiment.from_snapshot(path), path)
+
+
+## Experiment.from_snapshot 결과를 붙인다(open_snapshot 의 뒷부분). 결과가 비었거나(읽는 함수가 스크립트 오류로 끊기면
+## 빈 사전이 돌아옴) 실험이 없으면 실패 — 예전엔 끊긴 결과의 기본값 ""(= 성공)이 그대로 나가 알림 없이 세계도 그대로였고,
+## 명령줄 --snapshot= 이면 실험 0개 실험실이 됐다(검토 I04).
+func open_result(r: Dictionary, path: String) -> String:
+	var x: Variant = r.get("experiment")
+	if not (x is Experiment) or (x as Experiment).world == null:
+		var err := str(r.get("error", ""))
+		return err if err != "" else "스냅숏을 열 수 없습니다: %s" % path
+	_adopt_list([x])
+	# 세계를 바꾸면 앞 세계의 알림을 지우므로 알림은 바꾼 뒤에 띄운다
+	var w := (x as Experiment).world
+	var from := "그래프·시계열 기록은 틱 %s 부터" % _commas(w.tick)
+	if str(r.get("status", "")) == "backup":
+		show_toast("원본이 깨져 백업에서 열었습니다(%s) — %s" % [str(r.get("error", "")), from], "warn")
+	else:
+		show_toast("스냅숏을 열었습니다: %s — %s" % [path.get_file(), from], "info")
 	return ""
 
 
@@ -347,21 +389,23 @@ static func is_web() -> bool:
 	return OS.has_feature("web")
 
 
-## 결과 폴더(export_csv 와 같은 파일, 비교면 A/·B/ 아래)를 zip 바이트로. 실패하면 빈 배열.
-## 임시 폴더 user://web_export/<프로세스>-<µs> 와 zip 은 끝나면(실패해도) 지운다(숨은 .gdignore 까지 — 남던 것을 고침, 검사).
+## 결과 폴더(export_csv 와 같은 파일, 비교면 A/·B/ 아래)를 zip 바이트로. 실패하면 빈 배열(실패한 파일은 last_zip_failed).
+## 임시 폴더 zip_tmp_dir() 와 zip 은 끝나면(실패해도) 지운다(숨은 .gdignore 까지 — 남던 것을 고침, 검사).
 func results_zip_bytes() -> PackedByteArray:
+	last_zip_failed = PackedStringArray()
 	if experiments.is_empty():
 		return PackedByteArray()
-	var dir := "%s/%d-%d" % [WEB_EXPORT_DIR, OS.get_process_id(), Time.get_ticks_usec()]
+	var dir := zip_tmp_dir(is_web())
 	last_zip_tmp_dir = dir
 	var abs_dir := ProjectSettings.globalize_path(dir)
 	var abs_zip := abs_dir + ".zip"
 	var bytes := PackedByteArray()
-	var ok := true
 	for x in experiments:
 		var d := dir if experiments.size() == 1 else dir.path_join(x.tag)
-		ok = ok and x.export_dir(d).is_empty()
-	if ok:
+		for f in x.export_dir(d):
+			# export_csv 와 같은 이름(비교 모드면 "B/timeseries.csv")
+			last_zip_failed.append(f if experiments.size() == 1 else "%s/%s" % [x.tag, f])
+	if last_zip_failed.is_empty():
 		bytes = _zip_dir(abs_dir, abs_zip)
 	_remove_tree(abs_dir)
 	DirAccess.remove_absolute(abs_zip)
@@ -370,33 +414,55 @@ func results_zip_bytes() -> PackedByteArray:
 	return bytes
 
 
-## 결과를 zip 으로 내려받기(웹). 데스크톱에서는 zip 을 user://downloads/ 에 저장(검사·확인용). 성공 "".
+## zip 을 만들 임시 폴더 user://web_export/<이름>. 데스크톱 = <프로세스>-<µs>, 웹 = web-<µs>-<번호>(웹 엔진은
+## OS.get_process_id() 를 지원하지 않아 부를 때마다 브라우저 콘솔에 엔진 오류 두 줄이 찍혔음 — 검토 I39).
+static func zip_tmp_dir(web: bool) -> String:
+	_zip_serial += 1
+	if web:
+		return "%s/web-%d-%d" % [WEB_EXPORT_DIR, Time.get_ticks_usec(), _zip_serial]
+	return "%s/%d-%d" % [WEB_EXPORT_DIR, OS.get_process_id(), Time.get_ticks_usec()]
+
+
+## 결과를 zip 으로 내려받기(웹). 데스크톱에서는 zip 을 download_dir(기본 user://downloads)에 저장(검사·확인용). 성공 "".
+## 실패하면 알림 하나("결과를 묶을 수 없습니다: B/timeseries.csv" 처럼 실패한 파일 — export_csv 와 같은 규칙)를 띄우고
+## 그 문장을 돌려준다(부른 쪽은 알림을 더 띄우지 않는다 — 검토 I40).
 func download_results() -> String:
 	var bytes := results_zip_bytes()
 	if bytes.is_empty():
 		var msg := "결과를 묶을 수 없습니다"
+		if experiments.is_empty():
+			msg += ": 실험이 없습니다"
+		elif not last_zip_failed.is_empty():
+			msg += ": %s" % ", ".join(last_zip_failed)
 		show_toast(msg, "error")
 		return msg
 	var fname := default_export_dir().get_file() + ".zip"
 	return _deliver(bytes, fname, "application/zip", "결과(zip)")
 
 
-## index 번째 실험의 스냅숏 JSON 내려받기(웹). 데스크톱에서는 user://downloads/ 에 저장. 성공 "".
+## index 번째 실험의 스냅숏 JSON 내려받기(웹). 데스크톱에서는 download_dir 에 저장. 성공 "".
 ## 파일 이름 snapshot-<날짜-시각>-seed<그 실험의 씨앗>-tick<T>[-A/-B].json.
 func download_snapshot(index: int = 0) -> String:
 	var x := experiment(index)
 	if x == null:
 		return "저장할 실험이 없습니다"
 	var text := SimSnapshot.to_text(x.world)
-	var fname := "snapshot-%s-seed%d-tick%d%s.json" % [_stamp(), x.seed_value, x.world.tick, "" if x.tag == "" else "-" + x.tag]
+	var fname := "snapshot-%s-seed%s-tick%d%s.json" % [_stamp(), str(x.seed_value), x.world.tick, "" if x.tag == "" else "-" + x.tag]
 	return _deliver(text.to_utf8_buffer(), fname, "application/json", "스냅숏")
 
 
 ## 마지막으로 넘긴 내려받기 파일 이름(검사용)
 var last_download_name := ""
-## 마지막 results_zip_bytes 의 임시 폴더(검사용 — 끝나면 지워져 있어야 함)
+## 데스크톱에서 내려받기를 저장하는 폴더(기본 DOWNLOAD_DIR). 검사는 프로세스별 임시 폴더로 바꿔 끼운다(검토 I37: 예전 검사는
+## 실제 user://downloads 에 쓰고 지워, 같은 사용자 폴더를 쓰는 저장소 사본끼리 서로의 파일을 지울 수 있었음)
+var download_dir := DOWNLOAD_DIR
+const DOWNLOAD_DIR := "user://downloads"
+## 마지막 results_zip_bytes 의 임시 폴더(검사용 — 끝나면 지워져 있어야 함)와 실패한 파일
 var last_zip_tmp_dir := ""
+var last_zip_failed := PackedStringArray()
 const WEB_EXPORT_DIR := "user://web_export"
+# zip_tmp_dir 의 번호(웹: 같은 µs 에 두 번 불러도 이름이 다르게)
+static var _zip_serial := 0
 
 
 func _deliver(bytes: PackedByteArray, fname: String, mime: String, what: String) -> String:
@@ -405,7 +471,7 @@ func _deliver(bytes: PackedByteArray, fname: String, mime: String, what: String)
 		JavaScriptBridge.download_buffer(bytes, fname, mime)
 		show_toast("%s 내려받기: %s" % [what, fname], "info")
 		return ""
-	var path := "user://downloads/" + fname
+	var path := download_dir.path_join(fname)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path.get_base_dir()))
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
@@ -452,11 +518,11 @@ static func _remove_tree(abs_dir: String) -> void:
 
 
 ## 기본 내보내기 폴더 user://experiments/<날짜-시각>-seed<N>(비교 모드면 -seed<A>-vs-seed<B>).
-## 시각은 화면 쪽 이름에만 씀 — 시뮬레이션과 무관.
+## 시각은 화면 쪽 이름에만 씀 — 시뮬레이션과 무관. 씨앗은 str() 로(엔진 4.4 의 "%d" 는 INT64_MIN 에 부호를 두 번 붙임 — 검토 J31).
 func default_export_dir() -> String:
 	var seeds: Array[String] = []
 	for x in experiments:
-		seeds.append("seed%d" % x.seed_value)
+		seeds.append("seed" + str(x.seed_value))
 	if seeds.is_empty():
 		seeds.append("seed0")
 	return "user://experiments/%s-%s" % [_stamp(), "-vs-".join(seeds)]
@@ -480,7 +546,9 @@ func request_cursor(tick: int) -> void:
 
 
 ## 명령줄 인자(-- 뒤)로 첫 실험을 연다: --seed=N, --preset=이름, --snapshot=경로.
-## 잘못된 값은 알림(위험 색)으로 보이고 기본값으로 연다. 오류 문장들을 줄바꿈으로 이어 돌려준다(없으면 "").
+## 잘못된 값은 알림(위험 색)으로 보이고 그 앞의 값(없으면 기본값)으로 연다 — 알림에 실제로 쓸 값을 적는다. 오류 문장들을
+## 줄바꿈으로 이어 돌려준다(없으면 ""). 아는 인자를 "=" 없이 적으면("--seed 5") 오류(실행기도 거부 — 예전엔 말없이 무시해
+## 기본 씨앗으로 열렸음), int64 를 넘는 씨앗도 오류(예전엔 엔진 오류만 찍고 끝값으로 잘라 받음 — 검토 I42).
 ## 모르는 인자는 무시한다(검사·캡처 실행기의 --out= 등).
 func apply_args(args: PackedStringArray) -> String:
 	var def_preset := str(UiConfig.value("lab.default_preset", "default"))
@@ -490,27 +558,31 @@ func apply_args(args: PackedStringArray) -> String:
 	var snapshot := ""
 	var errors: Array[String] = []
 	for a in args:
-		if a.begins_with("--seed="):
+		if a in ["--seed", "--preset", "--snapshot"]:
+			errors.append("인자는 \"%s=값\" 꼴이어야 합니다: %s (띄어 쓴 값은 무시함)" % [a, a])
+		elif a.begins_with("--seed="):
 			var v := a.substr(7)
-			if v.is_valid_int():
+			var e := seed_text_error(v)
+			if e == "":
 				seed_value = v.to_int()
 			else:
-				errors.append("씨앗은 정수여야 합니다: %s — 기본 씨앗 %d" % [v, def_seed])
+				errors.append("%s — 쓸 씨앗: %s" % [e, str(seed_value)])
 		elif a.begins_with("--preset="):
 			var p := a.substr(9)
 			if SimConfig.preset_names().has(p):
 				preset = p
 			else:
-				errors.append("없는 예설정입니다: %s — 기본 예설정으로 엽니다" % p)
+				errors.append("없는 예설정입니다: %s — 쓸 예설정: %s" % [p, preset])
 		elif a.begins_with("--snapshot="):
 			snapshot = a.substr(11)
 	var opened := false
 	if snapshot != "":
 		var es := open_snapshot(snapshot)
-		if es == "":
+		# 열었다고 했는데 실험이 없으면(끊긴 결과) 실패로 — 실험 0개 실험실이 되지 않게
+		if es == "" and world != null and not experiments.is_empty():
 			opened = true
 		else:
-			errors.append("스냅숏을 열 수 없습니다(%s): %s — 새 실험으로 엽니다" % [snapshot, es])
+			errors.append("스냅숏을 열 수 없습니다(%s): %s — 새 실험으로 엽니다" % [snapshot, es if es != "" else "실험이 만들어지지 않음"])
 	if not opened:
 		var e := new_experiment(preset, {}, seed_value)
 		if e != "":
@@ -521,6 +593,19 @@ func apply_args(args: PackedStringArray) -> String:
 	for msg in errors:
 		show_toast(msg, "error")
 	return "\n".join(errors)
+
+
+## 명령줄 씨앗 글자의 오류("" = 정수 범위 안의 정수). to_int 전에 글자로 범위를 견준다(넘치는 수를 to_int 하면 엔진이
+## 오류 줄을 찍고 끝값으로 자름).
+static func seed_text_error(v: String) -> String:
+	if not v.is_valid_int():
+		return "씨앗은 정수여야 합니다: %s" % v
+	var neg := v.begins_with("-")
+	var digits := v.trim_prefix("-").trim_prefix("+").lstrip("0")
+	var limit := INT64_MIN_ABS_TEXT if neg else INT64_MAX_TEXT
+	if digits.length() > limit.length() or (digits.length() == limit.length() and digits > limit):
+		return "씨앗이 정수 범위(-%s ~ %s) 밖입니다: %s" % [INT64_MIN_ABS_TEXT, INT64_MAX_TEXT, v]
+	return ""
 
 
 ## {preset, overrides, seed} 로 실험 하나를 만든다(빠진 키는 기본값). 결과: Experiment.create 와 같은 {experiment, error}.
@@ -567,10 +652,11 @@ func _adopt(w: SimWorld) -> void:
 	_reset_speed_window()
 	_skip_record = true
 	_step_us_est = 0.0
-	# 이미 멸종한 스냅숏을 열면 멈추지 않고 표시만(멸종하는 순간에만 멈춤). 앞 세계의 멸종으로 저절로 멈췄으면 다시 재생.
+	# 이미 멸종한 스냅숏(또는 처음부터 개체 0 인 세계)을 열면 멈추지 않고 표시만(멸종하는 순간에만 멈춤 — 그 세계는 어차피
+	# 진행하지 않음). 앞 세계의 멸종으로 저절로 멈췄으면 다시 재생.
 	_extinct_seen.clear()
 	for x in experiments:
-		_extinct_seen.append(x.world.extinct_tick >= 0)
+		_extinct_seen.append(x.extinct_at() >= 0)
 	if _extinct_paused:
 		_extinct_paused = false
 		set_paused(false)
@@ -590,6 +676,172 @@ func _adopt(w: SimWorld) -> void:
 func _set_window_title() -> void:
 	if is_inside_tree():
 		get_window().title = "%s — %s" % [str(ProjectSettings.get_setting("application/config/name", "")), _title]
+
+
+# ════════════════════════════ 화면 크기·배율 ════════════════════════════
+# 배치는 논리 픽셀(lab.min_width × lab.min_height 이상)로 하고, 창(물리 픽셀)에 그리는 배율은 창의 content_scale_factor
+# (stretch 꺼짐에서도 2D 를 배율만큼 키우고 글자는 그 배율로 다시 그림). 배율 = OS 화면 배율(HiDPI·Windows DPI·웹
+# devicePixelRatio) 또는 lab.ui_scale, 단 논리 크기 = 창 ÷ 배율 이 최소 배치 크기 이상이 되게 줄인다(검토 J08·J28·J29: 예전엔
+# 물리 픽셀 고정이라 배율 2 화면에서 UI 가 절반 크기, 웹은 최소 크기가 없어 좁은 브라우저에서 정보 창이 잘렸고, 데스크톱은
+# 1600×900 창을 화면에 맞추지 않아 768 높이 노트북에서 제목 표시줄이 화면 밖이었음). 정하는 셈은 순수 함수(os_scale_of·
+# ui_scale_for·plan_window)라 OS 없이 검사한다.
+
+## 최소 배치 크기(논리 픽셀) — 이보다 작으면 배치가 넘친다(검사: lab_checks 가 이 크기에서 배치를 잼).
+static func min_logical() -> Vector2:
+	return Vector2(UiConfig.num("lab.min_width"), UiConfig.num("lab.min_height"))
+
+
+## OS 화면 배율: Windows = DPI ÷ 96(DPI 인식 프로세스라 엔진이 배율을 주지 않음), macOS·웹·Wayland(모바일 포함) =
+## screen_get_scale, 그 밖(X11 — 믿을 만한 값이 없음) = 1. 값이 없거나 0 이하면 1.
+static func os_scale_of(os_name: String, ds_name: String, screen_scale: float, dpi: int) -> float:
+	match os_name:
+		"Windows":
+			return float(dpi) / WINDOWS_BASE_DPI if dpi > 0 else 1.0
+		"macOS", "Web", "Android", "iOS":
+			return screen_scale if screen_scale > 0.0 else 1.0
+	return screen_scale if ds_name == "Wayland" and screen_scale > 0.0 else 1.0
+
+
+## 창(물리 픽셀 px)에 쓸 UI 배율: want(OS 배율, lab.ui_scale 이 0 보다 크면 그 값)을 [lo, hi] 로 자르고, 논리 크기
+## px ÷ 배율 이 min_logical 이상이 되게 줄인다. 그래도 lo 아래면 lo(창이 lo 배의 최소 배치보다도 작아 잘림).
+static func ui_scale_for(px: Vector2, want: float, min_l: Vector2, lo: float, hi: float) -> float:
+	var s := clampf(want, lo, hi)
+	if min_l.x > 0.0:
+		s = minf(s, px.x / min_l.x)
+	if min_l.y > 0.0:
+		s = minf(s, px.y / min_l.y)
+	return maxf(s, lo)
+
+
+## 데스크톱 첫 창: 화면 작업 영역 usable(작업 표시줄을 뺀 곳, 물리 픽셀)과 창 장식(deco_tl = 왼쪽·위 두께, deco_br = 오른쪽·아래)
+## 안에서 배율 = ui_scale_for(장식을 뺀 자리, want, …), 창 = 처음 논리 크기 start × 배율 을 그 자리로 줄인 것(최소 배치 × 배율
+## 아래로는 안 줄임), 위치 = 장식까지 넣은 창을 작업 영역 가운데(넘치면 왼쪽 위 — 제목 표시줄이 화면 밖으로 가지 않게).
+## 결과 {scale, size, position(창 안쪽 왼쪽 위 — Window.position), min_size} — size·position·min_size 는 물리 픽셀.
+static func plan_window(usable: Rect2i, deco_tl: Vector2i, deco_br: Vector2i, want: float, start: Vector2, min_l: Vector2,
+		lo: float, hi: float) -> Dictionary:
+	var room := Vector2(usable.size - deco_tl - deco_br).max(Vector2.ONE)
+	var s := ui_scale_for(room, want, min_l, lo, hi)
+	var min_px := (min_l * s).round()
+	var sz := (start * s).round().min(room.floor()).max(min_px)
+	var frame := sz + Vector2(deco_tl + deco_br)
+	var pos := Vector2(usable.position) + ((Vector2(usable.size) - frame) * 0.5).floor().max(Vector2.ZERO) + Vector2(deco_tl)
+	return {scale = s, size = Vector2i(sz), position = Vector2i(pos), min_size = Vector2i(min_px)}
+
+
+## 지금 UI 배율(창의 content_scale_factor).
+func ui_scale() -> float:
+	return _ui_scale
+
+
+## UI 배율을 바꾼다(창의 content_scale_factor — 실험실의 논리 크기 = 창 ÷ 배율, 배치가 다시 맞춰짐).
+func set_ui_scale(s: float) -> void:
+	_ui_scale = s
+	var win := get_window()
+	if win != null and not is_equal_approx(win.content_scale_factor, s):
+		win.content_scale_factor = s
+
+
+## 지금 창 크기(물리 픽셀)에 맞는 배율로(웹 — 브라우저 창이 바뀔 때마다, 데스크톱 최대화·전체 화면·처음 크기가 아닌 창).
+## os_scale = OS 화면 배율(웹 = devicePixelRatio). 데스크톱이면 최소 창 크기도 그 배율의 최소 배치로. 정한 배율을 돌려준다.
+func fit_to_window(os_scale: float) -> float:
+	var win := get_window()
+	var s := ui_scale_for(Vector2(win.size), _wanted_scale(os_scale), min_logical(), UiConfig.num("lab.ui_scale_min"),
+			UiConfig.num("lab.ui_scale_max"))
+	set_ui_scale(s)
+	if not is_web() and DisplayServer.get_name() != "headless":
+		win.min_size = Vector2i((min_logical() * s).round())
+	return s
+
+
+## 바라는 배율: lab.ui_scale 이 0 보다 크면 그 값(사용자가 정함), 아니면 OS 배율.
+static func _wanted_scale(os_scale: float) -> float:
+	var fixed := UiConfig.num("lab.ui_scale")
+	return fixed if fixed > 0.0 else os_scale
+
+
+## 시작할 때 창 크기·배율을 정한다(_ready 뒤 지연 호출, 주 장면일 때만 — 헤드리스·검사·캡처 스크립트가 붙인 실험실은 아무것도
+## 안 함, 그 창 그대로). 웹: devicePixelRatio 로 배율을 정하고 브라우저 창이 바뀔 때마다 다시(좁은 창이면 배율을 줄여 잘리지 않게). 데스크톱: 창 모드이고 창이 처음 크기(project.godot)면
+## plan_window 대로 창을 화면 작업 영역에 맞춰 줄이고 가운데 놓음. 최대화·전체 화면이면 창은 그대로 두고 배율만, 처음 크기가
+## 아니면(명령줄 --resolution·창 관리자가 정함) 크기는 그대로 두고 배율만 맞추고 제목 표시줄이 화면 밖이면 안으로.
+func _fit_window() -> void:
+	var ds := DisplayServer.get_name()
+	# 실험실이 주 장면일 때만 — 검사·캡처 스크립트(--script)가 붙인 실험실은 그 스크립트가 정한 창(--resolution) 그대로
+	if ds == "headless" or not is_inside_tree() or get_tree().current_scene != self:
+		return
+	var win := get_window()
+	if is_web():
+		fit_to_window(_web_pixel_ratio())
+		if not win.size_changed.is_connected(_on_web_resized):
+			win.size_changed.connect(_on_web_resized)
+		return
+	var screen := DisplayServer.window_get_current_screen()
+	var os_s := os_scale_of(OS.get_name(), ds, DisplayServer.screen_get_scale(screen), DisplayServer.screen_get_dpi(screen))
+	var usable := DisplayServer.screen_get_usable_rect(screen)
+	var start := Vector2(float(ProjectSettings.get_setting("display/window/size/viewport_width", min_logical().x)),
+			float(ProjectSettings.get_setting("display/window/size/viewport_height", min_logical().y)))
+	if win.mode != Window.MODE_WINDOWED:
+		fit_to_window(os_s)
+		return
+	if win.size != Vector2i(start):
+		# 처음 크기가 아니면 명령줄 --resolution 이나 창 관리자가 이미 정한 크기 — 크기는 그대로 두고 배율만 맞추고, 제목 표시줄이
+		# 화면 밖이면 안으로만 옮긴다(엔진 인자는 OS.get_cmdline_args 에 오지 않아 크기로 가림)
+		fit_to_window(os_s)
+		_keep_on_screen.call_deferred(usable)
+		return
+	var want := _wanted_scale(os_s)
+	# 창 장식(제목 표시줄·테두리): 창 관리자가 알려 주면 그 값, 아직 모르면(0) lab.window_frame_px[왼쪽, 위, 오른쪽, 아래] × 배율
+	var tl := DisplayServer.window_get_position() - DisplayServer.window_get_position_with_decorations()
+	var total := DisplayServer.window_get_size_with_decorations() - DisplayServer.window_get_size()
+	if total.x <= 0 and total.y <= 0:
+		var est: Array = UiConfig.value("lab.window_frame_px", [])
+		if est.size() == 4:
+			tl = Vector2i(roundi(float(est[0]) * want), roundi(float(est[1]) * want))
+			total = tl + Vector2i(roundi(float(est[2]) * want), roundi(float(est[3]) * want))
+	var plan := plan_window(usable, tl.max(Vector2i.ZERO), (total - tl).max(Vector2i.ZERO), want,
+			start, min_logical(), UiConfig.num("lab.ui_scale_min"), UiConfig.num("lab.ui_scale_max"))
+	set_ui_scale(plan.scale)
+	win.min_size = plan.min_size
+	win.size = plan.size
+	_place_window.call_deferred(plan.position, usable)
+
+
+## 창을 pos(창 안쪽 왼쪽 위)에 둔다. 몇 프레임 뒤 장식까지 넣은 창의 왼쪽 위가 작업 영역 밖이면(창 관리자가 이동을 무시함 —
+## openbox 에서 첫 이동이 무시돼, 작업 영역에 맞추며 제목 표시줄을 화면 위로 밀어 둔 창이 그대로였음) 1px 옆을 거쳐 한 번 더 옮긴다.
+func _place_window(pos: Vector2i, usable: Rect2i) -> void:
+	var win := get_window()
+	win.position = pos
+	for i in PLACE_SETTLE_FRAMES:
+		await get_tree().process_frame
+	if not is_instance_valid(win) or usable.has_point(DisplayServer.window_get_position_with_decorations()):
+		return
+	win.position = pos + Vector2i.ONE
+	for i in PLACE_SETTLE_FRAMES:
+		await get_tree().process_frame
+	if is_instance_valid(win):
+		win.position = pos
+
+
+## 몇 프레임 뒤(창 관리자가 자리를 잡은 뒤) 장식까지 넣은 창의 왼쪽 위가 작업 영역 밖이면 그만큼 안으로 옮긴다(크기는 그대로 —
+## 창 관리자가 작업 영역에 맞춰 줄이며 제목 표시줄을 화면 위로 밀어 둔 창 등).
+func _keep_on_screen(usable: Rect2i) -> void:
+	for i in PLACE_SETTLE_FRAMES:
+		await get_tree().process_frame
+	var shift := (usable.position - DisplayServer.window_get_position_with_decorations()).max(Vector2i.ZERO)
+	if shift != Vector2i.ZERO:
+		_place_window(DisplayServer.window_get_position() + shift, usable)
+
+
+func _on_web_resized() -> void:
+	fit_to_window(_web_pixel_ratio())
+
+
+## 웹 브라우저의 devicePixelRatio(못 읽으면 엔진의 화면 배율 — 웹 엔진도 같은 값을 줌).
+static func _web_pixel_ratio() -> float:
+	var v: Variant = JavaScriptBridge.eval("window.devicePixelRatio", true)
+	if (typeof(v) == TYPE_FLOAT or typeof(v) == TYPE_INT) and float(v) > 0.0:
+		return float(v)
+	return DisplayServer.screen_get_scale()
+
 
 
 # ════════════════════════════ 속도 ════════════════════════════
@@ -717,15 +969,16 @@ func advance_frame(delta: float) -> int:
 	var n := 0
 	var progress := 0.0
 	last_budget_hit = false
-	var t0 := Time.get_ticks_usec()
-	if not _paused:
+	var t0: int = _clock_us.call()
+	# 모든 실험이 멸종했으면 진행할 것이 없다(멸종한 세계는 진행하지 않음 — Experiment.step)
+	if not _paused and not _all_extinct():
 		if _fast:
 			# 빨리 감기: 다음 틱까지 해도 예산 안이면 계속(적어도 1틱)
 			var ff_us := _ff_budget_ms * USEC_PER_MS
 			while true:
 				_step_once()
 				n += 1
-				if _extinction_stop() or float(Time.get_ticks_usec() - t0) + _step_us_est > ff_us:
+				if _extinction_stop() or float(int(_clock_us.call()) - t0) + _step_us_est > ff_us:
 					break
 			# 빨리 감기 프레임은 "지금 틱의 끝"(alpha 1)을 그린다. 멈추거나 보통 속도로 돌아가도 그 자리에서 이어지게 1.
 			_acc = 1.0
@@ -737,7 +990,7 @@ func advance_frame(delta: float) -> int:
 			var budget_us := _budget_ms * USEC_PER_MS
 			while _acc >= 1.0:
 				# 다음 틱까지 하면 예산을 넘을 것 같으면 멈춘다(적어도 1틱은 돎)
-				if n > 0 and float(Time.get_ticks_usec() - t0) + _step_us_est > budget_us:
+				if n > 0 and float(int(_clock_us.call()) - t0) + _step_us_est > budget_us:
 					# 따라가지 못한 몫은 버린다(밀린 틱이 쌓여 점점 더 느려지지 않게). 보간용 소수 부분만 남김
 					_acc -= floorf(_acc)
 					last_budget_hit = true
@@ -750,7 +1003,7 @@ func advance_frame(delta: float) -> int:
 					_acc -= floorf(_acc)
 					break
 			progress = float(n) + _acc - acc0
-	last_sim_ms = float(Time.get_ticks_usec() - t0) / USEC_PER_MS
+	last_sim_ms = float(int(_clock_us.call()) - t0) / USEC_PER_MS
 	var alpha := clampf(_acc, 0.0, 1.0)
 	for p in _panes:
 		p.map.update_view(alpha, step_dt)
@@ -773,7 +1026,7 @@ func advance_frame(delta: float) -> int:
 		for e in ev:
 			_show_event(e, k)
 	for k in experiments.size():
-		if experiments[k].world.extinct_tick >= 0 and not _extinct_seen[k]:
+		if experiments[k].extinct_at() >= 0 and not _extinct_seen[k]:
 			_on_extinct(k)
 	_frame += 1
 	var every := maxi(1, UiConfig.integer("info.refresh_frames"))
@@ -789,18 +1042,18 @@ func advance_frame(delta: float) -> int:
 func _step_once() -> void:
 	for p in _panes:
 		p.map.before_steps()
-	var s0 := Time.get_ticks_usec()
+	var s0: int = _clock_us.call()
 	for k in experiments.size():
 		if experiments[k].step():
 			recorded.emit(k, experiments[k].rows().back())
-	var us := float(Time.get_ticks_usec() - s0)
+	var us := float(int(_clock_us.call()) - s0)
 	_step_us_est = us if _step_us_est <= 0.0 else lerpf(_step_us_est, us, _est_alpha)
 
 
 ## k 번째 실험이 멸종하는 순간 한 번: 정보 창 빈 안내를 멸종 문구로, 지도 표지는 _refresh_status 가 계속 보인다.
 ## 모든 실험이 멸종했으면(혼자 모드 = 그 실험) lab.pause_on_extinction 이면 멈춘다(헤드리스 실행기의 끝 조건과 같게).
-## 비교 모드에서 한쪽만 멸종하면 멈추지 않는다 — 살아남은 쪽을 같은 틱으로 계속 견주게(멸종 알림·표지로 그 순간을 남김).
-## 다시 재생하면 빈 지도가 계속 진행한다.
+## 비교 모드에서 한쪽만 멸종하면 멈추지 않는다 — 살아남은 쪽은 계속 진행하고 멸종한 쪽은 멸종한 틱 그대로(Experiment.step —
+## 실행기처럼, 멸종 알림·표지로 그 순간을 남김). 다시 재생해도 멸종한 세계는 진행하지 않는다.
 func _on_extinct(k: int) -> void:
 	_extinct_seen[k] = true
 	info_panel.set_empty_text(_empty_text())
@@ -811,7 +1064,7 @@ func _on_extinct(k: int) -> void:
 
 ## 이 틱에서 모든 실험이 멸종했고(아직 알리지 않은 멸종이 있음) lab.pause_on_extinction 이면 true — 프레임의 남은 틱을 돌지 않고
 ## 멸종한 틱에서 멈추게(4단계 최종 점검: 한 프레임에 여러 틱을 돌 때 멸종한 다음 틱까지 가서 멈출 수 있었음, 예산에 따라 달라짐).
-## 멸종해 멈춘 뒤 다시 재생하면(모두 알렸음) 빈 세계가 계속 진행한다.
+## 멸종해 멈춘 뒤 다시 재생해도(모두 알렸음) 멸종한 세계는 진행하지 않는다(위쪽 막대 "멸종 · 진행 끝").
 func _extinction_stop() -> bool:
 	if not _all_extinct() or not bool(UiConfig.value("lab.pause_on_extinction", true)):
 		return false
@@ -823,7 +1076,7 @@ func _extinction_stop() -> bool:
 
 func _all_extinct() -> bool:
 	for x in experiments:
-		if x.world.extinct_tick < 0:
+		if x.extinct_at() < 0:
 			return false
 	return not experiments.is_empty()
 
@@ -832,17 +1085,17 @@ func _all_extinct() -> bool:
 func _empty_text() -> String:
 	var dead: Array[int] = []
 	for k in experiments.size():
-		if experiments[k].world.extinct_tick >= 0:
+		if experiments[k].extinct_at() >= 0:
 			dead.append(k)
 	if dead.is_empty():
 		return ""
 	# 두 줄로(정보 창 폭 안에서 문장 가운데 낱말이 갈라지지 않게 — 줄은 정보 창이 여백 안에서 바꿈)
 	if not is_comparing():
-		return "멸종했습니다 (틱 %s)\n고를 개체가 없습니다" % _commas(experiments[0].world.extinct_tick)
+		return "멸종했습니다 (틱 %s)\n고를 개체가 없습니다" % _commas(experiments[0].extinct_at())
 	if dead.size() == experiments.size():
 		return "A·B 모두 멸종했습니다\n고를 개체가 없습니다"
 	var k := dead[0]
-	return "%s 는 멸종했습니다 (틱 %s)\n%s 지도에서 고르세요" % [experiments[k].tag, _commas(experiments[k].world.extinct_tick),
+	return "%s 는 멸종했습니다 (틱 %s)\n%s 지도에서 고르세요" % [experiments[k].tag, _commas(experiments[k].extinct_at()),
 			experiments[1 - k].tag]
 
 
@@ -870,13 +1123,51 @@ func _input(event: InputEvent) -> void:
 	var k := event as InputEventKey
 	if k == null or not k.pressed or k.echo:
 		return
+	var code := k.keycode if k.keycode != KEY_NONE else k.physical_keycode
+	# Ctrl(맥은 Cmd)+N·S·O·E = 패널의 새 실험·스냅숏 저장·열기·내보내기(글 칸에 초점이 있어도 — 단추 동작이 칸을 먼저 확정)
+	if k.is_command_or_control_pressed() and not k.alt_pressed and not k.shift_pressed:
+		if not _dialog_open() and _press_command(code):
+			get_viewport().set_input_as_handled()
+		return
 	if k.ctrl_pressed or k.alt_pressed or k.meta_pressed:
 		return
 	if _text_has_focus() or _dialog_open():
 		return
-	var code := k.keycode if k.keycode != KEY_NONE else k.physical_keycode
+	# 아무것도 초점이 없을 때 Tab = 파라미터 패널(접었으면 정보 창)의 첫 칸으로(엔진은 초점이 없으면 Tab 을 옮기지 않음)
+	if code == KEY_TAB and get_viewport().gui_get_focus_owner() == null:
+		var first := first_focus()
+		if first != null:
+			first.grab_focus()
+			get_viewport().set_input_as_handled()
+		return
 	if _handle_key(code):
 		get_viewport().set_input_as_handled()
+
+
+## Ctrl·Cmd 단축키(COMMAND_KEYS)의 패널 단추를 누른다 — 마우스로 누른 것과 같은 길(ParamPanel 의 단추 동작: 입력 중인 칸
+## 확정, 오래 돈 실험이면 먼저 물음). 자리를 접어 단추가 화면에 없어도 듣는다. 눌렀으면 true(검토 J16: 예전엔 키보드만으로
+## 새 실험·저장·열기·내보내기를 할 수 없었음).
+func _press_command(code: Key) -> bool:
+	if param_panel == null or not is_instance_valid(param_panel) or not COMMAND_KEYS.has(code):
+		return false
+	for id: String in COMMAND_KEYS[code]:
+		var b := param_panel.control(id) as BaseButton
+		if b != null and b.visible and not b.disabled:
+			b.pressed.emit()
+			return true
+	return false
+
+
+## Tab 이 처음 초점을 줄 칸: 보이는 파라미터 패널 → 정보 창 순서로, 키보드 초점을 받는(FOCUS_ALL) 첫 Control. 없으면 null.
+func first_focus() -> Control:
+	for host: Control in [param_panel, info_panel]:
+		if host == null or not is_instance_valid(host) or not host.is_visible_in_tree():
+			continue
+		for n in host.find_children("*", "Control", true, false):
+			var c := n as Control
+			if c.focus_mode == Control.FOCUS_ALL and c.is_visible_in_tree() and not (c is BaseButton and (c as BaseButton).disabled):
+				return c
+	return null
 
 
 ## 글자를 적을 수 있는 칸에 초점이 있는가(읽기 전용 칸 — 고급 설정의 배열·글자 값 — 은 글자를 받지 않으므로 아님).
@@ -939,14 +1230,20 @@ func _handle_key(code: Key) -> bool:
 		KEY_F:
 			# 따라가기는 선택한 개체의 지도(비교 모드면 그 실험의 지도)에서
 			var mv := _sel_map()
+			# 비교 모드면 그 실험의 알림(이름표 group — 그 지도 칸에 뜨고 비교를 끝내면 함께 지워짐)
+			var tag := experiments[_selected_index].tag if is_comparing() else ""
+			var where := "%s 지도 " % tag if tag != "" else ""
+			# 고른 개체가 죽었으면(기록만 — 지도에 없음) 켜지 않는다. 정보 창 따라가기 단추가 꺼지는 규칙과 같게(검토 I41:
+			# 예전엔 "따라가기 켬" 이라 알리고 실제로는 따라가지 않았으며, 켜진 채 남아 다음에 고른 개체를 바로 따라갔음). 끄기는 됨
+			var sx := experiment(_selected_index)
+			if not mv.follow_selected and _selected >= 0 and sx != null and sx.world.index_of_id(_selected) == -1:
+				show_toast(FOLLOW_DEAD_TEXT, "info", -1, tag)
+				return true
 			mv.follow_selected = not mv.follow_selected
 			# 정보 창의 "따라가기" 단추도 같은 상태로(신호 없이)
 			info_panel.set_follow(mv.follow_selected)
 			if mv.follow_selected and _selected >= 0:
 				mv.focus_on(_selected)
-			# 비교 모드면 그 실험의 알림(이름표 group — 그 지도 칸에 뜨고 비교를 끝내면 함께 지워짐)
-			var tag := experiments[_selected_index].tag if is_comparing() else ""
-			var where := "%s 지도 " % tag if tag != "" else ""
 			show_toast(where + ("따라가기 켬" if mv.follow_selected else "따라가기 끔"), "info", -1, tag)
 			return true
 		KEY_HOME, KEY_0, KEY_KP_0:
@@ -1225,7 +1522,7 @@ func _refresh_status(with_speed: bool) -> void:
 		ticks.append(_commas(w.tick))
 		days.append(_commas(w.tick / _day_ticks_of(w) + 1))
 		seasons.append(SEASON_NAMES[w.season] if w.season >= 0 and w.season < SEASON_NAMES.size() else NO_SEASON)
-		lights.append("낮" if w.light >= UiConfig.num("lab.day_light_threshold") else "밤")
+		lights.append("밤" if is_night(w) else "낮")
 	_lbl_tick.text = _joined(ticks)
 	# 하루 길이가 다른 두 실험(고급 설정)은 같은 틱이라도 날이 달라 "날" 은 숨긴다(틱이 기준, 위쪽 막대가 최소 창 폭 안에)
 	var same_day := _all_same(days)
@@ -1256,16 +1553,16 @@ func _refresh_status(with_speed: bool) -> void:
 	if with_speed:
 		_speed_label_wait = UiConfig.num("speed.label_refresh_s")
 		_lbl_speed.text = speed_text()
-		var behind := not _paused and not _fast and _hist_time >= _window_s * _behind_fill \
+		var behind := not _paused and not _fast and not _all_extinct() and _hist_time >= _window_s * _behind_fill \
 				and actual_speed() < float(_speed) * UiConfig.num("speed.behind_ratio")
 		_tint(_lbl_speed, UiTheme.color("warn" if behind else "text"))
 	for k in mini(_panes.size(), experiments.size()):
 		var p := _panes[k]
-		var w := experiments[k].world
 		p.paused.visible = _paused
-		p.extinct.visible = w.extinct_tick >= 0
+		var et := experiments[k].extinct_at()
+		p.extinct.visible = et >= 0
 		if p.extinct.visible:
-			p.extinct.text = "멸종 · 틱 %s" % _commas(w.extinct_tick)
+			p.extinct.text = "멸종 · 틱 %s" % _commas(et)
 		# 나침반: 화면 위가 북쪽이 아니면(비교 모드에서 세로 칸에 맞춰 돌렸거나 사용자가 돌림) 북쪽 방향 화살표
 		var turns := view_turns(k)
 		p.north.visible = turns != 0
@@ -1316,10 +1613,14 @@ static func _tint(c: Control, col: Color) -> void:
 		c.add_theme_color_override("font_color", col)
 
 
-## "목표 N배 / 실제 M배"(빨리 감기면 "빨리 감기 / 실제 M배", 멈춤이면 "멈춤 · 목표 N배").
+## "목표 N배 / 실제 M배"(빨리 감기면 "빨리 감기 / 실제 M배"), 멈춤이면 "멈춤 · 목표 N배", 빨리 감기 중 멈춤이면
+## "멈춤 · 빨리 감기"(다시 재생하면 빨리 감기로 돎 — 검토 J33: 예전엔 꺼진 속도 단추의 "목표 64배" 를 적었음),
+## 모든 실험이 멸종했으면 EXTINCT_SPEED_TEXT(멸종한 세계는 더 진행하지 않음).
 func speed_text() -> String:
+	if _all_extinct():
+		return EXTINCT_SPEED_TEXT
 	if _paused:
-		return "멈춤 · 목표 %d배" % _speed
+		return "멈춤 · 빨리 감기" if _fast else "멈춤 · 목표 %d배" % _speed
 	var a := actual_speed()
 	var actual := (("%.1f" % a) if a < 10.0 else _commas(roundi(a))) + "배"
 	if _hist_time < _window_s * WARMUP_FRACTION:
@@ -1327,6 +1628,14 @@ func speed_text() -> String:
 	if _fast:
 		return "빨리 감기 / 실제 %s" % actual
 	return "목표 %d배 / 실제 %s" % [_speed, actual]
+
+
+## 위쪽 막대의 낮/밤: 빛이 밤 문턱 아래면 밤. 화면이 이 문턱을 읽는 곳은 여기 한 곳뿐이다(캡처·검사도 이 함수 —
+## 검토 I77). 문턱은 시뮬레이션의 밤 판정(감지 반경을 줄이는 규칙)과 같은 값이어야 하며, 규칙 쪽 설정 키
+## time.night_light_threshold(sim-defaults.json, g1a)가 들어오면 world.cfg 의 그 값을 읽는다. 지금은 화면 설정
+## lab.day_light_threshold(규칙의 0.5 와 같은 값).
+static func is_night(w: SimWorld) -> bool:
+	return w.light < UiConfig.num("lab.day_light_threshold")
 
 
 ## 하루 틱 수(날 표시용). SIM-API 의 읽기 전용 cfg(time.day_ticks)를 읽기만 한다.
@@ -1473,6 +1782,24 @@ func _place_panels() -> void:
 	graph_panel.bind_lab(self)
 	chronicle_panel.bind_lab(self)
 	lab_sound.bind_lab(self)
+	# 단축키를 단추 말풍선에 보이게("새 실험 (Ctrl+N)" + 설명). 누름은 _input 이 먼저 받아 처리한다(_press_command — 자리를
+	# 접어도 들음)
+	for code: Key in COMMAND_KEYS:
+		for id: String in COMMAND_KEYS[code]:
+			var b := param_panel.control(id) as Button
+			if b != null:
+				b.shortcut = command_shortcut(code, b.text)
+
+
+## Ctrl(맥은 Cmd) + code 단축키(이름 = 말풍선 첫 줄의 단추 이름).
+static func command_shortcut(code: Key, label: String) -> Shortcut:
+	var e := InputEventKey.new()
+	e.keycode = code
+	e.command_or_control_autoremap = true
+	var sc := Shortcut.new()
+	sc.resource_name = label
+	sc.events = [e]
+	return sc
 
 
 ## 아래 자리 나누기(통합 때 더함): 연대기 폭 = 아래 자리 안쪽 폭 × chronicle.dock_frac 을

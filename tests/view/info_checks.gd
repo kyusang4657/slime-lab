@@ -9,11 +9,14 @@ const DEATH_GUARD := 1000
 ## 지켜볼 개체의 남은 수명 하한(틱): refresh 와 자식 단추 늘어남을 여러 번 겪도록
 const MIN_LIFE_LEFT := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 55
+const MIN_CHECKS := 65
 ## 1600×900 실험실에서 정보 창 높이(창 높이 − 위쪽 막대 최소 높이) — V07
 const LAB_HEIGHT_1600 := 900.0
 ## V07 을 재 볼 개체 수 한도
 const V07_SAMPLES := 60
+## 자동 줄바꿈 안내를 나눠 볼 가장 좁은 폭과 폭 간격(px) — 한 낱말보다 넓게
+const WRAP_SWEEP_MIN := 160.0
+const WRAP_SWEEP_STEP := 2.0
 
 
 func run(t) -> void:
@@ -84,6 +87,12 @@ func run(t) -> void:
 		panel.set_follow(true)
 		t.check(fb.button_pressed and follows.size() == 2, "set_follow 는 단추만 맞추고 신호를 내지 않음")
 		panel.set_follow(false)
+	# 키보드: 따라가기·가계 단추가 초점을 받는다(Tab 으로 닿고 Enter 로 누름 — 검토 J16: 예전엔 모두 FOCUS_NONE).
+	# 스페이스는 실험실이 먼저 받아 멈춤(lab_checks)
+	var all_focus := fb != null and fb.focus_mode == Control.FOCUS_ALL and not _buttons(panel).is_empty()
+	for b in _buttons(panel):
+		all_focus = all_focus and b.focus_mode == Control.FOCUS_ALL
+	t.check(all_focus, "따라가기·가계 단추 %d개가 키보드 초점을 받음" % _buttons(panel).size())
 
 	# ── refresh 는 싸다: 자식 수가 그대로면 children_of 를 다시 부르지 않는다 ──
 	var scans := panel.children_scans
@@ -137,6 +146,8 @@ func run(t) -> void:
 		sm = panel.summary_text()
 		t.check(panel.current_id() == dead_id and sm.contains("죽음") and sm.contains(SimWorld.CAUSE_NAMES[int(xd.cause)]),
 				"죽은 개체는 원인을 보임: " + sm)
+
+	await _labels(t, panel, world, dead_id)
 
 	# ── 없는 id·빈 세계 ──
 	panel.show_slime(world, world.lin_pa.size() + 1000)
@@ -275,6 +286,94 @@ func run(t) -> void:
 	await _v07(t, panel, world)
 	panel.queue_free()
 	await t.frames(1)
+
+
+## 글 표기(검토 I47·I48·I49·I86): "운반" 단위, 멸종 안내 아래 클릭 도움말 숨김, 자동 줄바꿈 안내가 낱말 가운데서 끊기지 않음,
+## "고른 행동" 이 아직 열리지 않은 단계의 줍기·심기면 "(시도 · 발견 전)"·흐린 색.
+func _labels(t, panel: InfoPanel, world: SimWorld, dead_id: int) -> void:
+	# I47: 운반 = 나르는 먹이 양 + 단위(예전엔 "0.6" 만)
+	var wc: SimWorld = t.make_world({}, SEED)
+	wc.s_carry[0] = 0.6
+	panel.show_slime(wc, wc.s_id[0])
+	t.check(panel._v_carry.text == "먹이 0.6" and InfoPanel.carry_text(0.0) == "없음",
+			"운반 값에 단위: \"%s\"(없으면 \"%s\")" % [panel._v_carry.text, InfoPanel.carry_text(0.0)])
+	# I49: 기록만 남은 개체의 두뇌 안내는 낱말 단위로 줄바꿈(예전엔 "…그릴 수 없" / "습니다.")
+	if dead_id >= 0:
+		panel.show_slime(world, dead_id)
+		await t.frames(2)
+		var note: Label = panel._brain_note
+		var split := _wrap_split(note)
+		t.check(note.visible and UiTheme.plain_text(note.text) == InfoPanel.NO_BRAIN_TEXT and split == "",
+				"두뇌 없음 안내가 폭 %.0f(와 더 좁은 폭)에서 낱말 가운데서 끊기지 않음 %s" % [note.size.x, split])
+	# I48·I49: 바꾼 빈 안내(멸종 등)면 아래 클릭 도움말을 숨김, 긴 안내도 낱말 단위로 줄바꿈
+	panel.clear()
+	t.check(panel.empty_hint_visible(), "기본 빈 안내 아래 클릭 도움말이 보임")
+	panel.set_empty_text("멸종했습니다 (틱 1,234)\n고를 개체가 없습니다")
+	t.check(not panel.empty_hint_visible() and panel.summary_text() == "멸종했습니다 (틱 1,234)\n고를 개체가 없습니다",
+			"멸종 안내면 \"지도에서 슬라임을 클릭하면…\" 도움말을 숨김(안내 \"%s\")" % panel.summary_text())
+	panel.set_empty_text("모든 실험이 멸종해 고를 개체가 없습니다 새 실험을 시작하거나 스냅숏을 여세요")
+	await t.frames(2)
+	var split2 := _wrap_split(panel._empty_label)
+	t.check(split2 == "", "긴 빈 안내도 폭 %.0f(와 더 좁은 폭)에서 낱말 가운데서 끊기지 않음 %s" % [panel._empty_label.size.x, split2])
+	panel.set_empty_text("")
+	t.check(panel.empty_hint_visible() and panel.summary_text() == InfoPanel.EMPTY_TEXT, "안내를 되돌리면 도움말도 다시 보임")
+	# I86: 발견 전의 줍기·심기는 효과 없는 시도 — 이름 뒤 표시·흐린 색, 단계가 열리면 이름만
+	t.check(InfoPanel.action_text(SimBrain.ACT_PLANT, SimWorld.STAGE_STORE) == "심기" + InfoPanel.ATTEMPT_SUFFIX
+			and InfoPanel.action_text(SimBrain.ACT_PLANT, SimWorld.STAGE_FARM) == "심기"
+			and InfoPanel.action_text(SimBrain.ACT_GATHER, SimWorld.STAGE_NONE) == "줍기" + InfoPanel.ATTEMPT_SUFFIX
+			and InfoPanel.action_text(SimBrain.ACT_GATHER, SimWorld.STAGE_FORAGE) == "줍기"
+			and InfoPanel.action_text(SimBrain.ACT_EAT, SimWorld.STAGE_NONE) == "먹기",
+			"고른 행동: 단계 전 줍기·심기만 \"(시도 · 발견 전)\"")
+	var tried := -1
+	var plain := -1
+	for i in world.population():
+		var a := world.s_last_action[i]
+		if tried < 0 and (a == SimBrain.ACT_PLANT or a == SimBrain.ACT_GATHER) and InfoPanel.is_attempt(a, world.stage):
+			tried = world.s_id[i]
+		elif plain < 0 and not InfoPanel.ACTION_STAGE.has(a):
+			plain = world.s_id[i]
+	t.check(world.stage == SimWorld.STAGE_NONE and tried >= 0 and plain >= 0, "발견 전 세계(단계 %d)에 줍기·심기를 고른 개체 #%d·다른 행동 #%d" % [world.stage, tried, plain])
+	if tried >= 0 and plain >= 0:
+		panel.show_slime(world, tried)
+		var tx: String = panel._v_action.text
+		var tc: Color = panel._v_action.get_theme_color("font_color")
+		panel.show_slime(world, plain)
+		var px: String = panel._v_action.text
+		var pc: Color = panel._v_action.get_theme_color("font_color")
+		t.check(tx.ends_with(InfoPanel.ATTEMPT_SUFFIX) and tc.is_equal_approx(UiConfig.color("theme.text_dim"))
+				and not px.contains("시도") and pc.is_equal_approx(UiConfig.color("theme.text")),
+				"정보 창: 발견 전 시도 \"%s\"(흐린 색), 다른 행동 \"%s\"" % [tx, px])
+
+
+## 자동 줄바꿈 Label 이 낱말 가운데(빈칸이 아닌 곳)에서 줄을 바꾸는지. Label 과 같은 글꼴·크기·줄바꿈 규칙(WORD_SMART)으로
+## 지금 폭(줄 수가 Label 과 같은지도 봄 — 두 줄 이상)과 WRAP_SWEEP_MIN 부터 지금 폭까지 WRAP_SWEEP_STEP 마다의 폭에서 줄을 나눠,
+## 줄을 빈칸으로 이으면 원래 글(낱말 잇개 뺌)이 되는지 본다(어느 폭에서 음절 사이로 끊길지는 글꼴에 따라 달라 여러 폭에서).
+## 모두 빈칸에서만 끊으면 "", 아니면 처음 틀린 폭과 나뉜 줄.
+func _wrap_split(lb: Label) -> String:
+	var now := _wrap_lines(lb, lb.size.x)
+	if now.size() < 2 or now.size() != lb.get_line_count():
+		return "폭 %.0f: %s(Label %d줄)" % [lb.size.x, str(now), lb.get_line_count()]
+	var want := " ".join(UiTheme.plain_text(lb.text).replace("\n", " ").split(" ", false))
+	var wd := lb.size.x
+	while wd >= WRAP_SWEEP_MIN:
+		var lines := _wrap_lines(lb, wd)
+		if " ".join(lines) != want:
+			return "폭 %.0f: %s" % [wd, str(lines)]
+		wd -= WRAP_SWEEP_STEP
+	return ""
+
+
+## Label 글을 그 글꼴·크기·WORD_SMART 규칙으로 폭 wd 에서 나눈 줄(낱말 잇개 뺌, 앞뒤 빈칸 뺌).
+func _wrap_lines(lb: Label, wd: float) -> PackedStringArray:
+	var p := TextParagraph.new()
+	p.add_string(lb.text, lb.get_theme_font("font"), lb.get_theme_font_size("font_size"))
+	p.width = wd
+	p.break_flags = TextServer.BREAK_MANDATORY | TextServer.BREAK_WORD_BOUND | TextServer.BREAK_ADAPTIVE
+	var lines := PackedStringArray()
+	for i in p.get_line_count():
+		var rg := p.get_line_range(i)
+		lines.append(UiTheme.plain_text(lb.text.substr(rg.x, rg.y - rg.x)).strip_edges())
+	return lines
 
 
 func _v07(t, panel: InfoPanel, world: SimWorld) -> void:

@@ -7,39 +7,74 @@ const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 234
+const MIN_CHECKS := 285
 ## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
 const B_MUTATION := 0.07
-## 최소 창(1280×720)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기
-const MIN_COMPARE_MAP := Vector2(320, 400)
+## 최소 창(lab.min_width × lab.min_height = 1280×640)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기,
+## 그리고 1280×720 창에서(검토 J29 전의 최소 창 — 그 크기의 배치 검사도 그대로)
+const MIN_COMPARE_MAP := Vector2(320, 360)
+const MIN_COMPARE_MAP_720 := Vector2(320, 400)
+const SIZE_720 := Vector2i(1280, 720)
+## 화면 배율 검사의 창 장식(왼쪽·위, 오른쪽·아래)과 768 높이 노트북의 작업 영역(아래 작업 표시줄 40)
+const DECO_TL := Vector2i(8, 32)
+const DECO_BR := Vector2i(8, 8)
+const LAPTOP_USABLE := Rect2i(0, 0, 1366, 728)
 ## 그 칸(세로로 긴 칸)에서 지도가 차지하는 칸 높이 몫의 하한(돌려 맞춤 — 북쪽 위 그대로면 약 0.39)
 const MIN_COMPARE_HEIGHT_SHARE := 0.55
-## 예산 측정 프레임 수, 평균 시뮬레이션 시간이 예산을 넘어도 되는 몫(ms)
+## 예산 측정 프레임 수. 실제 시계로 잰 시간은 기계 속도에 묶이므로 "예산 + 이 기계의 틱 둘" 안인지만 보고(예산을 무시하고
+## 요청한 틱을 모두 돌면 넘음), 예산 규칙 자체는 가짜 시계로 결정적으로 잰다(_budget_rule — 검토 I34)
 const BUDGET_FRAMES := 60
-const BUDGET_SLACK_MS := 0.5
+const BUDGET_TICK_SLACK := 2.0
+## 한 프레임 실제 시간의 멈칫 여유(ms — OS 가 잠시 다른 일을 해도)
+const HICCUP_MS := 30.0
+## 가짜 시계의 한 틱 비용(ms): [보통 배속인가, 비용]. 예산(10ms·빨리 감기 14ms)보다 싼 틱(여러 틱)과 비싼 틱(적어도 1틱),
+## 예산을 나누어떨어뜨리지 않는 값(경계에서 소수 오차가 끼지 않게)
+const FAKE_TICK_CASES := [[true, 3.0], [true, 15.0], [false, 3.0], [false, 20.0]]
+const FAKE_FRAMES := 10
+## 예산보다 훨씬 싼 틱(ms): 64배(프레임당 6.4틱)는 예산에 걸리지 않고 빨리 감기는 예산을 다 써 더 많이 돎
+const CHEAP_TICK_MS := 1.0
 ## 16배(프레임당 1.6틱)에서 혼자 있는 개체가 한 프레임에 그려지는 거리 상한(칸): 1.6틱 × smoothstep 기울기 여유
 const MULTI_TICK_MAX_STEP := 1.9
 ## 실제 시계 예산을 끈 셈의 값(ms) — 결정적으로 재야 하는 검사 동안
 const BUDGET_OFF_MS := 1.0e9
-const SNAP_PATH := "user://lab_checks_snapshot.json"
+## 이 검사가 쓰는 파일(스냅숏·백업·비교·내려받기)은 프로세스별 임시 폴더에(검토 I37: 예전엔 PID 없는 고정 이름
+## user://lab_checks_snapshot.json 등과 실제 user://downloads 를 써, 같은 사용자 폴더를 쓰는 저장소 사본끼리 서로의 파일을
+## 지울 수 있었음). 처음과 끝에 숨은 파일까지 지운다.
+var TMP := "user://lab_checks-%d" % OS.get_process_id()
+var SNAP_PATH := TMP.path_join("snapshot.json")
+## 실제 _process 경로의 느린 프레임: 형제 노드가 프레임마다 잡아먹는 시간(ms — 엔진이 delta 를 자르는 8/60초보다 훨씬 김)과
+## 잴 프레임 수, 실제 배속(틱 ÷ 벽시계)과 표시가 어긋나도 되는 몫
+const SLOW_FRAME_MS := 400
+const SLOW_FRAMES := 7
+const SLOW_SPEED_TOL := 0.15
+## 죽은 개체 기록이 생길 때까지 진행하는 한도와 한 번에 진행하는 틱
+const DEAD_GUARD_TICKS := 3000
+const DEAD_STEP := 20
 
 
 func run(t) -> void:
 	# 헤드리스 뿌리 창은 64×64 — 배치를 재는 검사를 위해 최소 창 크기로(끝나면 되돌림)
 	var root_size: Vector2i = t.root.size
 	t.root.size = Vector2i(UiConfig.integer("lab.min_width"), UiConfig.integer("lab.min_height"))
+	LabMain._remove_tree(ProjectSettings.globalize_path(TMP))
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(TMP))
 	var lab: LabMain = load("res://scenes/lab.tscn").instantiate()
 	t.root.add_child(lab)
 	await t.frames(2)
 	lab.set_process(false)
+	lab.download_dir = TMP.path_join("downloads")
 	await _layout(t, lab)
+	await _screen_fit(t, lab)
+	_night_threshold(t)
 	_run_loop(t, lab)
 	_budget(t, lab)
 	_ff_pause(t, lab)
 	_multi_tick_motion(t, lab)
 	_speed_window(t, lab)
+	await _slow_process(t, lab)
 	_selection(t, lab)
 	await _keys(t, lab)
+	await _command_keys(t, lab)
 	_events(t, lab)
 	await _toast_rules(t, lab)
 	_extinction(t, lab)
@@ -57,6 +92,8 @@ func run(t) -> void:
 	lab.queue_free()
 	await t.frames(1)
 	t.root.size = root_size
+	LabMain._remove_tree(ProjectSettings.globalize_path(TMP))
+	t.check(not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(TMP)), "검사 파일을 둔 프로세스별 임시 폴더를 끝에 지움(%s)" % TMP)
 
 
 func _layout(t, lab: LabMain) -> void:
@@ -87,6 +124,8 @@ func _layout(t, lab: LabMain) -> void:
 				"그래프는 늘어나고 연대기 폭 %.0f ∈ [chronicle.min_width, chronicle.width]" % cw)
 		t.check(_fits_window(lab), "최소 창(%s)·자리 모두 펼침: 아래 자리 최소 폭이 넘치지 않고 정보 창이 창 안(오른쪽 끝 %.0f ≤ %.0f)"
 				% [str(t.root.size), lab.info_panel.get_global_rect().end.x, lab.size.x])
+		t.check(_fits_height(lab), "최소 창(%s): 세로도 창 안(본문 최소 높이 %.0f, 새 실험 단추·아래 자리·정보 창 아래 끝 ≤ %.0f)"
+				% [str(t.root.size), (lab.get_node("Column") as Control).get_combined_minimum_size().y, lab.size.y])
 		var small: Vector2i = t.root.size
 		t.root.size = Vector2i(1600, 900)
 		await t.frames(2)
@@ -135,6 +174,96 @@ func _layout(t, lab: LabMain) -> void:
 	probe2.queue_free()
 	await t.frames(2)
 	t.check(lab._left_wrap.visible and lab._bottom_wrap.visible, "더 넣은 것을 빼도 패널이 있는 자리는 보임")
+
+
+## 화면 크기·배율(검토 J08·J28·J29). 정하는 셈은 순수 함수라 OS 없이: OS 배율(Windows DPI·macOS·웹·Wayland), 창에 맞는
+## 배율(논리 크기 = 창 ÷ 배율 ≥ 최소 배치), 데스크톱 첫 창(작업 영역 안으로 줄이고 가운데, 제목 표시줄이 화면 안). 그리고 실제
+## 배치: 배율 2(웹 dpr 2·레티나) 창에서 논리 크기가 반, 폭 1024 브라우저에서 배율을 줄여 모두 창 안, 768 높이 노트북의 창에서
+## 배율 1 그대로 배치가 들어감.
+func _screen_fit(t, lab: LabMain) -> void:
+	var lo := UiConfig.num("lab.ui_scale_min")
+	var hi := UiConfig.num("lab.ui_scale_max")
+	var min_l := LabMain.min_logical()
+	t.check(is_equal_approx(LabMain.os_scale_of("Windows", "Windows", 1.0, 144), 1.5) and is_equal_approx(LabMain.os_scale_of("Windows", "Windows", 1.0, 0), 1.0)
+			and is_equal_approx(LabMain.os_scale_of("macOS", "macOS", 2.0, 220), 2.0) and is_equal_approx(LabMain.os_scale_of("Web", "web", 1.5, 144), 1.5)
+			and is_equal_approx(LabMain.os_scale_of("Linux", "Wayland", 2.0, 96), 2.0) and is_equal_approx(LabMain.os_scale_of("Linux", "X11", 2.0, 192), 1.0),
+			"OS 배율: Windows DPI÷96, macOS·웹·Wayland 화면 배율, X11 1")
+	t.check(is_equal_approx(LabMain.ui_scale_for(Vector2(2732, 1536), 2.0, min_l, lo, hi), 2.0)
+			and is_equal_approx(LabMain.ui_scale_for(Vector2(1024, 700), 1.0, min_l, lo, hi), 1024.0 / min_l.x)
+			and is_equal_approx(LabMain.ui_scale_for(Vector2(2000, 1000), 2.0, min_l, lo, hi), minf(2000.0 / min_l.x, 1000.0 / min_l.y))
+			and is_equal_approx(LabMain.ui_scale_for(Vector2(300, 200), 1.0, min_l, lo, hi), lo)
+			and is_equal_approx(LabMain.ui_scale_for(Vector2(20000, 20000), 9.0, min_l, lo, hi), hi),
+			"창에 맞는 배율: 바라는 배율 이하, 논리 크기 ≥ 최소 배치(%s), [%.2f, %.2f]" % [str(min_l), lo, hi])
+	var start := Vector2(1600, 900)
+	# (작업 영역, 바라는 배율, 이름): 768 높이 노트북 · 1920×1080 Windows 150% · 2560×1440 · 둘째 모니터 · 레티나 · 아주 작은 화면
+	var cases := [[LAPTOP_USABLE, 1.0, "1366×768"], [Rect2i(0, 0, 1920, 1032), 1.5, "1920×1080 150%"], [Rect2i(0, 0, 2560, 1400), 1.0, "2560×1440"],
+			[Rect2i(1920, 0, 1366, 728), 1.0, "둘째 모니터"], [Rect2i(0, 50, 2880, 1610), 2.0, "레티나 1440×900pt"], [Rect2i(0, 0, 800, 560), 1.0, "800×600"]]
+	var bad := ""
+	for c in cases:
+		var u: Rect2i = c[0]
+		var p := LabMain.plan_window(u, DECO_TL, DECO_BR, float(c[1]), start, min_l, lo, hi)
+		var sz: Vector2i = p.size
+		var pos: Vector2i = p.position
+		var frame := Rect2i(pos - DECO_TL, sz + DECO_TL + DECO_BR)
+		var logical := Vector2(sz) / float(p.scale)
+		if not u.encloses(frame) or float(p.scale) > float(c[1]) + 0.001 or logical.x < min_l.x - 1.0 or logical.y < min_l.y - 1.0 \
+				or sz.x < int(p.min_size.x) or sz.y < int(p.min_size.y) or logical.x > start.x + 1.0 or logical.y > start.y + 1.0:
+			bad += " %s: 창 %s 위치 %s 배율 %.3f" % [str(c[2]), str(sz), str(pos), float(p.scale)]
+	t.check(bad == "", "첫 창이 작업 영역 안(제목 표시줄 포함)·논리 크기 ≥ 최소 배치·처음 크기 이하%s" % bad)
+	var lap := LabMain.plan_window(LAPTOP_USABLE, DECO_TL, DECO_BR, 1.0, start, min_l, lo, hi)
+	t.check(is_equal_approx(float(lap.scale), 1.0) and Vector2i(lap.position) == DECO_TL and int(lap.size.y) == LAPTOP_USABLE.size.y - DECO_TL.y - DECO_BR.y,
+			"768 높이 노트북(작업 영역 %s): 배율 1 그대로(최소 배치 높이 %d 가 들어감), 창 %s 가 작업 영역을 채우고 제목 표시줄이 화면 안(위치 %s)"
+			% [str(LAPTOP_USABLE.size), int(min_l.y), str(lap.size), str(lap.position)])
+	var wide := LabMain.plan_window(Rect2i(0, 0, 2560, 1400), DECO_TL, DECO_BR, 1.0, start, min_l, lo, hi)
+	t.check(Vector2(wide.size) == start and Vector2i(wide.position) == Vector2i((2560 - 1616) / 2, (1400 - 940) / 2) + DECO_TL,
+			"큰 화면: 처음 크기 %s 그대로 가운데(%s)" % [str(wide.size), str(wide.position)])
+	var tiny := LabMain.plan_window(Rect2i(0, 0, 500, 300), DECO_TL, DECO_BR, 1.0, start, min_l, lo, hi)
+	t.check(is_equal_approx(float(tiny.scale), lo) and Vector2i(tiny.position) == DECO_TL, "최소 배율로도 넘치는 화면: 왼쪽 위(제목 표시줄이 화면 안) %s" % str(tiny.position))
+	# 실제 배치: 창(뿌리) 크기·배율을 바꿔 잼(헤드리스는 OS 창이 없어 뿌리 창으로)
+	var keep: Vector2i = t.root.size
+	# (창, OS 배율, 이름, 기대 배율)
+	var pairs := [[Vector2i(min_l * 2.0), 2.0, "배율 2(레티나·웹 dpr 2) 최소 창", 2.0], [Vector2i(2732, 1536), 2.0, "웹 1366×768 CSS · dpr 2", 2.0],
+			[Vector2i(1024, 700), 1.0, "웹 1024×700(폭 1280 아래)", 1024.0 / min_l.x], [Vector2i(1350, 688), 1.0, "768 높이 노트북 창", 1.0]]
+	for c in pairs:
+		t.root.size = c[0]
+		var s := lab.fit_to_window(float(c[1]))
+		await t.frames(2)
+		var want := Vector2(c[0]) / s
+		t.check(is_equal_approx(s, float(c[3])) and is_equal_approx(lab.ui_scale(), s) and is_equal_approx(t.root.content_scale_factor, s) and lab.size.is_equal_approx(want)
+				and lab.size.x >= min_l.x - 0.5 and lab.size.y >= min_l.y - 0.5 and _fits_window(lab) and _fits_height(lab),
+				"%s: 창 %s · 배율 %.3f → 논리 %s 에 배치가 모두 들어감" % [str(c[2]), str(c[0]), s, str(lab.size)])
+	lab.set_ui_scale(1.0)
+	t.root.size = keep
+	await t.frames(2)
+	t.check(is_equal_approx(t.root.content_scale_factor, 1.0) and lab.size.is_equal_approx(Vector2(keep)), "배율 1·최소 창으로 되돌림")
+
+
+## 세로도 창 안: 본문 최소 높이 ≤ 창, 아래 자리·정보 창 아래 끝 ≤ 창 아래 끝, 패널의 주요 단추(새 실험·나란히 시작)가 창 안.
+func _fits_height(lab: LabMain) -> bool:
+	var col := lab.get_node("Column") as Control
+	var bottom := lab.get_global_rect().end.y + 0.5
+	var main_btn := lab.param_panel.control("start_compare" if lab.is_comparing() else "apply") as Control
+	return col.get_combined_minimum_size().y <= lab.size.y + 0.5 and lab._bottom_wrap.get_global_rect().end.y <= bottom \
+			and lab.info_panel.get_global_rect().end.y <= bottom and (main_btn == null or main_btn.get_global_rect().end.y <= bottom)
+
+
+## 낮/밤 문턱은 화면에서 한 곳(LabMain.is_night)만 읽는다 — 규칙 쪽 밤 판정 설정 키가 들어오면 그곳만 바꾸면 되게(검토 I77:
+## 화면 설정·캡처가 따로 읽어 위쪽 막대 표시와 규칙이 갈라질 수 있었음). 이 검사 파일은 빼고 scripts/·tests/ 를 훑음.
+func _night_threshold(t) -> void:
+	var key := "lab." + "day_light_threshold"
+	var hits: Array[String] = []
+	for dir in ["res://scripts", "res://tests"]:
+		_grep(dir, key, hits)
+	t.check(hits.size() == 1 and hits[0] == "res://scripts/ui/lab_main.gd", "낮/밤 문턱(%s)을 읽는 곳은 LabMain.is_night 하나: %s" % [key, str(hits)])
+
+
+static func _grep(dir: String, needle: String, hits: Array[String]) -> void:
+	for f in DirAccess.get_files_at(dir):
+		var path := dir.path_join(f)
+		if f.ends_with(".gd") and path != "res://tests/view/lab_checks.gd" and FileAccess.get_file_as_string(path).count(needle) > 0:
+			hits.append(path)
+	for d in DirAccess.get_directories_at(dir):
+		_grep(dir.path_join(d), needle, hits)
 
 
 func _run_loop(t, lab: LabMain) -> void:
@@ -188,8 +317,14 @@ func _run_loop(t, lab: LabMain) -> void:
 	var ff := UiConfig.num("speed.fast_forward_budget_ms")
 	t.check(lab.world.extinct_tick == -1 and lab.world.population() > 0,
 			"빨리 감기 측정 내내 슬라임이 살아 있음(%d마리, 멸종 틱 %d)" % [lab.world.population(), lab.world.extinct_tick])
-	t.check(nff > n64, "빨리 감기 %d틱 > 64배 %d틱(같은 60프레임)" % [nff, n64])
-	t.check(sum_ms / 60.0 <= ff * 1.5 + 2.0 and max_ms <= ff + 30.0, "빨리 감기 예산 대략 지킴(평균 %.1fms, 최대 %.1fms, 예산 %.0fms)" % [sum_ms / 60.0, max_ms, ff])
+	# 빨리 감기가 64배보다 더 진행하는지는 기계 속도에 달려(이 세계의 한 틱이 14ms ÷ 6.4 ≈ 2.2ms 를 넘는 기계면 같아짐)
+	# 가짜 시계로 잰다(_budget_rule — 검토 I34). 여기서는 출력만
+	print("  빨리 감기 %d틱 · 64배 %d틱(같은 60프레임, 실제 시계)" % [nff, n64])
+	# 실제 시계: 평균이 "예산 + 이 기계의 틱 둘" 안(기계 속도와 상관없는 꼴 — 검토 I34: 예전엔 평균 ≤ 23ms·최대 ≤ 44ms 라는
+	# 실제 시간 단언). 최대는 OS 멈칫에 흔들리므로 출력만, 규칙 자체는 _budget_rule 이 가짜 시계로 잰다
+	var ff_tick := sum_ms / maxf(float(nff), 1.0)
+	t.check(sum_ms / 60.0 <= ff + BUDGET_TICK_SLACK * ff_tick,
+			"빨리 감기 예산 대략 지킴(평균 %.1fms ≤ 예산 %.0fms + 틱 %.0f개 × %.2fms, 최대 %.1fms)" % [sum_ms / 60.0, ff, BUDGET_TICK_SLACK, ff_tick, max_ms])
 	t.check(lab.speed_text().begins_with("빨리 감기 / 실제"), "빨리 감기 표시: " + lab.speed_text())
 	lab.set_speed(8)
 	t.check(not lab.is_fast_forward() and lab._speed_btns[3].button_pressed, "속도를 고르면 빨리 감기 꺼짐")
@@ -205,8 +340,11 @@ func _budget(t, lab: LabMain) -> void:
 	var want := int(0.25 * UiConfig.num("speed.ticks_per_second_1x") * 64.0)
 	t.check(n >= 1 and n < want and lab.last_budget_hit, "예산에 걸리면 덜 진행(%d틱 < 요청 %d)" % [n, want])
 	t.check(lab._acc < 1.0, "밀린 틱을 버려 쌓이지 않음(누적 %.2f)" % lab._acc)
-	t.check(lab.last_sim_ms <= UiConfig.num("speed.sim_budget_ms") + 30.0, "프레임 시뮬레이션 시간 %.1fms ≈ 예산" % lab.last_sim_ms)
-	# 다음 틱 비용을 미리 더해 보고 멈추므로 평균은 예산 안(+여유), 95% 는 예산 + 한 틱 안
+	var est_ms := lab._step_us_est / LabMain.USEC_PER_MS
+	t.check(lab.last_sim_ms <= UiConfig.num("speed.sim_budget_ms") + BUDGET_TICK_SLACK * est_ms + HICCUP_MS,
+			"프레임 시뮬레이션 시간 %.1fms ≈ 예산(+ 틱 %.0f개 × %.2fms + 멈칫 %.0fms)" % [lab.last_sim_ms, BUDGET_TICK_SLACK, est_ms, HICCUP_MS])
+	# 실제 시계: 다음 틱 비용을 미리 더해 보고 멈추므로 평균은 "예산 + 이 기계의 틱 둘" 안(틱 하나가 예산보다 비싼 느린 기계는
+	# 프레임당 1틱 = 평균 ≈ 틱 하나라 역시 안). 예산을 무시하고 요청한 6.4틱을 모두 돌면 넘는다. 수치는 출력(성능 기록)
 	for mode in ["64배", "빨리 감기"]:
 		var budget := UiConfig.num("speed.sim_budget_ms")
 		if mode == "64배":
@@ -226,16 +364,83 @@ func _budget(t, lab: LabMain) -> void:
 		mean /= float(times.size())
 		var p95: float = times[int(float(times.size()) * 0.95)]
 		var per_tick := mean / maxf(float(ticks) / float(BUDGET_FRAMES), 1.0)
-		print("  예산(%s, %d마리): 평균 %.2fms, 95%% %.2fms, 최대 %.2fms, 틱당 약 %.2fms (예산 %.0fms)" % [mode, lab.world.population(), mean, p95, times.back(), per_tick, budget])
-		t.check(mean <= budget + BUDGET_SLACK_MS and p95 <= budget + 2.0 * per_tick,
-				"%s 예산 지킴: 평균 %.2fms ≤ %.1f, 95%% %.2fms ≤ 예산 + 틱 둘" % [mode, mean, budget + BUDGET_SLACK_MS, p95])
+		print("  예산(%s, %d마리): 평균 %.2fms, 95%% %.2fms, 최대 %.2fms, 틱당 약 %.2fms, 프레임당 %.2f틱 (예산 %.0fms)"
+				% [mode, lab.world.population(), mean, p95, times.back(), per_tick, float(ticks) / float(BUDGET_FRAMES), budget])
+		t.check(mean <= budget + BUDGET_TICK_SLACK * per_tick,
+				"%s 예산 지킴(실제 시계): 평균 %.2fms ≤ 예산 %.0fms + 틱 %.0f개 × %.2fms" % [mode, mean, budget, BUDGET_TICK_SLACK, per_tick])
 	lab.set_speed(64)
+	_budget_rule(t, lab)
 	# 아주 큰 프레임 시간은 speed.max_frame_delta_s 로 자른다
 	lab.set_speed(1)
 	lab._acc = 0.0
 	var c1 := lab.world.tick
 	lab.advance_frame(10.0)
 	t.check(lab.world.tick - c1 <= int(UiConfig.num("speed.max_frame_delta_s") * UiConfig.num("speed.ticks_per_second_1x")) + 1, "큰 프레임 시간을 잘라 한꺼번에 몰아 돌지 않음")
+
+
+## 가짜 시계: 실험 A 의 틱 × 한 틱 비용(µs) — 틱을 돌 때만 시간이 흐른다.
+class FakeClock extends RefCounted:
+	var lab: LabMain
+	var cost_us := 0.0
+
+	func now() -> int:
+		return int(float(lab.experiment(0).world.tick) * cost_us)
+
+
+## 예산 규칙(결정적 — 검토 I34): 가짜 시계로 한 틱 비용을 정해 두고 잰다. 다음 틱까지 하면 예산을 넘을 것 같으면 멈추되 적어도
+## 1틱, 보통 배속은 밀린 몫을 버림 → 프레임당 max(1, floor(예산 ÷ 비용))틱, 시뮬레이션 시간 = 틱 × 비용, 한 틱 추정 = 비용.
+## 어느 기계에서나 같은 값(예전엔 실제 시계로 "250마리 한 틱 ≤ 10.5ms" 를 단언하는 꼴이었음).
+func _budget_rule(t, lab: LabMain) -> void:
+	lab.new_experiment("default", {}, 4)
+	lab.set_paused(false)
+	var clock := FakeClock.new()
+	clock.lab = lab
+	var keep_clock: Callable = lab._clock_us
+	lab._clock_us = clock.now
+	for c in FAKE_TICK_CASES:
+		var normal := bool(c[0])
+		var cost_ms := float(c[1])
+		var budget := UiConfig.num("speed.sim_budget_ms") if normal else UiConfig.num("speed.fast_forward_budget_ms")
+		var want := maxi(1, floori(budget / cost_ms))
+		if normal:
+			lab.set_speed(64)
+		else:
+			lab.set_fast_forward(true)
+		clock.cost_us = cost_ms * LabMain.USEC_PER_MS
+		lab._step_us_est = 0.0
+		var got := PackedInt32Array()
+		var ok := true
+		for i in FAKE_FRAMES:
+			var n := lab.advance_frame(DT)
+			got.append(n)
+			ok = ok and n == want and is_equal_approx(lab.last_sim_ms, float(want) * cost_ms) and lab.last_budget_hit
+			ok = ok and (not normal or lab._acc < 1.0)
+		ok = ok and is_equal_approx(lab._step_us_est, clock.cost_us)
+		t.check(ok, "예산 규칙(가짜 시계, %s, 틱 %.0fms, 예산 %.0fms): 프레임당 %d틱 = max(1, floor(예산 ÷ 틱)), 시간 = 틱 × 비용, 추정 = 비용 %s"
+				% ["64배" if normal else "빨리 감기", cost_ms, budget, want, str(got)])
+	# 가벼운 틱: 64배는 요청한 만큼(프레임당 6.4틱 — 예산에 걸리지 않음), 빨리 감기는 예산을 다 써서 더 많이
+	clock.cost_us = CHEAP_TICK_MS * LabMain.USEC_PER_MS
+	lab._step_us_est = clock.cost_us
+	lab.set_speed(64)
+	lab.advance_frame(DT)
+	var a := lab.world.tick
+	var hit := false
+	for i in FAKE_FRAMES:
+		lab.advance_frame(DT)
+		hit = hit or lab.last_budget_hit
+	var n64 := lab.world.tick - a
+	var want64 := roundi(float(FAKE_FRAMES) * DT * UiConfig.num("speed.ticks_per_second_1x") * 64.0)
+	lab.set_fast_forward(true)
+	var b := lab.world.tick
+	for i in FAKE_FRAMES:
+		lab.advance_frame(DT)
+	var nff := lab.world.tick - b
+	var want_ff := FAKE_FRAMES * floori(UiConfig.num("speed.fast_forward_budget_ms") / CHEAP_TICK_MS)
+	t.check(not hit and absi(n64 - want64) <= 1 and nff == want_ff and nff > n64,
+			"가벼운 틱(가짜 시계 %.0fms): 64배 %d프레임 %d틱(요청 %d, 예산에 걸리지 않음) < 빨리 감기 %d틱(= 프레임 × floor(예산 ÷ 틱))"
+			% [CHEAP_TICK_MS, FAKE_FRAMES, n64, want64, nff])
+	lab._clock_us = keep_clock
+	lab.set_speed(64)
 
 
 func _selection(t, lab: LabMain) -> void:
@@ -280,6 +485,7 @@ func _keys(t, lab: LabMain) -> void:
 	t.check(lab.info_panel._follow.button_pressed == lab.map_view.follow_selected, "F → 정보 창 따라가기 단추도 같은 상태")
 	_key(t, KEY_F)
 	t.check(lab.info_panel._follow.button_pressed == lab.map_view.follow_selected, "F 다시 → 정보 창 따라가기 단추도 되돌아감")
+	_follow_dead(t, lab)
 	lab.select_slime(lab.world.s_id[0])
 	_key(t, KEY_ESCAPE)
 	t.check(lab.selected_id() == -1 and lab.info_panel.current_id() == -1, "Esc → 선택 해제")
@@ -321,6 +527,125 @@ func _keys(t, lab: LabMain) -> void:
 	_key(t, KEY_SPACE)
 	t.check(lab.is_paused() != p0, "대화 상자를 닫으면 다시 동작")
 	lab.set_paused(false)
+
+
+## 죽은(기록만 남은) 개체를 고른 채 F: 따라가기를 켜지 않고 알림(정보 창 따라가기 단추가 꺼지는 규칙과 같게). 검토 I41: 예전엔
+## "따라가기 켬" 이라 알리고 실제로는 따라가지 않았으며, 켜진 채 남아 다음에 고른 개체를 바로 따라갔음. 켜진 따라가기는 끌 수 있음.
+func _follow_dead(t, lab: LabMain) -> void:
+	var w := lab.world
+	var dead := -1
+	var guard := 0
+	while dead < 0 and guard < DEAD_GUARD_TICKS:
+		for k in w.lin_pa.size():
+			if w.index_of_id(k) == -1:
+				dead = k
+				break
+		if dead < 0:
+			lab.step_ticks(DEAD_STEP)
+			guard += DEAD_STEP
+	lab.map_view.follow_selected = false
+	lab.select_slime(dead)
+	_key(t, KEY_F)
+	var vt := lab.visible_toasts()
+	var last := str(vt.back().text) if not vt.is_empty() else ""
+	t.check(dead >= 0 and lab.selected_id() == dead and not lab.map_view.follow_selected and not lab.info_panel._follow.button_pressed
+			and last == LabMain.FOLLOW_DEAD_TEXT, "죽은 개체 #%d 를 고른 채 F → 따라가기 켜지 않음(정보 창 단추도), 알림 \"%s\"" % [dead, last])
+	lab.select_slime(w.s_id[0])
+	t.check(not lab.map_view.follow_selected, "그 뒤 살아 있는 개체를 골라도 저절로 따라가지 않음")
+	_key(t, KEY_F)
+	t.check(lab.map_view.follow_selected and lab.info_panel._follow.button_pressed, "살아 있는 개체는 F → 따라가기 켬")
+	lab.select_slime(dead)
+	_key(t, KEY_F)
+	t.check(not lab.map_view.follow_selected and not lab.info_panel._follow.button_pressed, "따라가던 중 죽은 개체로 옮겨도 F 로 따라가기를 끔")
+
+
+## 키보드만으로(검토 J16): 초점이 없을 때 Tab → 파라미터 패널 첫 칸(자리를 접었으면 정보 창), Ctrl+N·S·O·E → 패널의 새 실험·
+## 스냅숏 저장·열기·내보내기 단추와 같은 동작(자리를 접어도, 글 칸에 초점이 있어도 — 적던 값을 확정), 단추 말풍선에 단축키,
+## 정보 창 단추(따라가기·가계)는 키보드 초점을 받음. 예전엔 단추가 모두 FOCUS_NONE·Ctrl 조합을 버려 마우스 없이 할 수 없었음.
+func _command_keys(t, lab: LabMain) -> void:
+	var pp := lab.param_panel
+	lab.new_experiment("default", {}, 1)
+	lab.set_paused(true)
+	await t.frames(1)
+	lab.get_viewport().gui_release_focus()
+	_key(t, KEY_TAB)
+	var f := lab.get_viewport().gui_get_focus_owner()
+	t.check(f != null and pp.is_ancestor_of(f) and f == lab.first_focus(), "초점이 없을 때 Tab → 파라미터 패널 첫 칸(%s)" % (str(f.name) if f != null else "없음"))
+	# 글 칸에 초점이 있는 채 씨앗을 적고 Ctrl+N → 그 값을 확정하고 새 실험(단추와 같음)
+	var spin := pp.control("seed:0") as SpinBox
+	var sle := spin.get_line_edit() if spin != null else null
+	if sle != null:
+		sle.grab_focus()
+		sle.text = "77"
+	var w0 := lab.world
+	_command_key(t, KEY_N)
+	t.check(lab.world != w0 and lab.world.seed_value == 77 and lab.world.tick == 0 and (sle == null or not sle.has_focus()),
+			"Ctrl+N → 적던 씨앗을 확정하고 새 실험(씨앗 %s)" % str(lab.world.seed_value))
+	# 자리를 접어도(단추가 화면에 없어도) 들음
+	lab.set_dock_open(LabMain.DOCK_LEFT, false)
+	await t.frames(1)
+	w0 = lab.world
+	_command_key(t, KEY_N)
+	t.check(lab.world != w0, "왼쪽 자리를 접어도 Ctrl+N → 새 실험")
+	# 자리를 접고 개체를 고르면 Tab → 정보 창 단추(키보드 초점을 받음)
+	lab.select_slime(lab.world.s_id[0])
+	await t.frames(1)
+	lab.get_viewport().gui_release_focus()
+	_key(t, KEY_TAB)
+	f = lab.get_viewport().gui_get_focus_owner()
+	t.check(f != null and lab.info_panel.is_ancestor_of(f) and lab.info_panel._follow.focus_mode == Control.FOCUS_ALL,
+			"자리를 접었으면 Tab → 정보 창 단추(%s)" % (str(f.name) if f != null else "없음"))
+	lab.get_viewport().gui_release_focus()
+	lab.select_slime(-1)
+	lab.set_dock_open(LabMain.DOCK_LEFT, true)
+	await t.frames(1)
+	# Ctrl+S·Ctrl+O → 저장·열기 대화 상자(단추와 같은 길)
+	for c in [[KEY_S, "SaveSnapshotDialog"], [KEY_O, "OpenSnapshotDialog"]]:
+		_command_key(t, c[0])
+		await t.frames(1)
+		var d := pp.find_child(str(c[1]), true, false) as Window
+		t.check(d != null and d.visible, "Ctrl+%s → %s" % [OS.get_keycode_string(c[0]), str(c[1])])
+		if d != null:
+			d.hide()
+		await t.frames(1)
+	# Ctrl+E(웹 모드: 결과 zip 내려받기 — 공용 user://experiments 에 쓰지 않게), 웹에서 숨긴 "스냅숏 열기" 의 Ctrl+O 는 아무것도 안 함
+	pp.set_web_mode(true)
+	lab.last_download_name = ""
+	_command_key(t, KEY_E)
+	t.check(lab.last_download_name.ends_with(".zip"), "Ctrl+E → 내보내기 단추와 같음(웹: 결과 zip %s)" % lab.last_download_name)
+	var dl_path := lab.download_dir.path_join(lab.last_download_name)
+	t.check(lab.download_dir.begins_with(TMP) and FileAccess.file_exists(dl_path), "내려받기는 이 검사의 임시 폴더에(%s — 실제 %s 아님)" % [dl_path, LabMain.DOWNLOAD_DIR])
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(lab.download_dir.path_join(lab.last_download_name)))
+	var od := pp.find_child("OpenSnapshotDialog", true, false) as Window
+	_command_key(t, KEY_O)
+	await t.frames(1)
+	t.check(od == null or not od.visible, "웹 모드(스냅숏 열기 숨김)에서 Ctrl+O 는 아무것도 안 함")
+	pp.set_web_mode(false)
+	# 말풍선에 단축키, Ctrl 없는 N 은 아무것도 안 함
+	var tips := PackedStringArray()
+	for id in ["apply", "start_compare", "save", "open", "export"]:
+		var bb := pp.control(id) as BaseButton
+		if bb != null and bb.shortcut != null and bb.shortcut_in_tooltip:
+			tips.append("%s=%s" % [id, bb.shortcut.get_as_text()])
+	var want_tips := "apply=%s start_compare=%s save=%s open=%s export=%s" % [LabMain.command_shortcut(KEY_N, "").get_as_text(),
+			LabMain.command_shortcut(KEY_N, "").get_as_text(), LabMain.command_shortcut(KEY_S, "").get_as_text(),
+			LabMain.command_shortcut(KEY_O, "").get_as_text(), LabMain.command_shortcut(KEY_E, "").get_as_text()]
+	t.check(" ".join(tips) == want_tips and want_tips.contains("Ctrl+N"), "패널 단추 말풍선에 단축키(%s)" % " ".join(tips))
+	w0 = lab.world
+	_key(t, KEY_N)
+	t.check(lab.world == w0, "Ctrl 없이 N 은 새 실험 아님")
+	lab.set_paused(false)
+
+
+## Ctrl(맥은 Cmd) + code 를 실제 키 입력으로.
+func _command_key(t, code: Key) -> void:
+	for pressed in [true, false]:
+		var e := InputEventKey.new()
+		e.keycode = code
+		e.physical_keycode = code
+		e.pressed = pressed
+		e.command_or_control_autoremap = true
+		t.root.push_input(e)
 
 
 func _key(t, code: Key) -> void:
@@ -565,7 +890,47 @@ func _args(t, lab: LabMain) -> void:
 	err = lab.apply_args(PackedStringArray(["--snapshot=" + SNAP_PATH]))
 	t.check(err == "" and lab.world.tick == tick and lab.world.history_hash == h, "--snapshot 으로 열기(틱 %d)" % lab.world.tick)
 	t.check(lab.selected_id() == -1 and lab._acc == 0.0, "스냅숏 열면 선택·누적 초기화")
+	# 연 실험의 그래프·시계열은 연 틱부터(스냅숏에는 기록기 줄이 없음) — 알림으로 알림(검토 J19)
+	var opened_note := false
+	for v in lab.visible_toasts():
+		opened_note = opened_note or (v.kind == "info" and str(v.text).contains(SNAP_PATH.get_file()) and str(v.text).contains("틱 %s 부터" % LabMain._commas(tick)))
+	t.check(opened_note, "스냅숏 열기 알림에 파일 이름·기록 시작 틱(%s)" % str(lab.visible_toasts()))
 	t.check(lab.open_snapshot("user://없는_스냅숏.json") != "" and lab.world.tick == tick, "열기 실패면 지금 세계 유지")
+	# 읽기가 끊긴 결과(빈 사전 — 스냅숏 읽는 함수가 스크립트 오류로 끊기면 이렇게 돌아옴)도 실패로: 오류 문장, 세계 그대로
+	# (검토 I04: 예전엔 끊긴 결과의 기본값 ""(= 성공)이 그대로 나가 알림 없이 세계도 그대로, --snapshot= 이면 실험 0개)
+	var w_before := lab.world
+	t.check(lab.open_result({}, "user://끊긴.json") != "" and lab.world == w_before and lab.experiments.size() == 1,
+			"끊긴 읽기 결과 → 실패 문장, 지금 세계 그대로")
+	t.check(lab.open_result({experiment = null, error = "", status = "failed"}, "user://빈.json").contains("빈.json"), "이유 없는 실패도 문장(파일 이름)")
+	# 명령줄 경계(검토 I42): "=" 없이 띄어 쓴 아는 인자는 오류(실행기도 거부), int64 를 넘는 씨앗은 오류(엔진 오류 줄 없이),
+	# 잘못된 값의 알림에는 실제로 쓸 값
+	var def_seed := UiConfig.integer("lab.default_seed")
+	err = lab.apply_args(PackedStringArray(["--seed", "5"]))
+	t.check(err.contains("--seed=값") and lab.world.seed_value == def_seed, "\"--seed 5\" → 오류 알림, 기본 씨앗(%s): %s" % [str(lab.world.seed_value), err])
+	err = lab.apply_args(PackedStringArray(["--snapshot", SNAP_PATH, "--preset", "demo_fast"]))
+	t.check(err.contains("--snapshot=값") and err.contains("--preset=값") and lab.world.tick == 0, "\"--snapshot 경로\"·\"--preset 이름\" → 오류, 새 실험: %s" % err)
+	err = lab.apply_args(PackedStringArray(["--seed=99999999999999999999"]))
+	t.check(err.contains("범위") and lab.world.seed_value == def_seed, "int64 를 넘는 씨앗 → 범위 오류, 기본 씨앗: %s" % err)
+	err = lab.apply_args(PackedStringArray(["--seed=5", "--seed=abc"]))
+	t.check(lab.world.seed_value == 5 and err.contains("쓸 씨앗: 5") and not err.contains("기본 씨앗"), "앞의 씨앗 5 를 쓰고 알림도 5: %s" % err)
+	err = lab.apply_args(PackedStringArray(["--preset=demo_fast", "--preset=없는예설정"]))
+	t.check(SimConfig.deep_equal(lab.world.cfg, SimConfig.build("demo_fast", {}).config) and err.contains("쓸 예설정: demo_fast"), "앞의 예설정을 쓰고 알림도: %s" % err)
+	var int64_min := -9223372036854775807 - 1
+	t.check(LabMain.seed_text_error("9223372036854775807") == "" and LabMain.seed_text_error("-9223372036854775808") == ""
+			and LabMain.seed_text_error("+0005") == "" and LabMain.seed_text_error("9223372036854775808") != ""
+			and LabMain.seed_text_error("-9223372036854775809") != "" and LabMain.seed_text_error("00000000000000000000000001") == "",
+			"씨앗 글자 범위(int64 끝값까지 받고 넘으면 오류, 앞의 0 은 무시)")
+	err = lab.apply_args(PackedStringArray(["--seed=-9223372036854775808"]))
+	t.check(err == "" and lab.world.seed_value == int64_min, "INT64_MIN 씨앗을 받음")
+	# 씨앗 표기는 str(엔진 "%d" 는 INT64_MIN 에 부호를 두 번 — 검토 J31): 실험 이름·창 제목·기본 내보내기 이름·내려받기 이름
+	var want_seed := "씨앗 -9223372036854775808"
+	t.check(lab.experiments[0].label.ends_with(want_seed) and lab.get_window().title.ends_with(want_seed) and not lab.get_window().title.contains("--")
+			and lab.default_export_dir().ends_with("-seed-9223372036854775808"),
+			"INT64_MIN 씨앗 표기: \"%s\" / \"%s\" / %s" % [lab.experiments[0].label, lab.get_window().title, lab.default_export_dir().get_file()])
+	t.check(lab.download_snapshot(0) == "" and lab.last_download_name.contains("-seed-9223372036854775808-tick0") and not lab.last_download_name.contains("--"),
+			"INT64_MIN 스냅숏 내려받기 이름: %s" % lab.last_download_name)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(lab.download_dir.path_join(lab.last_download_name)))
+	lab.new_experiment("default", {}, 1)
 	for p in [SNAP_PATH, SNAP_PATH + ".bak"]:
 		if FileAccess.file_exists(p):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
@@ -595,6 +960,9 @@ func _ff_pause(t, lab: LabMain) -> void:
 		lab.advance_frame(DT)
 	lab.set_paused(true)
 	lab.advance_frame(DT)
+	# 빨리 감기 중 멈춤: 막대는 다시 재생하면 돌 방식(빨리 감기)을 적는다(검토 J33: 예전엔 꺼진 속도 단추의 "목표 8배")
+	t.check(lab.speed_text() == "멈춤 · 빨리 감기" and lab._lbl_speed.text == lab.speed_text() and lab._fast_btn.button_pressed,
+			"빨리 감기 중 멈춤 표시: \"%s\"" % lab._lbl_speed.text)
 	var d := _max_drift(lab)
 	t.check(d <= bound, "빨리 감기 중 멈춤: 모든 슬라임이 지금 칸에(가장 먼 %.2f칸 ≤ %.2f, 고치기 전 3~4칸)" % [d, bound])
 	var ri := lab.map_view.ring_info()
@@ -713,13 +1081,64 @@ func _speed_window(t, lab: LabMain) -> void:
 				bad = "경고 색"
 		t.check(bad == "" and absf(lab.actual_speed() - float(c[0])) < 0.05,
 				"%d배 · 프레임 %.4f초: 실제 배속 언제나 \"%s\" (%s, %.3f)" % [int(c[0]), float(c[1]), want, bad, lab.actual_speed()])
-	# 4FPS 미만(잘린 프레임 시간): 실제 = 0.75배, 경고 색
+	# 4FPS 미만(잘린 프레임 시간): 실제 = 0.75배, 경고 색. 실제 시계 예산은 끈다 — 프레임당 1.5틱이 예산에 걸리면(한 틱이
+	# 5ms 를 넘는 느린 기계) 진행이 줄어 기계 속도에 따라 실패했다(검토 I34 — 이 검사는 배속 셈을 보지 예산을 보지 않음)
+	var keep_budget := lab._budget_ms
+	lab._budget_ms = BUDGET_OFF_MS
 	lab.set_speed(1)
 	for i in 12:
 		lab.advance_frame(1.0 / 3.0)
+	lab._budget_ms = keep_budget
 	lab._refresh_status(true)
 	t.check(absf(lab.actual_speed() - 0.75) < 0.02 and _speed_color(lab) == warn,
 			"3FPS·1배: 실제 %.2f배(= 0.75, 잘리지 않은 프레임 시간), 경고 색" % lab.actual_speed())
+
+
+## 실제 _process 경로로 느린 프레임(형제 노드가 프레임마다 SLOW_FRAME_MS 를 씀 — 약 2.5 FPS). 엔진은 _process 의 delta 를
+## max_physics_steps_per_frame ÷ physics_ticks_per_second(8/60초)에서 잘라 넘기지만, 실험실은 벽시계 간격으로 재므로
+## "실제 M배" = 진행한 틱 ÷ 벽시계 ÷ 1배 틱 수, 1배에서 경고 색. 진행도 speed.max_frame_delta_s 만큼은 따라감
+## (검토 J04: 예전엔 잘린 delta 로 재 실제 약 0.3배인데 "실제 1.0배"·경고 없음 — 이 길을 지나는 검사가 없었음).
+class SlowFrames extends Node:
+	var ms := 0
+
+	func _process(_delta: float) -> void:
+		OS.delay_msec(ms)
+
+
+func _slow_process(t, lab: LabMain) -> void:
+	lab.new_experiment("default", {"population.initial": FF_POPULATION}, 3)
+	lab.set_paused(false)
+	lab.set_speed(1)
+	var slow := SlowFrames.new()
+	slow.ms = SLOW_FRAME_MS
+	t.root.add_child(slow)
+	# 실제 시계 예산은 끈다: 프레임당 1.5틱이 예산에 걸리면(느린 기계) 진행이 max_frame_delta_s 를 따라가지 못해 기계 속도에
+	# 따라 실패했다(검토 I34 — 이 검사는 프레임 시간을 재는 길을 보지 예산을 보지 않음)
+	var keep_budget := lab._budget_ms
+	lab._budget_ms = BUDGET_OFF_MS
+	lab.set_process(true)
+	await t.frames(2)
+	# set_process 전의 간격(앞 검사들의 시간)은 빼고 잼
+	lab._reset_speed_window()
+	var start := float(lab.world.tick) + lab._acc
+	var us0 := Time.get_ticks_usec()
+	await t.frames(SLOW_FRAMES)
+	var wall := float(Time.get_ticks_usec() - us0) / LabMain.USEC_PER_S
+	var ticks := float(lab.world.tick) + lab._acc - start
+	lab.set_process(false)
+	lab._budget_ms = keep_budget
+	t.root.remove_child(slow)
+	slow.free()
+	var tps := UiConfig.num("speed.ticks_per_second_1x")
+	var real := ticks / wall / tps
+	# 진행은 프레임마다 min(프레임 시간, max_frame_delta_s) × tps 틱 → 기대 배속 = 그 몫 ÷ 프레임 시간
+	var frame_s := wall / float(SLOW_FRAMES)
+	var expect := minf(frame_s, UiConfig.num("speed.max_frame_delta_s")) / frame_s
+	lab._refresh_status(true)
+	t.check(absf(lab.actual_speed() - real) < SLOW_SPEED_TOL and lab.actual_speed() < UiConfig.num("speed.behind_ratio")
+			and _speed_color(lab) == UiTheme.color("warn"),
+			"느린 프레임(%dms·_process): 표시 실제 %.2f배 ≈ 틱 ÷ 벽시계 %.2f배(%.1f틱 / %.2f초), 경고 색" % [SLOW_FRAME_MS, lab.actual_speed(), real, ticks, wall])
+	t.check(absf(real - expect) < SLOW_SPEED_TOL, "느린 프레임(%.2f초)의 진행도 max_frame_delta_s 까지는 따라감(%.2f배 ≈ %.2f배)" % [frame_s, real, expect])
 
 
 func _speed_color(lab: LabMain) -> Color:
@@ -749,7 +1168,7 @@ func _toast_rules(t, lab: LabMain) -> void:
 	await t.frames(1)
 	lab.set_paused(true)
 	# 백업에서 연 스냅숏: 바뀐 세계 위에 경고 알림 하나
-	var path := "user://lab_checks_backup.json"
+	var path := TMP.path_join("backup.json")
 	lab.world.step_n(10)
 	SimSnapshot.save_file(lab.world, path)
 	SimSnapshot.save_file(lab.world, path)
@@ -759,10 +1178,17 @@ func _toast_rules(t, lab: LabMain) -> void:
 	lab.show_toast("앞 알림", "info")
 	t.check(lab.open_snapshot(path) == "", "깨진 원본 → 백업에서 열기")
 	var warns := 0
+	var warn_text := ""
 	for v in lab.visible_toasts():
 		if v.kind == "warn":
 			warns += 1
+			warn_text = str(v.text)
 	t.check(warns == 1 and lab.visible_toasts().size() == 1, "백업 경고 알림 하나만 남음(%d개 중 경고 %d)" % [lab.visible_toasts().size(), warns])
+	# 경고에 원본이 깨진 이유(검토 I04: 예전엔 Experiment.from_snapshot 이 이유를 버려 "…열었습니다: " 뒤가 비었음)와
+	# 기록이 연 틱부터라는 안내(검토 J19)
+	var reason := str(SimSnapshot.from_text("{}").error)
+	t.check(reason != "" and warn_text.contains("(%s)" % reason) and warn_text.contains("틱 %s 부터" % LabMain._commas(lab.world.tick)),
+			"백업 경고에 깨진 이유·기록 시작 틱: \"%s\"" % warn_text)
 	for p in [path, path + ".bak", path + ".broken"]:
 		if FileAccess.file_exists(p):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
@@ -841,14 +1267,20 @@ func _extinction(t, lab: LabMain) -> void:
 			"평균 세대 \"%s\", 멸종 표지 \"%s\"" % [lab._lbl_gen.text, lab._extinct_badge.text])
 	t.check(lab.info_panel.summary_text().contains("멸종") and lab.info_panel.summary_text().contains(LabMain._commas(et)),
 			"정보 창 안내: " + lab.info_panel.summary_text())
+	# 고를 개체가 없으니 "지도에서 슬라임을 클릭하면…" 도움말을 숨김(검토 I48 — 예전엔 두 문장이 어긋난 채 함께 보였음)
+	t.check(not lab.info_panel.empty_hint_visible(), "멸종 안내 아래에 클릭 도움말이 없음")
 	t.check(lab._top_bar.get_combined_minimum_size().x <= UiConfig.num("lab.min_width"), "멸종 표시에서도 위쪽 막대가 최소 창 폭 안")
 	lab.set_paused(false)
 	for i in 5:
 		lab.advance_frame(DT)
-	t.check(lab.world.tick > tk and not lab.is_paused(), "다시 재생하면 빈 지도가 계속 진행")
+	# 멸종한 세계는 더 진행하지 않는다(실행기처럼 — 검토 I13: 예전엔 빈 세계가 계속 돌아 내보낸 요약·연대기가 실행기와 달랐음)
+	t.check(lab.world.tick == tk and not lab.is_paused() and lab.speed_text() == LabMain.EXTINCT_SPEED_TEXT and lab._lbl_speed.text == LabMain.EXTINCT_SPEED_TEXT
+			and _speed_color(lab) == UiTheme.color("text"),
+			"다시 재생해도 멸종한 세계는 틱 %d 그대로(지금 %d), 막대 \"%s\"(경고 색 아님)" % [tk, lab.world.tick, lab._lbl_speed.text])
 	lab.set_paused(true)
 	lab.new_experiment("default", {}, 1)
-	t.check(lab.is_paused() and lab.info_panel.summary_text().contains("슬라임을 눌러"), "새 세계: 사용자가 멈춘 상태는 그대로, 안내는 처음 문구")
+	t.check(lab.is_paused() and lab.info_panel.summary_text().contains("슬라임을 눌러") and lab.info_panel.empty_hint_visible(),
+			"새 세계: 사용자가 멈춘 상태는 그대로, 안내는 처음 문구(클릭 도움말도)")
 	# 멸종 때문에 저절로 멈춘 상태는 새 실험에서 풀림
 	lab.new_experiment("no_resources", {}, 1)
 	lab.set_paused(false)
@@ -872,7 +1304,7 @@ func _extinction(t, lab: LabMain) -> void:
 	for i in 5:
 		lab.advance_frame(DT)
 	lab_cfg["pause_on_extinction"] = keep
-	t.check(not lab.is_paused() and lab.world.tick > t2, "pause_on_extinction 끄면 멸종 뒤에도 진행")
+	t.check(not lab.is_paused() and lab.world.tick == t2 and t2 == lab.world.extinct_tick, "pause_on_extinction 끄면 멈추지 않음(세계는 멸종한 틱 %d 그대로)" % t2)
 	# Home 키 = 지도 전체 보기(따라가기 끔)
 	lab.new_experiment("default", {}, 1)
 	lab.select_slime(lab.world.s_id[0])
@@ -1320,7 +1752,7 @@ func _compare_stop(t, lab: LabMain) -> void:
 	lab.new_experiment("default", {}, 5)
 	t.check(not lab.is_comparing() and lab._map_area.get_node_or_null("MapContainerB") == null and lab.world.seed_value == 5 and lab.experiment(0).tag == "",
 			"새 실험 → 비교 끝(지도 하나)")
-	var path := "user://lab_checks_compare.json"
+	var path := TMP.path_join("compare.json")
 	t.check(SimSnapshot.save_file(lab.world, path) == "", "스냅숏 저장")
 	lab.start_compare({preset = "default", seed = 3}, {preset = "default", seed = 4})
 	t.check(lab.open_snapshot(path) == "" and not lab.is_comparing() and lab.map_view_of(1) == null, "스냅숏 열기 → 비교 끝")
@@ -1346,8 +1778,10 @@ func _compare_extinction(t, lab: LabMain) -> void:
 		saw = saw or (v.kind == "extinction" and str(v.text).begins_with("A · "))
 	for i in 5:
 		lab.advance_frame(DT)
-	t.check(xa.world.extinct_tick >= 0 and xb.world.extinct_tick < 0 and not lab.is_paused() and xb.world.tick == xa.world.tick and xa.world.tick > xa.world.extinct_tick,
-			"A 만 멸종(틱 %d) → 멈추지 않고 A·B 계속(지금 %d틱)" % [xa.world.extinct_tick, xa.world.tick])
+	# 멸종한 A 는 멸종한 틱 그대로(실행기처럼 — 검토 I13), 살아남은 B 만 진행. 위쪽 막대 틱은 "A/B"
+	t.check(xa.world.extinct_tick >= 0 and xb.world.extinct_tick < 0 and not lab.is_paused() and xa.world.tick == xa.world.extinct_tick
+			and xb.world.tick > xa.world.tick and lab._lbl_tick.text == "%s/%s" % [LabMain._commas(xa.world.tick), LabMain._commas(xb.world.tick)],
+			"A 만 멸종(틱 %d) → 멈추지 않고 B 만 계속(A 틱 %d, B 틱 %d, 막대 \"%s\")" % [xa.world.extinct_tick, xa.world.tick, xb.world.tick, lab._lbl_tick.text])
 	var hb := lab._map_area.get_node_or_null("MapTitleB")
 	var bb := hb.find_child("ExtinctBadge", true, false) as Label if hb != null else null
 	t.check(lab._extinct_badge.visible and lab._extinct_badge.text.contains(LabMain._commas(xa.world.extinct_tick)) and bb != null and not bb.visible,
@@ -1369,7 +1803,8 @@ func _compare_extinction(t, lab: LabMain) -> void:
 		lab.advance_frame(DT)
 	t.check(xa.world.extinct_tick >= 0 and xb.world.extinct_tick >= 0 and lab.is_paused() and xa.world.tick == tk,
 			"A·B 모두 멸종(틱 %d·%d) → 멈춤" % [xa.world.extinct_tick, xb.world.extinct_tick])
-	t.check(lab.info_panel.summary_text().contains("모두 멸종"), "정보 창 안내: " + lab.info_panel.summary_text())
+	t.check(lab.info_panel.summary_text().contains("모두 멸종") and not lab.info_panel.empty_hint_visible(),
+			"정보 창 안내(클릭 도움말 없음): " + lab.info_panel.summary_text())
 	lab.new_experiment("default", {}, 1)
 	t.check(not lab.is_paused() and not lab._extinct_badge.visible, "모두 멸종으로 멈춘 뒤 새 실험 → 다시 재생")
 	lab.set_paused(true)
@@ -1391,7 +1826,16 @@ func _compare_layout(t, lab: LabMain) -> void:
 	var cb := lab._map_area.get_node_or_null("MapContainerB") as Control
 	t.check(cb != null and ca.size.x >= MIN_COMPARE_MAP.x and ca.size.y >= MIN_COMPARE_MAP.y and cb.size.x >= MIN_COMPARE_MAP.x and cb.size.y >= MIN_COMPARE_MAP.y,
 			"최소 창에서 비교 지도 한 칸 %s ≥ %s(창 %s)" % [str(ca.size), str(MIN_COMPARE_MAP), str(t.root.size)])
-	t.check(_fits_window(lab), "비교 모드(파라미터 B 칸·범례 둘)에서도 배치가 창 안(정보 창 오른쪽 끝 %.0f)" % lab.info_panel.get_global_rect().end.x)
+	t.check(_fits_window(lab) and _fits_height(lab), "비교 모드(파라미터 B 칸·범례 둘)에서도 배치가 창 안(정보 창 오른쪽 끝 %.0f)" % lab.info_panel.get_global_rect().end.x)
+	# 1280×720 창(검토 J29 전의 최소 창)에서도 같은 배치 검사
+	var small: Vector2i = t.root.size
+	t.root.size = SIZE_720
+	await t.frames(2)
+	t.check(ca.size.x >= MIN_COMPARE_MAP_720.x and ca.size.y >= MIN_COMPARE_MAP_720.y and cb.size.x >= MIN_COMPARE_MAP_720.x
+			and cb.size.y >= MIN_COMPARE_MAP_720.y and _fits_window(lab) and _fits_height(lab),
+			"1280×720 창에서 비교 지도 한 칸 %s ≥ %s, 배치가 창 안" % [str(ca.size), str(MIN_COMPARE_MAP_720)])
+	t.root.size = small
+	await t.frames(2)
 	var ha :=lab._map_area.get_node_or_null("MapTitle") as Control
 	var title := ha.find_child("Title", true, false) as Label
 	var natural := title.get_theme_font("font").get_string_size(lab._panes[0].full_title, HORIZONTAL_ALIGNMENT_LEFT, -1, title.get_theme_font_size("font_size")).x
@@ -1500,7 +1944,7 @@ func _export_fail(t, lab: LabMain) -> void:
 		fx.fail = k == 1
 		list.append(fx)
 	lab._adopt_list(list)
-	var dir := "user://lab_checks_export-%d" % OS.get_process_id()
+	var dir := TMP.path_join("export")
 	var abs_dir := ProjectSettings.globalize_path(dir)
 	var msg := lab.export_csv(dir)
 	var a_dir := abs_dir.path_join("A")

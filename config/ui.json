@@ -25,7 +25,16 @@
 		"default_preset": "default",
 		"default_seed": 1,
 		"min_width": 1280,
-		"min_height": 720,
+		"min_height": 640,
+		"ui_scale": 0,
+		"ui_scale_min": 0.5,
+		"ui_scale_max": 4.0,
+		"window_frame_px": [
+			8,
+			32,
+			8,
+			8
+		],
 		"right_panel_width": 340,
 		"left_panel_width": 260,
 		"bottom_panel_height": 220,

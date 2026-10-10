@@ -143,7 +143,7 @@ func _farm() -> void:
 	# 실제 배속 창(0.25초)이 차도록 조금 넉넉히
 	await _render(FARM_RENDER_FRAMES)
 	lab.events.disconnect(cb)
-	check(w.light >= UiConfig.num("lab.day_light_threshold") and lab._lbl_daynight.text == "낮", "농사 장면은 낮(빛 %.2f)" % w.light)
+	check(not LabMain.is_night(w) and lab._lbl_daynight.text == "낮", "농사 장면은 낮(빛 %.2f)" % w.light)
 	check(int(got.n) > 0 and not lab.visible_toasts().is_empty(), "쌓인 사건 %d건 → 알림" % int(got.n))
 	check(lab.info_panel.current_id() == best, "정보 창 = 고른 개체 #%d" % best)
 	# V07: 정보 창이 스크롤 없이 두뇌 범례까지(여유 info.min_vertical_slack 이상, 1600×900)
