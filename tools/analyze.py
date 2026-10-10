@@ -8,7 +8,12 @@
   python3 tools/analyze.py sweep  --param mutation.rate=0.02,0.1 --seeds 1-4 --generations 50 --out results/sweep
   python3 tools/analyze.py report results/batch [--out 보고서폴더]
 
+Windows(cmd·PowerShell): python3 대신 py, 인자는 큰따옴표(cmd 는 작은따옴표를 벗기지 않음), 줄잇기는 cmd ^·PowerShell `,
+godot 은 콘솔 판으로: py tools\\analyze.py run --seeds 1-4 --godot "C:\\Godot\\Godot_v4.4.1-stable_win64_console.exe" --out results\\batch
+(docs/ANALYSIS.md "Windows").
+
 필요: Python 3.9 이상, numpy, pandas. matplotlib 은 선택(없으면 그림만 건너뛴다).
+CSV(summary.csv·cells.csv·runs.csv)는 BOM 붙은 UTF-8 로 쓴다(엑셀이 한글을 바로 읽게). 읽을 때는 BOM 이 있어도 없어도 된다.
 PyTorch 는 쓰지 않는다(이유는 docs/ANALYSIS.md). 자세한 사용법도 docs/ANALYSIS.md.
 """
 from __future__ import annotations
@@ -71,6 +76,17 @@ RUNS_COLUMNS = ["cell", "seed", "status", "exit_code", "wall_seconds", "result",
 FLOAT_FORMAT = "%.10g"
 ## 묶음 하나를 대표하는 루트 폴더 이름(run 결과처럼 씨앗 폴더가 바로 아래에 있을 때)
 ROOT_CELL = "."
+## 예설정 이름을 모르는 실행(스냅숏에서 이어 돌렸거나 실험실에서 스냅숏을 연 실험 — summary.json 의 preset 이 "")의 묶음 이름
+SNAPSHOT_CELL = "snapshot"
+## 쓰는 CSV 의 인코딩: BOM 붙은 UTF-8(한국어 Windows 엑셀이 두 번 클릭으로 열어도 한글이 깨지지 않게 — 검토 J07).
+## 읽을 때도 이것으로(BOM 이 없는 예전 파일도 그대로 읽힘)
+CSV_ENCODING = "utf-8-sig"
+## 끝까지 쓴 실행 결과 폴더에 summary.json 과 함께 있어야 하는 파일(이어 돌리기 때 완결성 확인 — 검토 I07)
+RESULT_FILES = ["timeseries.csv", "chronicle.csv", "final.snapshot.json"]
+## runs.csv 의 이전 상태가 이것이면 summary.json 이 있어도 다시 돌린다(쓰다 실패했거나 중간에 끊긴 실행)
+RERUN_STATUSES = ("failed", "timeout", "error")
+## --generations 로 받는 수: 실행기(String.is_valid_float)와 파이썬 float 이 둘 다 읽는 꼴(부호 없는 10진수, 지수 표기)
+GENERATIONS_RE = re.compile(r"\+?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?")
 
 # ── 그림 모양(색은 범주 팔레트를 고정 순서로, 바탕·글자·격자는 차분한 회색) ──
 
@@ -160,6 +176,9 @@ def parse_set(text: str) -> tuple[str, str]:
     key = key.strip()
     if eq == "" or key == "" or value == "":
         raise ValueError(f"키=값 형식이어야 합니다: {text}")
+    if "'" in key or '"' in key:
+        # Windows cmd 는 작은따옴표를 벗기지 않아 '키=값' 이 따옴표째 넘어온다 → 모든 실행이 '알 수 없는 키' 로 실패하기 전에 막음
+        raise ValueError(f"키에 따옴표가 들어 있습니다: {key} — Windows cmd 에서는 큰따옴표로 감싸세요(docs/ANALYSIS.md \"Windows\")")
     return key, value
 
 
@@ -227,14 +246,15 @@ def cell_dirname(pairs: list[tuple[str, str]]) -> str:
 
 
 def _positive_number(text: str) -> str:
-    """--generations: 양수인지만 확인하고 글자는 그대로 실행기에 넘긴다."""
-    try:
-        v = float(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"수여야 합니다: {text}")
+    """--generations: 실행기가 받는 꼴(GENERATIONS_RE — 파이썬 float 만 읽는 1_0 같은 글은 실행기가 거부해 모든 실행이
+    실패하므로 여기서 막음)의 0 보다 큰 유한한 수인지 확인하고, 글자는 그대로 실행기에 넘긴다."""
+    t = str(text).strip()
+    if not GENERATIONS_RE.fullmatch(t):
+        raise argparse.ArgumentTypeError(f"수여야 합니다(예: 100, 2.5, 1e3): {text}")
+    v = float(t)
     if not math.isfinite(v) or v <= 0:
         raise argparse.ArgumentTypeError(f"0 보다 커야 합니다: {text}")
-    return str(text).strip()
+    return t
 
 
 def _arg_type(fn):
@@ -292,7 +312,7 @@ def _same_value(text: str, v) -> bool:
 def existing_mismatch(job: Job) -> str:
     """이미 있는 결과(summary.json)가 이번 요청과 설정이 다르면 차이를 설명하는 문장, 같으면 ""."""
     try:
-        s = json.loads((job.out_dir / "summary.json").read_text(encoding="utf-8"))
+        s = json.loads((job.out_dir / "summary.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return "summary.json 을 읽을 수 없음"
     diffs = []
@@ -318,6 +338,42 @@ def existing_mismatch(job: Job) -> str:
 def default_repo() -> Path:
     """기본 저장소 위치 = tools/ 의 부모."""
     return Path(__file__).resolve().parent.parent
+
+
+def resolve_godot(godot: str) -> str:
+    """--godot: 경로 구분자가 있으면 지금 셸 위치 기준 절대 경로로 바꾼다(실행기는 저장소 폴더에서 돌므로 ./godot 같은 상대
+    경로가 저장소 기준으로 풀려 못 찾음 — --out·--repo 와 같은 기준, 검토 I22). 이름만 있으면(godot) PATH 에서 찾게 그대로."""
+    seps = [os.sep, "/"] + ([os.altsep] if os.altsep else [])
+    if any(sep in godot for sep in seps):
+        return os.path.abspath(godot)
+    return godot
+
+
+def command_text(cmd: list[str], windows: bool | None = None) -> str:
+    """runs.csv 의 command 열: 그 OS 의 셸에 그대로 붙여 다시 돌릴 수 있는 글(Windows = cmd 따옴표 규칙 list2cmdline,
+    그 밖 = POSIX shlex.join). windows 를 주지 않으면 지금 OS."""
+    if windows is None:
+        windows = os.name == "nt"
+    return subprocess.list2cmdline(cmd) if windows else shlex.join(cmd)
+
+
+def incomplete_reason(run_dir: Path) -> str:
+    """summary.json 이 있는 결과 폴더가 끝까지 쓴 실행 결과인가. 맞으면 "", 아니면 까닭.
+    조건: summary.json 이 읽히고 역사 해시가 있으며 write_failed(실행기가 summary.json 보다 먼저 못 쓴 파일)가 비었고,
+    RESULT_FILES 가 비어 있지 않게 있음(쓰기 실패·중간에 끊긴 실행은 summary.json 만 남을 수 있음)."""
+    try:
+        s = json.loads((run_dir / "summary.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return "summary.json 을 읽을 수 없음"
+    if not isinstance(s, dict) or not s.get("history_hash"):
+        return "summary.json 에 역사 해시가 없음"
+    if s.get("write_failed"):
+        return "쓰지 못한 파일: " + ", ".join(str(x) for x in s["write_failed"])
+    for name in RESULT_FILES:
+        p = run_dir / name
+        if not p.is_file() or p.stat().st_size == 0:
+            return f"{name} 없음"
+    return ""
 
 
 def build_command(godot: str, repo: Path, seed: int, generations: str, out_dir: Path, preset: str,
@@ -348,7 +404,7 @@ def execute_job(job: Job, repo: Path, timeout: float | None) -> dict:
     """실행기 하나를 돌리고 runs.csv 한 줄을 돌려준다. 출력은 결과 폴더의 run.log 에 남긴다."""
     t0 = time.monotonic()
     row = {"cell": job.cell, "seed": job.seed, "status": "", "exit_code": "", "wall_seconds": "",
-           "result": "", "out_dir": "", "command": shlex.join(job.cmd)}
+           "result": "", "out_dir": "", "command": command_text(job.cmd)}
     log = ""
     try:
         # Godot 은 어느 OS 에서나 UTF-8 로 쓴다(RESULT 줄의 "농사" 등). 지역 코드 페이지(cp949·cp1252)로 읽지 않게.
@@ -388,7 +444,7 @@ def read_runs_csv(path: Path) -> dict[tuple[str, int], dict]:
     rows: dict[tuple[str, int], dict] = {}
     if not path.is_file():
         return rows
-    with path.open(encoding="utf-8", newline="") as f:
+    with path.open(encoding=CSV_ENCODING, newline="") as f:
         for r in csv.DictReader(f):
             try:
                 rows[(r.get("cell", ROOT_CELL), int(r["seed"]))] = r
@@ -399,7 +455,7 @@ def read_runs_csv(path: Path) -> dict[tuple[str, int], dict]:
 
 def write_runs_csv(path: Path, rows: dict[tuple[str, int], dict]) -> None:
     keys = sorted(rows, key=lambda k: (natural_key(k[0]), k[1]))
-    with path.open("w", encoding="utf-8", newline="") as f:
+    with path.open("w", encoding=CSV_ENCODING, newline="") as f:
         w = csv.DictWriter(f, fieldnames=RUNS_COLUMNS, lineterminator="\n", extrasaction="ignore")
         w.writeheader()
         for k in keys:
@@ -407,7 +463,8 @@ def write_runs_csv(path: Path, rows: dict[tuple[str, int], dict]) -> None:
 
 
 def run_jobs(jobs: list[Job], out_root: Path, repo: Path, n_jobs: int, timeout: float | None) -> int:
-    """일들을 병렬로 돌린다(이미 summary.json 이 있으면 건너뜀). runs.csv 를 쓰고 실패 수를 돌려준다."""
+    """일들을 병렬로 돌린다(이미 끝까지 쓴 결과가 있으면 건너뜀). runs.csv 를 쓰고 실패 수를 돌려준다.
+    summary.json 이 있어도 runs.csv 의 이전 상태가 RERUN_STATUSES 이거나 결과 파일이 덜 쓰였으면(incomplete_reason) 다시 돌린다."""
     runs_path = out_root / "runs.csv"
     rows = read_runs_csv(runs_path)
     todo: list[Job] = []
@@ -416,18 +473,26 @@ def run_jobs(jobs: list[Job], out_root: Path, repo: Path, n_jobs: int, timeout: 
         key = (job.cell, job.seed)
         rel = _rel(job.out_dir, out_root)
         if (job.out_dir / "summary.json").is_file():
-            diff = existing_mismatch(job)
             prev = rows.get(key)
+            why = incomplete_reason(job.out_dir)
+            if not why and prev is not None and prev.get("status") in RERUN_STATUSES:
+                why = f"이전 실행 {prev.get('status')}"
+            if why:
+                # 쓰다 실패했거나 끊긴 실행은 결과가 아니다 → 다시 돌림(실행기가 앞 결과 파일을 지우고 새로 씀)
+                print(f"  다시 돌림({why}): {rel}")
+                todo.append(job)
+                continue
+            diff = existing_mismatch(job)
             if diff:
                 # 다른 설정의 결과를 덮어쓰지도, 이번 요청의 결과로 세지도 않는다 → 보고서의 실패 표에 나옴
                 mismatched += 1
                 rows[key] = {"cell": job.cell, "seed": job.seed, "status": "mismatch", "out_dir": rel,
-                             "result": f"이미 있는 결과의 설정이 다름: {diff}", "command": shlex.join(job.cmd)}
+                             "result": f"이미 있는 결과의 설정이 다름: {diff}", "command": command_text(job.cmd)}
                 print(f"  경고: {rel} 에 설정이 다른 결과가 이미 있습니다({diff}). 다른 --out 을 쓰거나 폴더를 지우세요.")
                 continue
             if prev is None or prev.get("status") not in ("ok", "existing"):
                 rows[key] = {"cell": job.cell, "seed": job.seed, "status": "existing", "out_dir": rel,
-                             "command": shlex.join(job.cmd)}
+                             "command": command_text(job.cmd)}
             print(f"  건너뜀(이미 있음): {rel}")
         else:
             todo.append(job)
@@ -492,13 +557,14 @@ def cmd_run(args) -> int:
     if err:
         print("오류: " + err, file=sys.stderr)
         return 2
+    godot = resolve_godot(args.godot)
     out_root = Path(args.out).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     ensure_gdignore(out_root)
     jobs = []
     for seed in args.seeds:
         out_dir = out_root / f"seed{seed}"
-        cmd = build_command(args.godot, repo, seed, args.generations, out_dir, args.preset, args.set,
+        cmd = build_command(godot, repo, seed, args.generations, out_dir, args.preset, args.set,
                             args.lineage, args.max_ticks)
         jobs.append(Job(ROOT_CELL, seed, out_dir, cmd, args.preset, args.generations, list(args.set), args.max_ticks))
     failed = run_jobs(jobs, out_root, repo, args.jobs, args.timeout)
@@ -519,6 +585,7 @@ def cmd_sweep(args) -> int:
     except ValueError as e:
         print("오류: " + str(e), file=sys.stderr)
         return 2
+    godot = resolve_godot(args.godot)
     out_root = Path(args.out).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     ensure_gdignore(out_root)
@@ -529,7 +596,7 @@ def cmd_sweep(args) -> int:
             out_dir = out_root / cell / f"seed{seed}"
             # 고정 덮어쓰기(--set) 뒤에 격자 값 → 같은 키면 격자 값이 이긴다
             sets = list(args.set) + pairs
-            cmd = build_command(args.godot, repo, seed, args.generations, out_dir, args.preset, sets,
+            cmd = build_command(godot, repo, seed, args.generations, out_dir, args.preset, sets,
                                 args.lineage, args.max_ticks)
             jobs.append(Job(cell, seed, out_dir, cmd, args.preset, args.generations, sets, args.max_ticks))
     failed = run_jobs(jobs, out_root, repo, args.jobs, args.timeout)
@@ -554,7 +621,7 @@ def read_timeseries(path: Path) -> pd.DataFrame | None:
     if not path.is_file():
         return None
     try:
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, encoding=CSV_ENCODING)
     except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
         return None
     for c in ("tick", "population", "mean_gen", "mean_size", "mean_sense", "civ_stage"):
@@ -567,7 +634,7 @@ def read_chronicle(path: Path) -> pd.DataFrame | None:
     if not path.is_file():
         return None
     try:
-        df = pd.read_csv(path, dtype={"kind": str, "text": str}, keep_default_na=False)
+        df = pd.read_csv(path, dtype={"kind": str, "text": str}, keep_default_na=False, encoding=CSV_ENCODING)
     except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
         return None
     for c in ("tick", "mean_gen", "kind", "text"):
@@ -627,7 +694,7 @@ def discovery_generations(chron: pd.DataFrame | None, summary_ticks: dict,
 
 def summary_row(run_dir: Path, root: Path) -> tuple[dict, pd.DataFrame | None]:
     """실행 결과 폴더 하나 → summary.csv 한 줄과 시계열."""
-    with (run_dir / "summary.json").open(encoding="utf-8") as f:
+    with (run_dir / "summary.json").open(encoding="utf-8-sig") as f:
         s = json.load(f)
     ts = read_timeseries(run_dir / "timeseries.csv")
     chron = read_chronicle(run_dir / "chronicle.csv")
@@ -637,8 +704,8 @@ def summary_row(run_dir: Path, root: Path) -> tuple[dict, pd.DataFrame | None]:
     rel = _rel(run_dir, root)
     parent = Path(rel).parent.as_posix() if rel != "." else ROOT_CELL
     if parent in ("", "."):
-        # 루트 바로 아래 씨앗 폴더들(run 결과) → 예설정(+덮어쓰기)으로 이름 짓기
-        parent = str(s.get("preset", "default")) + (f"+{ov_text}" if ov_text else "")
+        # 루트 바로 아래 씨앗 폴더들(run 결과) → 예설정(+덮어쓰기)으로 이름 짓기. 예설정을 모르면(스냅숏에서) SNAPSHOT_CELL
+        parent = (str(s.get("preset", "default")) or SNAPSHOT_CELL) + (f"+{ov_text}" if ov_text else "")
     row = {
         "cell": parent, "seed": s.get("seed"), "preset": s.get("preset", ""), "overrides": ov_text,
         "generations_target": s.get("generations_target"),
@@ -752,8 +819,8 @@ def aggregate(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def write_csv(df: pd.DataFrame, path: Path) -> None:
-    """결정적 CSV: UTF-8, 쉼표, \\n, 실수 10자리 유효숫자, 빈 값은 NaN."""
-    df.to_csv(path, index=False, float_format=FLOAT_FORMAT, na_rep="NaN", lineterminator="\n", encoding="utf-8")
+    """결정적 CSV: BOM 붙은 UTF-8(CSV_ENCODING), 쉼표, \\n, 실수 10자리 유효숫자, 빈 값은 NaN."""
+    df.to_csv(path, index=False, float_format=FLOAT_FORMAT, na_rep="NaN", lineterminator="\n", encoding=CSV_ENCODING)
 
 
 # ── 그림 ──
@@ -1108,7 +1175,7 @@ def write_report_md(path: Path, root: Path, df: pd.DataFrame, cells: pd.DataFram
                     plot_note: str, runs: dict[tuple[str, int], dict]) -> None:
     """report.md: 묶음별 요약, 발견 세대, 실행별 결과, 그림, 실패, 읽는 법(한국어)."""
     out = ["# 실험 분석 보고서", ""]
-    presets = sorted(set(str(p) for p in df["preset"]))
+    presets = sorted(set(str(p) or SNAPSHOT_CELL for p in df["preset"]))
     targets = sorted(set(float(v) for v in df["generations_target"] if not pd.isna(v)))
     overrides = sorted(set(str(o) for o in df["overrides"]))
     if overrides == [""]:
@@ -1248,7 +1315,9 @@ def _add_batch_args(p: argparse.ArgumentParser) -> None:
                    help="설정 덮어쓰기(여러 번), 예: --set mutation.rate=0.08")
     p.add_argument("--jobs", type=int, default=max(1, min(4, os.cpu_count() or 1)),
                    help="동시에 돌릴 실행기 수(기본 min(4, CPU 수))")
-    p.add_argument("--godot", default=os.environ.get("GODOT", "godot"), help="godot 실행 파일(기본 환경 변수 GODOT 또는 godot)")
+    p.add_argument("--godot", default=os.environ.get("GODOT", "godot"),
+                   help="godot 실행 파일(기본 환경 변수 GODOT 또는 godot). 상대 경로는 지금 폴더 기준. "
+                        "Windows 는 Godot_v4.4.1-stable_win64_console.exe 경로를 큰따옴표로")
     p.add_argument("--repo", default=str(default_repo()), help="저장소(기본 tools/ 의 부모)")
     p.add_argument("--out", required=True, help="결과 폴더")
     p.add_argument("--lineage", dest="lineage", action="store_true", help="lineage.csv 도 쓰기(크다)")
@@ -1267,7 +1336,12 @@ def _add_report_opts(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="analyze.py", description="슬라임 실험실 오프라인 분석(헤드리스 실행 묶음·보고서)")
+    ap = argparse.ArgumentParser(
+        prog="analyze.py", description="슬라임 실험실 오프라인 분석(헤드리스 실행 묶음·보고서)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Windows(cmd·PowerShell): py tools\\analyze.py …, 배열·쉼표 값은 큰따옴표로 "
+               "(--param \"seasons.growth=[1,1,0.5,0],[1,1,1,1]\"), 줄잇기는 cmd ^ · PowerShell `, "
+               "--godot \"C:\\…\\Godot_v4.4.1-stable_win64_console.exe\". 자세히: docs/ANALYSIS.md \"Windows\".")
     sub = ap.add_subparsers(dest="command", required=True)
     p = sub.add_parser("run", help="씨앗 여러 개를 같은 설정으로 돌리고 보고서")
     _add_batch_args(p)
@@ -1285,7 +1359,21 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def utf8_output() -> None:
+    """표준 출력·오류를 UTF-8 로 다시 설정한다. Windows 는 출력을 파일·파이프로 돌리면 ANSI 코드 페이지(cp949·cp1252)를
+    strict 로 써서 '—'·한글을 print 하다 UnicodeEncodeError 로 죽는다(검토 J30). reconfigure 가 없는 스트림(StringIO 등)은 그대로."""
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if reconf is None:
+            continue
+        try:
+            reconf(encoding="utf-8", errors="backslashreplace")
+        except (ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    utf8_output()
     args = build_parser().parse_args(argv)
     return int(args.func(args))
 

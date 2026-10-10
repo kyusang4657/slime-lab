@@ -11,7 +11,7 @@
 pip install -r tools/requirements.txt      # numpy, pandas, matplotlib
 ```
 
-Python 3.9 이상. matplotlib 이 없으면 그림만 건너뛰고 표·보고서는 만듭니다(그렇다고 안내함). godot 4.4.1 이 필요합니다(`--godot` 또는 환경 변수 `GODOT`, 기본 `godot`). 처음 한 번 `godot --headless --path . --import`.
+Python 3.9 이상. matplotlib 이 없으면 그림만 건너뛰고 표·보고서는 만듭니다(그렇다고 안내함). godot 4.4.1 이 필요합니다(`--godot` 또는 환경 변수 `GODOT`, 기본 `godot`). 처음 한 번 `godot --headless --path . --import`. 아래 명령은 bash 기준입니다 — Windows(cmd·PowerShell)는 [Windows](#windows) 절.
 
 ## 명령
 
@@ -33,10 +33,10 @@ python3 tools/analyze.py sweep --param mutation.rate=0.02,0.1 --param resources.
 
 `--param` 을 여러 번 주면 **전체 격자**(위 둘째 줄은 2 × 2 = 4칸)입니다. 칸마다 `OUT/<키=값__키=값>/seed<N>/`. 보고서는 칸(= 묶음)별로 묶습니다. `--set` 은 모든 칸에 공통으로 덮어쓰고, 같은 키를 `--param` 이 또 주면 격자 값이 이깁니다.
 
-배열 값도 격자로 줄 수 있습니다. 괄호 안의 쉼표는 값을 나누지 않습니다(배열·사전은 JSON 이어야 하고, 괄호가 맞지 않으면 실행 전에 인자 오류). 셸이 괄호를 건드리지 않게 따옴표로 감쌉니다:
+배열 값도 격자로 줄 수 있습니다. 괄호 안의 쉼표는 값을 나누지 않습니다(배열·사전은 JSON 이어야 하고, 괄호가 맞지 않으면 실행 전에 인자 오류). 셸이 괄호를 건드리지 않게 **큰따옴표**로 감쌉니다(bash·cmd·PowerShell 모두 됨. cmd 는 작은따옴표를 벗기지 않아 `'키=값'` 이 따옴표째 넘어오므로, 키에 따옴표가 있으면 실행 전에 인자 오류로 알립니다):
 
 ```bash
-python3 tools/analyze.py sweep --param 'seasons.growth=[1,1,0.5,0],[1,1,1,1]' --seeds 1-4 --out results/winter
+python3 tools/analyze.py sweep --param "seasons.growth=[1,1,0.5,0],[1,1,1,1]" --seeds 1-4 --out results/winter
 ```
 
 ### `report DIR` — 이미 있는 결과 모으기
@@ -53,12 +53,12 @@ python3 tools/analyze.py report results --out results/모두-보고서   # 여�
 | 인자 | 기본 | 뜻 |
 |---|---|---|
 | `--seeds` | `1-4` | `1-8`, `1,3,5`, `1-3,7` (겹치면 한 번, 오름차순) |
-| `--generations` | `100` | 목표 평균 세대(실행기 `--generations`) |
+| `--generations` | `100` | 목표 평균 세대(실행기 `--generations`). 0 보다 큰 10진수·지수 표기(`100`, `2.5`, `1e3`)만 — 실행기가 받지 않는 꼴(`1_0` 등)은 실행 전에 인자 오류 |
 | `--preset` | `default` | `config/presets.json` 이름 |
 | `--set 키=값` | — | 설정 덮어쓰기, 여러 번. 값은 실행기가 해석(`[1,1,0.5,0]` 같은 배열도 됨) |
 | `--param 키=v1,v2` | — | `sweep` 전용, 여러 번 → 격자. 배열 값은 `[..],[..]`(괄호 안 쉼표는 나누지 않음) |
 | `--jobs N` | min(4, CPU 수) | 동시에 돌릴 실행기 수 |
-| `--godot` | `$GODOT` 또는 `godot` | godot 실행 파일 |
+| `--godot` | `$GODOT` 또는 `godot` | godot 실행 파일. 경로(`./godot`, `bin/godot`)는 **지금 셸 위치** 기준(`--out`·`--repo` 와 같음 — 실행기는 저장소 폴더에서 돌지만 절대 경로로 바꿔 넘김), 이름만 주면 PATH 에서 찾음 |
 | `--repo` | `tools/` 의 부모 | 저장소 위치 |
 | `--out` | (필수) | 결과 폴더 |
 | `--lineage` / `--no-lineage` | `--no-lineage` | 묶음에서는 `lineage.csv`(1,000세대면 8MB)를 기본으로 쓰지 않음 |
@@ -67,7 +67,7 @@ python3 tools/analyze.py report results --out results/모두-보고서   # 여�
 | `--no-report`, `--no-plots` | — | 보고서 / 그림 끄기 |
 | `--lang` | `auto` | 그림 문구 `ko`·`en`. `auto` 는 나눔고딕(`assets/fonts`)을 쓸 수 있으면 한국어 |
 
-**이어 돌리기:** `summary.json` 이 이미 있는 씨앗 폴더는 건너뜁니다. 같은 명령을 다시 주면 실패·중단된 것만 다시 돌립니다(`runs.csv` 의 이전 성공 줄은 그대로 둠). 건너뛰기 전에 그 결과의 예설정·목표 세대·덮어쓰기·**틱 상한**(실행기가 `summary.json` 의 `max_ticks` 에 실제로 쓴 상한, 이번 요청은 `--max-ticks` 또는 설정의 `run.max_ticks`)을 이번 요청과 비교해, 다르면 덮어쓰지 않고 경고와 함께 `mismatch` 로 기록합니다(보고서의 실패 표에 나옴). 예: `--max-ticks 2000` 으로 시험한 폴더에 상한 없는 본 실행을 주면 잘린 결과를 쓰지 않고 알립니다(`max_ticks` 기록이 없는 예전 결과는 설정값으로 봅니다). 설정을 바꿨으면 다른 `--out` 을 쓰세요. 종료 코드: 모두 성공 0, 실패·mismatch 가 있으면 1, 인자·저장소 오류 2.
+**이어 돌리기:** 끝까지 쓴 결과가 이미 있는 씨앗 폴더는 건너뜁니다. 같은 명령을 다시 주면 실패·중단된 것만 다시 돌립니다(`runs.csv` 의 이전 성공 줄은 그대로 둠). "끝까지 쓴 결과" = `summary.json` 이 읽히고 역사 해시가 있으며 `write_failed` 가 비었고 `timeseries.csv`·`chronicle.csv`·`final.snapshot.json` 이 비어 있지 않게 있는 것. 실행기는 쓰다가 실패해도(종료 코드 3) `summary.json` 을 남길 수 있으므로, 이 조건을 못 채우거나 `runs.csv` 의 이전 상태가 `failed`·`timeout`·`error` 이면 `summary.json` 이 있어도 **다시 돌립니다**(`다시 돌림(까닭)` 출력 — 실행기가 그 폴더의 앞 결과 파일을 지우고 새로 씀). 건너뛰기 전에 그 결과의 예설정·목표 세대·덮어쓰기·**틱 상한**(실행기가 `summary.json` 의 `max_ticks` 에 실제로 쓴 상한, 이번 요청은 `--max-ticks` 또는 설정의 `run.max_ticks`)을 이번 요청과 비교해, 다르면 덮어쓰지 않고 경고와 함께 `mismatch` 로 기록합니다(보고서의 실패 표에 나옴). 예: `--max-ticks 2000` 으로 시험한 폴더에 상한 없는 본 실행을 주면 잘린 결과를 쓰지 않고 알립니다(`max_ticks` 기록이 없는 예전 결과는 설정값으로 봅니다). 설정을 바꿨으면 다른 `--out` 을 쓰세요. 종료 코드: 모두 성공 0, 실패·mismatch 가 있으면 1, 인자·저장소 오류 2.
 
 ## 결과 파일
 
@@ -81,11 +81,13 @@ OUT/
   seed1/  …                실행기 결과(summary.json, timeseries.csv, chronicle.csv, final.snapshot.json) + run.log
 ```
 
-**`summary.csv`** (UTF-8, 쉼표, 영문 열 이름, 빈 값 `NaN`):
+`summary.csv`·`cells.csv`·`runs.csv` 는 **BOM 붙은 UTF-8** 입니다 — 한국어 Windows 엑셀이 두 번 클릭으로 열어도 `civ_stage_name`(농사)·`result` 의 한글이 깨지지 않습니다(BOM 이 없으면 엑셀은 시스템 코드 페이지 cp949 로 읽음). pandas(`pd.read_csv`)·파이썬 `csv`(`encoding="utf-8-sig"`)·LibreOffice 는 그대로 읽고, R 은 `read.csv(파일, fileEncoding = "UTF-8-BOM")`. 실행기·실험실이 쓰는 `timeseries.csv`·`chronicle.csv` 도 BOM 이 있어도 없어도 읽습니다.
+
+**`summary.csv`** (BOM 붙은 UTF-8, 쉼표, 영문 열 이름, 빈 값 `NaN`):
 
 | 열 | 뜻 |
 |---|---|
-| `cell`, `seed`, `preset`, `overrides`, `generations_target` | 묶음, 씨앗, 예설정, 실제 덮어쓰기(`키=값;…`), 목표 세대 |
+| `cell`, `seed`, `preset`, `overrides`, `generations_target` | 묶음, 씨앗, 예설정, 실제 덮어쓰기(`키=값;…`), 목표 세대. 스냅숏에서 이어 돌린 실행(실험실에서 스냅숏을 연 실험도)은 예설정을 알 수 없어 `preset` 이 비고 `overrides` 도 비며, 루트 바로 아래면 묶음 이름이 `snapshot` |
 | `end_reason` | `generations`(목표 도달) · `extinction` · `max_ticks` |
 | `ticks`, `mean_generation`, `population`, `peak_population`, `births`, `deaths` | 끝날 때 값(`summary.json`). 단 **멸종한 실행의 `mean_generation`** 은 빈 개체의 평균(0)이 아니라 살아 있던 마지막 시계열 줄(멸종 최대 20틱 전)의 평균 세대(`final_mean_size` 와 같은 방식, 시계열이 없으면 NaN) |
 | `civ_stage`, `civ_stage_name` | 끝날 때 문명 단계 0~3(없음·채집·저장·농사) |
@@ -126,17 +128,18 @@ OUT/
 - **평균 세대는 단조롭지 않을 수 있습니다**(나이 많은 고세대 개체가 한꺼번에 죽으면 잠깐 내려감). 문명 단계 그림의 가로축이 잠깐 뒤로 가는 것은 그 때문입니다.
 - 결과 폴더를 저장소 안(`results/…`, git 에서 무시됨)에 두어도 Godot 가 CSV(번역 표로)·PNG(텍스처로)를 가져오지 않게, 실행기는 씨앗 폴더에, `analyze.py` 는 자기가 쓰는 폴더(`run`·`sweep` 의 `--out`, `report --out`)에 빈 `.gdignore` 를 넣습니다. Godot 은 `.gdignore` 가 있는 폴더의 하위 폴더도 모두 건너뜁니다.
 - 묶음 순서는 폴더 이름의 자연 순서입니다(숫자 덩어리는 수로: `rate=0.02` < `rate=0.1`, `trial-2` < `trial-10`). `-` 는 이름 맨 앞이나 `=` 바로 뒤에서만 음수 부호(`rate=-0.5` < `rate=0.1`)이고, 그 밖에서는 구분자입니다.
-- 실행기 출력(`RESULT:` 줄의 한글 등)은 OS 의 코드 페이지와 무관하게 UTF-8 로 읽습니다(Windows 에서 `PYTHONUTF8` 없이도 됨).
+- 실행기 출력(`RESULT:` 줄의 한글 등)은 OS 의 코드 페이지와 무관하게 UTF-8 로 읽고, `analyze.py` 자신의 출력(진행 줄·안내)도 UTF-8 로 씁니다 — Windows 는 출력을 파일·파이프로 돌리면(`> log.txt`, CI) ANSI 코드 페이지(cp949·cp1252)를 strict 로 써서 `—`·한글에서 죽었으므로 시작할 때 표준 출력·오류를 UTF-8 로 다시 설정합니다(`PYTHONUTF8` 없이도 됨. 콘솔 창에서는 원래대로 보임).
 - 씨앗 4개 정도의 사분위 범위는 거칩니다. 결론을 내기 전에 씨앗을 늘리세요.
 
 ## 예시 (`docs/analysis/example/`)
 
-이 저장소에 함께 올린 작은 예시입니다(원본 실행 폴더는 올리지 않음, 보고서·표·그림만).
+이 저장소에 함께 올린 작은 예시입니다(원본 실행 폴더는 올리지 않음, 보고서·표·그림만). 아래 두 명령으로 만든 `results/example-run/`·`results/example-sweep/` 의 `report.md`·`summary.csv`·`cells.csv`·`*.png` 를 그대로 `docs/analysis/example/run/`·`sweep/` 에 복사한 것입니다 — 다시 돌리면 `run_seconds`(보고서의 시간 열)만 다르고 나머지는 같습니다(검사: `test_analyze.py` 가 보고서의 결과 폴더 이름이 이 명령의 `--out` 과 같은지 봄).
 
 ```bash
 python3 tools/analyze.py run   --seeds 1-8 --generations 100 --preset fast_civ --out results/example-run --jobs 3
 python3 tools/analyze.py sweep --param mutation.rate=0.02,0.05,0.1 --seeds 1-4 --generations 60 --preset fast_civ \
                                --out results/example-sweep --jobs 3
+for k in run sweep; do cp results/example-$k/{report.md,summary.csv,cells.csv,*.png} docs/analysis/example/$k/; done
 ```
 
 - [`run/report.md`](analysis/example/run/report.md) — `fast_civ`(조정 기록 [`TUNING-fast_civ.md`](TUNING-fast_civ.md)) 씨앗 8개 × 100세대. 8개 모두 농사까지 도달, 멸종 없음. 발견 세대 중앙값 채집 6.4 · 저장 7.8 · 농사 16.4(씨앗별 농사 49.0 · 12.7 · 74.3 · 20.0 · 12.8 · 12.5 · 2.0 · 23.9). 씨앗 1 의 농사(3,321틱, 49.0세대)는 규칙 검사 S15(`test_farm_reachable`)가 같은 씨앗으로 다시 얻는 값입니다(결정성).
@@ -144,6 +147,50 @@ python3 tools/analyze.py sweep --param mutation.rate=0.02,0.05,0.1 --seeds 1-4 -
 - 읽을거리: 조정한 `fast_civ` 에서도 씨앗 7 은 채집·저장·농사를 모두 **2세대 안에** 엽니다(첫 세대 무작위 두뇌의 배부른 줍기 시도가 371회로 임계 280 을 바로 넘음). 반대로 씨앗 1·3 은 채집 23~34세대, 농사 49~74세대입니다. 같은 설정에서도 씨앗 사이 퍼짐이 이렇게 크므로 씨앗을 넉넉히 쓰세요(분포와 그 까닭은 [`TUNING-fast_civ.md`](TUNING-fast_civ.md)).
 
 ![발견 세대 — 돌연변이율 격자](analysis/example/sweep/discovery.png)
+
+## 헤드리스 실행기를 직접 쓸 때
+
+`analyze.py` 가 씨앗마다 부르는 `tests/run_experiment.gd` 를 손으로 돌릴 수도 있습니다(인자 목록은 README "실행"). 규칙은 실행기 머리 주석과 같습니다.
+
+```bash
+godot --headless --path . --script res://tests/run_experiment.gd -- --seed=42 --generations=1000 --out=results/seed42
+godot --headless --path . --script res://tests/run_experiment.gd -- --seed=42 --max-ticks=20000 --snapshot-every=10000 --out=results/a
+godot --headless --path . --script res://tests/run_experiment.gd -- --resume=results/a/snapshot-10000.json --max-ticks=20000 --out=results/b
+```
+
+- **수 인자:** `--seed` 는 64비트 정수, `--generations` 는 0 보다 큰 유한한 수, `--max-ticks` 는 1~2,147,483,647(틱을 담는 배열의 상한 2^31−1), `--snapshot-every` 는 0(끔)~2,147,483,647 의 정수. `1e5`·`10k`·`abc` 처럼 글자가 섞이면 앞 숫자만 쓰지 않고 **인자 오류(종료 코드 2)** 입니다. 상대 경로(`--out`·`--resume`)는 프로젝트 폴더(`--path`) 기준.
+- **이어 돌리기(`--resume`):** 설정·씨앗은 스냅숏의 것을 씁니다. `--seed`·`--preset`·`--set` 을 함께 주면 무시하지 않고 인자 오류(2). 끊김 없이 돌린 것과 같은 역사 해시가 나옵니다(검사). 이어 돌린 `summary.json` 은 `preset = ""`·`overrides = {}`(스냅숏에는 예설정 이름이 없음 — 실제 설정은 `config`), `resumed_from` = 실제로 읽은 파일, `resume_status` = `loaded`(본 파일) 또는 `backup` — 본 파일이 깨져 직전 정상본(`.bak`)에서 읽었으면 경고 줄을 찍고 `resumed_from` 에 `.bak` 경로를 적습니다(`.bak` 은 같은 이름으로 앞서 저장한 다른 실험일 수 있음). 이어 돌릴 스냅숏이 `--out` 폴더 바로 안이면 거부(2). 이어 돌리자마자 끝나도(틱 상한 ≤ 스냅숏 틱) 시계열은 그 틱 한 줄입니다(실험실에서 스냅숏을 연 것과 같음).
+- **결과 폴더(`--out`):** 없거나 비었으면 그대로 씁니다. 실행기가 쓰는 파일(`summary.json`·`timeseries.csv`·`chronicle.csv`·`lineage.csv`·`final.snapshot.json`·`snapshot-<틱>.json`, 그리고 그 `.tmp`·`.bak`·`.broken`)만 있으면 **그것을 모두 지우고** 새로 씁니다 — 같은 폴더를 다시 써도 앞 실행의 `lineage.csv`(`--no-lineage` 일 때)·`snapshot-N.json`·`.bak` 이 새 결과 옆에 섞여 남지 않습니다. `.gdignore`·`run.log`(`analyze.py` 의 기록)·OS 가 만드는 파일(`.DS_Store`·`Thumbs.db`·`desktop.ini`)은 그대로 둡니다. **그 밖의 파일이나 하위 폴더가 하나라도 있으면 아무것도 지우지 않고** 오류(2) — 사용자 파일을 지우지 않으려고 실행기가 모르는 것은 건드리지 않습니다(빈 폴더나 새 `--out` 을 주세요). 설정 오류는 폴더를 보기 전에 걸러지므로 앞 결과가 그대로 남습니다.
+- **쓰는 순서:** 중간 스냅숏(`--snapshot-every`) → `final.snapshot.json` → `summary.json`·CSV. `summary.json` 의 `write_failed` = 그보다 먼저 쓰지 못한 파일(중간·최종 스냅숏).
+- **종료 코드:** 정상 0, 인자·설정·결과 폴더 오류 2, 파일 쓰기 실패 3(중간 스냅숏 포함 — 실패마다 오류 줄을 찍음). 마지막 줄 `RESULT: … reason=<끝난 이유>` 는 정상이면 `reason=…` 으로 끝나고, 쓰기 실패면 끝에 ` write_failed=파일(까닭),…` 이 붙습니다(CI 처럼 판정할 때는 종료 코드나 줄 끝까지 맞춘 `reason=generations$` 로). 씨앗은 `INT64_MIN` 도 그대로(`seed=-9223372036854775808`).
+- 검사: `tools/test_runner_cli.py`(실제 godot 을 명령줄 그대로 불러 위 규칙을 확인 — godot 이 없으면 건너뛰지 않고 실패).
+
+## Windows
+
+대상 플랫폼이라 같은 일을 cmd·PowerShell 로 하는 법입니다(리눅스에서 Windows 의 코드 페이지·따옴표 규칙을 흉내 내 검사함 — Windows 에서 직접 돌려 확인하지는 못함).
+
+- 파이썬은 python.org 설치판의 `py`(또는 `python`), 경로 구분은 `\`.
+- godot 은 **콘솔 판**(`Godot_v4.4.1-stable_win64_console.exe`)을 씁니다 — 창 판은 콘솔에 출력하지 않아 `RESULT:` 줄이 안 보입니다. 경로에 빈칸이 있으면 큰따옴표로.
+- 값에 쉼표·괄호가 있으면 **큰따옴표**(cmd 는 작은따옴표를 벗기지 않음 → 키에 따옴표가 붙어 인자 오류로 알림). PowerShell 은 작은따옴표도 되지만 큰따옴표가 둘 다에서 됩니다.
+- 줄잇기: cmd 는 줄 끝 `^`, PowerShell 은 줄 끝 `` ` ``(bash 의 `\` 대신).
+- `runs.csv` 의 `command` 열은 Windows 에서 cmd 따옴표 규칙(`subprocess.list2cmdline`)으로 적혀 그대로 붙여 다시 돌릴 수 있습니다(그 밖의 OS 는 POSIX `shlex`).
+- 출력을 파일로 돌려도(`> log.txt`) UTF-8 로 쓰므로 죽지 않습니다. 메모장·VS Code 는 그대로 읽습니다.
+
+```bat
+:: cmd
+py tools\analyze.py sweep --param "mutation.rate=0.02,0.1" --param "seasons.growth=[1,1,0.5,0],[1,1,1,1]" ^
+   --seeds 1-4 --generations 30 --preset fast_civ ^
+   --godot "C:\Godot\Godot_v4.4.1-stable_win64_console.exe" --out results\grid
+"C:\Godot\Godot_v4.4.1-stable_win64_console.exe" --headless --path . --script res://tests/run_experiment.gd -- --seed=42 --generations=100 --out=results/seed42
+```
+
+```powershell
+# PowerShell
+py tools\analyze.py run --seeds 1-8 --generations 100 --preset fast_civ `
+   --godot "C:\Godot\Godot_v4.4.1-stable_win64_console.exe" --out results\fast8
+$env:GODOT = "C:\Godot\Godot_v4.4.1-stable_win64_console.exe"   # 한 번 정해 두면 --godot 생략
+py tools\analyze.py report results\fast8
+```
 
 ## PyTorch 를 쓰지 않는 이유
 
@@ -162,4 +209,4 @@ python3 tools/analyze.py sweep --param mutation.rate=0.02,0.05,0.1 --seeds 1-4 -
 python3 -m unittest discover -s tools -p "test_*.py" -v
 ```
 
-`tools/test_analyze.py`: 가짜 결과 폴더(묶음 2개 × 씨앗 2개)로 `summary.csv`(발견 세대·NaN·정렬, 멸종 실행의 끝 평균 세대)·`cells.csv`(중앙값·사분위·도달·멸종 비율)·`report.md`·그림·`.gdignore`, 같은 입력 → 같은 출력, matplotlib 없을 때, 묶음 9개(작은 그림 모드), 씨앗·격자 인자 해석(배열 값·괄호 오류·하이픈 이름 순서), `run`·`sweep` 가 만드는 godot 명령줄과 이어 돌리기(설정·틱 상한이 다르면 mismatch)·실패 기록(가짜 subprocess), 실제 자식 프로세스의 UTF-8 출력 읽기. `tools/test_repo_rules.py`: `assets/` 의 모든 파일이 `CREDITS.md` 에 있음, 화면 코드가 `docs/SIM-API.md` 에 없는 세계 멤버를 쓰지 않음, 문서의 `ui.json` 키 이름이 실제 키. godot 이 있으면(`GODOT` 또는 PATH) 실제 실행기로 씨앗 2개 × 2세대를 돌려 같은 씨앗의 해시가 같은지도 봅니다. GitHub Actions(`build.yml` 의 마지막 단계)에서도 돌립니다.
+`tools/test_analyze.py`: 가짜 결과 폴더(묶음 2개 × 씨앗 2개)로 `summary.csv`(발견 세대·NaN·정렬, 멸종 실행의 끝 평균 세대)·`cells.csv`(중앙값·사분위·도달·멸종 비율)·`report.md`·그림·`.gdignore`, 같은 입력 → 같은 출력, 쓰는 CSV 의 BOM·BOM 있는 실행기 CSV 읽기, 예설정을 모르는 실행의 묶음 이름(`snapshot`), matplotlib 없을 때, 묶음 9개(작은 그림 모드), 씨앗·격자 인자 해석(배열 값·괄호 오류·하이픈 이름 순서·따옴표가 붙은 키·실행기와 같은 `--generations` 꼴), `run`·`sweep` 가 만드는 godot 명령줄(상대 `--godot` 경로)과 이어 돌리기(설정·틱 상한이 다르면 mismatch, 실패·덜 쓴 결과는 다시 돌림)·실패 기록(가짜 subprocess), `runs.csv` 의 `command`(Windows·POSIX 따옴표), cp949·cp1252 표준 출력에서 실패 경로, 실제 자식 프로세스의 UTF-8 출력 읽기, 올린 예시 보고서의 결과 폴더 이름이 위 명령과 같은지. `tools/test_runner_cli.py`: 실행기의 명령줄 계약("헤드리스 실행기를 직접 쓸 때") — 수 인자 거부, 이어 돌리기(같은 해시·인자 조합 거부·백업 경고·한 줄), 결과 폴더 정리·거부, 설정 오류 2(`analyze.py --set` 경로 포함), 쓰기 실패 3. `tools/test_repo_rules.py`: `assets/` 의 모든 파일이 `CREDITS.md` 에 있음, 화면 코드가 `docs/SIM-API.md` 에 없는 세계 멤버를 쓰지 않음, 문서의 `ui.json` 키 이름이 실제 키. godot 이 있으면(`GODOT` 또는 PATH) `test_analyze.py` 는 실제 실행기로 씨앗 2개 × 2세대를 돌려 같은 씨앗의 해시가 같은지도 봅니다(없으면 그 하나만 건너뜀). `test_runner_cli.py` 는 godot 이 꼭 있어야 합니다(없으면 실패). GitHub Actions(`build.yml` 의 마지막 단계)에서도 돌립니다.

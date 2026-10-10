@@ -15,6 +15,7 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,9 +38,12 @@ CONFIG_MAX_TICKS = 2000000
 def write_fake_run(run_dir: Path, seed: int, disc: dict, *, civ: int, end_reason: str = "generations",
                    extinct_tick: int = -1, ticks: int = 400, final_gen: float = 8.0, preset: str = "default",
                    overrides: dict | None = None, odd_text: bool = False,
-                   generations_target: float | None = None, max_ticks: int | None = None) -> None:
-    """실행기 결과 폴더 흉내. disc = {"채집": (틱, 세대), ...} — 없는 단계는 발견 못 함.
-    max_ticks 를 주면 실행기처럼 실제로 쓴 틱 상한과 설정의 run.max_ticks(기본 CONFIG_MAX_TICKS)를 남긴다."""
+                   generations_target: float | None = None, max_ticks: int | None = None, bom: bool = False) -> None:
+    """실행기 결과 폴더 흉내(summary.json·timeseries.csv·chronicle.csv·final.snapshot.json — 끝까지 쓴 결과).
+    disc = {"채집": (틱, 세대), ...} — 없는 단계는 발견 못 함.
+    max_ticks 를 주면 실행기처럼 실제로 쓴 틱 상한과 설정의 run.max_ticks(기본 CONFIG_MAX_TICKS)를 남긴다.
+    bom 이면 CSV 를 BOM 붙은 UTF-8 로(실행기·실험실 CSV 의 새 형식)."""
+    csv_enc = "utf-8-sig" if bom else "utf-8"
     run_dir.mkdir(parents=True, exist_ok=True)
     names = analyze.STAGE_NAMES_KO
     summary = {
@@ -68,7 +72,7 @@ def write_fake_run(run_dir: Path, seed: int, disc: dict, *, civ: int, end_reason
                 lines.append(f'{t},{g},store_built,-1,"저장고 1호 — (41, 26)"')
     if end_reason == "extinction":
         lines.append(f"{extinct_tick},0.0,extinction,-1,멸종 — 마지막 개체가 사라짐")
-    (run_dir / "chronicle.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (run_dir / "chronicle.csv").write_text("\n".join(lines) + "\n", encoding=csv_enc)
     # 시계열: 20틱마다, 평균 세대는 틱에 비례, 크기는 조금씩 줄어듦
     rows = [",".join(analyze.TIMESERIES_COLUMNS)]
     for tick in range(0, ticks + 1, 20):
@@ -81,7 +85,8 @@ def write_fake_run(run_dir: Path, seed: int, disc: dict, *, civ: int, end_reason
                      "mean_size": 0.0 if extinct_now else round(1.0 - 0.001 * tick / 20, 6),
                      "mean_sense": 0.0 if extinct_now else 3.0, "civ_stage": stage})
         rows.append(",".join(str(vals[c]) for c in analyze.TIMESERIES_COLUMNS))
-    (run_dir / "timeseries.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    (run_dir / "timeseries.csv").write_text("\n".join(rows) + "\n", encoding=csv_enc)
+    (run_dir / "final.snapshot.json").write_text('{"format": "slime-lab-snapshot"}', encoding="utf-8")
 
 
 def make_fake_results(root: Path) -> None:
@@ -93,7 +98,8 @@ def make_fake_results(root: Path) -> None:
 
 
 def read_csv_rows(path: Path) -> list[dict]:
-    with path.open(encoding="utf-8", newline="") as f:
+    """도구가 쓴 CSV(BOM 붙은 UTF-8)를 읽는다."""
+    with path.open(encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
 
 
@@ -169,6 +175,29 @@ class TestArgs(unittest.TestCase):
                         ["sweep", "--out", "o"], ["run", "--out", "o", "--set", "novalue"]):
                 with self.assertRaises(SystemExit, msg=str(bad)):
                     p.parse_args(bad)
+
+    def test_generations_like_runner(self) -> None:
+        """--generations 는 실행기(String.is_valid_float)가 받는 꼴만: 파이썬 float 만 읽는 1_0 은 실행 전에 인자 오류(I22)."""
+        for good, want in (("100", "100"), ("2.5", "2.5"), ("1e3", "1e3"), (".5", ".5"), ("+5", "+5"), (" 10 ", "10")):
+            self.assertEqual(analyze._positive_number(good), want, good)
+        p = analyze.build_parser()
+        with quiet(), contextlib.redirect_stderr(io.StringIO()):
+            for bad in ("1_0", "-5", "0", "1e400", "inf", "nan", "abc", "١٢", "0x10"):
+                with self.assertRaises(SystemExit, msg=bad):
+                    p.parse_args(["run", "--out", "o", "--generations", bad])
+
+    def test_quoted_key_rejected(self) -> None:
+        """Windows cmd 는 작은따옴표를 벗기지 않음: 따옴표째 넘어온 키는 모든 실행이 '알 수 없는 키' 로 실패하기 전에
+        인자 오류로, 큰따옴표를 쓰라고 안내(J23)."""
+        for bad in ("'mutation.rate=0.08'", "'mutation.rate=0.02,0.1'", "'seasons.growth=[1,1,0.5,0],[1,1,1,1]'",
+                    '"a.b=1'):
+            with self.assertRaises(ValueError, msg=bad) as cm:
+                analyze.parse_param(bad)
+            self.assertIn("큰따옴표", str(cm.exception))
+        with quiet(), contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit):
+                analyze.build_parser().parse_args(["run", "--out", "o", "--set", "'mutation.rate=0.08'"])
+        self.assertIn("큰따옴표", err.getvalue())
 
     def test_natural_order(self) -> None:
         cells = ["rate=0.1", "rate=0.02", "rate=1.5", "rate=0.05"]
@@ -312,6 +341,44 @@ class TestReport(TempDirCase):
         rows = read_csv_rows(root / "summary.csv")
         self.assertEqual([r["cell"] for r in rows], ["fast_civ+mutation.rate=0.08"] * 2)
         self.assertEqual(rows[0]["overrides"], "mutation.rate=0.08")
+
+    def test_csv_has_bom(self) -> None:
+        """도구가 쓰는 CSV 는 BOM 붙은 UTF-8 — 한국어 Windows 엑셀이 civ_stage_name('농사') 등을 cp949 로 깨뜨리지 않게(J07).
+        pandas·csv 는 BOM 을 건너뛰고 첫 열 이름을 그대로 읽음."""
+        import pandas as pd
+        self.assertEqual(self.run_report(self.out, plots=False), 0)
+        for name in ("summary.csv", "cells.csv"):
+            raw = (self.out / name).read_bytes()
+            self.assertEqual(raw[:3], b"\xef\xbb\xbf", name)
+            self.assertEqual(raw.count(b"\xef\xbb\xbf"), 1, name)
+            self.assertEqual(pd.read_csv(self.out / name).columns[0], "cell", name)
+        self.assertIn("농사", (self.out / "summary.csv").read_bytes()[3:].decode("utf-8"))
+        out = self.tmp / "runs"
+        with mock.patch.object(analyze.subprocess, "run", FakeRunner()), quiet():
+            analyze.main(["run", "--seeds", "1-2", "--out", str(out), "--godot", "g", "--no-plots"])
+        self.assertEqual((out / "runs.csv").read_bytes()[:3], b"\xef\xbb\xbf")
+        self.assertEqual([r["seed"] for r in read_csv_rows(out / "runs.csv")], ["1", "2"])
+
+    def test_reads_bom_runner_csv(self) -> None:
+        """실행기·실험실 CSV 에 BOM 이 붙어도(새 형식) 같은 표: 연대기 첫 열(tick)을 잃으면 발견 세대가 시계열 보간으로 바뀜."""
+        plain, bom = self.tmp / "plain", self.tmp / "bom"
+        for root, b in ((plain, False), (bom, True)):
+            write_fake_run(root / "x" / "seed1", 1, {"채집": (100, 1.37), "저장": (200, 3.21)}, civ=2, bom=b)
+            with quiet():
+                analyze.report(root, root, plots=False)
+        self.assertEqual((bom / "x" / "seed1" / "chronicle.csv").read_bytes()[:3], b"\xef\xbb\xbf")
+        self.assertEqual((plain / "summary.csv").read_bytes(), (bom / "summary.csv").read_bytes())
+        self.assertEqual(read_csv_rows(bom / "summary.csv")[0]["disc_gen_forage"], "1.37")
+
+    def test_snapshot_cell_name(self) -> None:
+        """예설정 이름을 모르는 실행(이어 돌린 실행기 결과·스냅숏을 연 실험실 내보내기 — preset "")은 묶음 이름 snapshot(I05)."""
+        root = self.tmp / "resumed"
+        write_fake_run(root / "seed1", 1, {"채집": (10, 0.5)}, civ=1, preset="")
+        with quiet():
+            analyze.report(root, root, plots=False)
+        rows = read_csv_rows(root / "summary.csv")
+        self.assertEqual((rows[0]["cell"], rows[0]["preset"], rows[0]["overrides"]), (analyze.SNAPSHOT_CELL, "", ""))
+        self.assertIn("예설정 `snapshot`", (root / "report.md").read_text(encoding="utf-8"))
 
     def test_empty_dir(self) -> None:
         empty = self.tmp / "empty"
@@ -464,6 +531,89 @@ class TestRunCommands(TempDirCase):
                                  "--godot", "g", "--no-plots"])
         self.assertEqual((code, fake.calls, read_csv_rows(out / "runs.csv")[0]["status"]), (0, [], "existing"))
 
+    def test_failed_or_incomplete_is_rerun(self) -> None:
+        """summary.json 이 있어도 이전 상태가 failed·timeout·error 이거나 결과 파일이 덜 쓰였으면 'existing' 으로 바꾸지 않고
+        다시 돌린다(실행기는 summary.json 을 먼저 쓰고 그 뒤 쓰기에서 실패할 수 있음, I07). 끝까지 쓴 성공 결과는 그대로 건너뜀."""
+        out = self.tmp / "retry"
+        with mock.patch.object(analyze.subprocess, "run", FakeRunner()), quiet():
+            analyze.main(["run", "--seeds", "1-5", "--generations", "5", "--out", str(out), "--godot", "g", "--no-plots"])
+        rows = analyze.read_runs_csv(out / "runs.csv")
+        for seed, status in ((1, "failed"), (2, "timeout")):
+            rows[(analyze.ROOT_CELL, seed)]["status"] = status
+        analyze.write_runs_csv(out / "runs.csv", rows)
+        (out / "seed3" / "chronicle.csv").write_bytes(b"")  # 쓰다 실패: 0바이트
+        (out / "seed4" / "final.snapshot.json").unlink()  # 쓰기 전에 끊김
+        s5 = json.loads((out / "seed5" / "summary.json").read_text(encoding="utf-8"))
+        fake = FakeRunner()
+        buf = io.StringIO()
+        with mock.patch.object(analyze.subprocess, "run", fake), contextlib.redirect_stdout(buf):
+            code = analyze.main(["run", "--seeds", "1-5", "--generations", "5", "--out", str(out), "--godot", "g",
+                                 "--no-plots"])
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(c[7] for c, _ in fake.calls), ["--seed=1", "--seed=2", "--seed=3", "--seed=4"])
+        self.assertEqual([r["status"] for r in read_csv_rows(out / "runs.csv")], ["ok"] * 5)
+        self.assertIn("다시 돌림(이전 실행 failed)", buf.getvalue())
+        self.assertIn("다시 돌림(chronicle.csv 없음)", buf.getvalue())
+        self.assertEqual(json.loads((out / "seed5" / "summary.json").read_text(encoding="utf-8")), s5)
+
+    def test_incomplete_reason(self) -> None:
+        d = self.tmp / "inc"
+        write_fake_run(d, 1, {}, civ=0)
+        self.assertEqual(analyze.incomplete_reason(d), "")
+        s = json.loads((d / "summary.json").read_text(encoding="utf-8"))
+        s["write_failed"] = ["snapshot-20.json(저장 실패)"]
+        (d / "summary.json").write_text(json.dumps(s, ensure_ascii=False), encoding="utf-8")
+        self.assertIn("snapshot-20.json", analyze.incomplete_reason(d))
+        s["write_failed"] = []
+        s["history_hash"] = ""
+        (d / "summary.json").write_text(json.dumps(s), encoding="utf-8")
+        self.assertIn("역사 해시", analyze.incomplete_reason(d))
+        (d / "summary.json").write_text("{깨짐", encoding="utf-8")
+        self.assertIn("읽을 수 없음", analyze.incomplete_reason(d))
+
+    def test_relative_godot_path(self) -> None:
+        """--godot ./x 는 지금 셸 위치 기준(--out·--repo 와 같음) — 실행기는 저장소 폴더에서 돌므로 절대 경로로 넘김(I22).
+        이름만 주면(godot) PATH 에서 찾게 그대로."""
+        for i, (given, want) in enumerate((("./mygodot", os.path.abspath("./mygodot")),
+                                           ("bin/godot", os.path.abspath("bin/godot")),
+                                           ("/opt/godot", "/opt/godot"), ("godot", "godot"))):
+            fake = FakeRunner()
+            with mock.patch.object(analyze.subprocess, "run", fake), quiet():
+                analyze.main(["run", "--seeds", "1", "--out", str(self.tmp / f"g{i}"), "--godot", given,
+                              "--no-report"])
+            self.assertEqual(fake.calls[0][0][0], want, given)
+            self.assertEqual(fake.calls[0][1].get("cwd"), str(REPO))
+
+    def test_command_text(self) -> None:
+        """runs.csv 의 command 열은 그 OS 셸에 붙여 다시 돌릴 수 있게: Windows = cmd 따옴표(list2cmdline), 그 밖 = POSIX(J23)."""
+        cmd = ["C:\\Godot dir\\godot_console.exe", "--", "--set=seasons.growth=[1,1,0.5,0]", "--out=C:\\결과 폴더\\seed1"]
+        self.assertEqual(analyze.command_text(cmd, windows=True),
+                         '"C:\\Godot dir\\godot_console.exe" -- --set=seasons.growth=[1,1,0.5,0] "--out=C:\\결과 폴더\\seed1"')
+        self.assertEqual(analyze.command_text(cmd, windows=False),
+                         "'C:\\Godot dir\\godot_console.exe' -- '--set=seasons.growth=[1,1,0.5,0]' '--out=C:\\결과 폴더\\seed1'")
+        out = self.tmp / "cmdtext"
+        fake = FakeRunner()
+        with mock.patch.object(analyze.subprocess, "run", fake), quiet():
+            analyze.main(["run", "--seeds", "1", "--out", str(out), "--godot", "g", "--no-report"])
+        self.assertEqual(read_csv_rows(out / "runs.csv")[0]["command"], analyze.command_text(fake.calls[0][0]))
+
+    def test_output_on_legacy_codepages(self) -> None:
+        """Windows 에서 출력을 파일·파이프로 돌리면 ANSI 코드 페이지(cp949·cp1252) strict — 실패 꼬리말의 '—'·한글에서
+        UnicodeEncodeError 로 죽어 runs.csv·안내가 빠지던 것(J30). main() 이 표준 출력·오류를 UTF-8 로 다시 설정한다."""
+        for enc in ("cp949", "cp1252"):
+            out = self.tmp / f"cp-{enc}"
+            stdout = io.TextIOWrapper(io.BytesIO(), encoding=enc, errors="strict")
+            stderr = io.TextIOWrapper(io.BytesIO(), encoding=enc, errors="strict")
+            with mock.patch.object(sys, "stdout", stdout), mock.patch.object(sys, "stderr", stderr):
+                code = analyze.main(["run", "--seeds", "1-2", "--out", str(out), "--godot",
+                                     str(self.tmp / "없는-godot"), "--jobs", "1"])
+                sys.stdout.flush()
+            text = stdout.buffer.getvalue().decode("utf-8")
+            self.assertEqual(code, 1, enc)
+            self.assertIn("(RESULT 없음 — seed1/run.log 참고)", text)
+            self.assertIn("godot 실행 파일을 찾지 못했을 수 있습니다", text)
+            self.assertEqual([r["status"] for r in read_csv_rows(out / "runs.csv")], ["error", "error"])
+
     def test_utf8_output_from_real_child(self) -> None:
         """실제 자식 프로세스가 UTF-8 로 쓴 RESULT 줄(한글)을 그대로 읽는다(지역 코드 페이지와 무관)."""
         out = self.tmp / "u"
@@ -535,6 +685,25 @@ class TestRunCommands(TempDirCase):
             code = analyze.main(["run", "--out", str(self.tmp / "x"), "--repo", str(self.tmp)])
         self.assertEqual(code, 2)
         self.assertIn("project.godot", err.getvalue())
+
+
+# ── 올린 예시 ──
+
+class TestExamples(unittest.TestCase):
+    def test_example_reports_match_doc_commands(self) -> None:
+        """올린 예시 보고서(docs/analysis/example)는 ANALYSIS.md 의 명령 그대로 만든 것: 보고서의 결과 폴더 이름 = 명령의
+        --out(예전에는 다른 폴더 이름으로 만들어 그대로 재현되지 않았음 — I82), 표는 지금 도구가 쓰는 BOM 붙은 CSV."""
+        doc = (REPO / "docs" / "ANALYSIS.md").read_text(encoding="utf-8")
+        sec = doc.split("\n## 예시", 1)[1].split("\n## ", 1)[0]
+        for kind, n_runs in (("run", 8), ("sweep", 12)):
+            m = re.search(rf"analyze\.py {kind}\s[^\n]*(?:\\\n[^\n]*)*?--out results/(\S+)", sec)
+            self.assertIsNotNone(m, f"ANALYSIS.md 예시에 {kind} 명령이 없음")
+            folder = REPO / "docs" / "analysis" / "example" / kind
+            md = (folder / "report.md").read_text(encoding="utf-8")
+            self.assertIn(f"- 결과 폴더: `{m.group(1)}` — 실행 **{n_runs}개**", md, kind)
+            for name in ("summary.csv", "cells.csv"):
+                self.assertEqual((folder / name).read_bytes()[:3], b"\xef\xbb\xbf", f"{kind}/{name}")
+            self.assertEqual(len(read_csv_rows(folder / "summary.csv")), n_runs, kind)
 
 
 # ── 실제 실행기(있을 때만) ──
