@@ -19,7 +19,7 @@ const MARGIN := 16
 const TALL := 300
 ## 참고 캡처의 "더 오래된" 한도
 const LIMIT_ITEMS := 6
-## 참고 캡처의 멸종 세계(기본 예설정·자원 절반 — 씨앗 1 은 4세대까지 번식한 뒤 699틱에 멸종)와 진행 한도
+## 참고 캡처의 멸종 세계(기본 예설정·자원 절반 — 씨앗 1 은 4세대까지 번식한 뒤 548틱에 멸종 — 규칙 고침 g1b 뒤, 전에는 699틱)와 진행 한도
 const EXTINCT_PRESET := "default"
 const EXTINCT_SETS := {"resources.scale": 0.5}
 const EXTINCT_MAX_TICKS := 5000

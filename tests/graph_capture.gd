@@ -3,7 +3,7 @@ extends SceneTree
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/graph_capture.gd -- --out=폴더
 ## 실험실 아래 자리와 같은 바탕(DockPanel) 위에 GraphPanel 만 띄워, 1600×260 과 1000×220 두 크기를 위아래로 붙여 찍는다.
 ##   graphs-single.png   시연용(demo_fast)·씨앗 1 을 TICKS 틱. 위: 출생·사망 켬 + 개체 수 그래프에 마우스 값,
-##                       아래: 가로축 평균 세대 + 평균 에너지 + 시점 표시(채집 발견 틱)
+##                       아래: 가로축 평균 세대 + 평균 에너지 + 시점 표시(저장 발견 틱)
 ##   graphs-compare.png  A 기본 · B 시연용(씨앗 1, 각 TICKS 틱). 위: 기술 단계 그래프에 마우스 값, 아래: 가로축 평균 세대 +
 ##                       출생·사망 + B 의 농사 발견 시점(실험마다 자기 세대에) + 개체 수 그래프 오른쪽(A 가 이르지 못한 세대)에 마우스 값
 ## --extra 를 주면 참고용도 찍는다(문서에는 넣지 않음): graphs-1280.png(1280×720 창의 아래 자리 폭 ≈ 834, 비교),
