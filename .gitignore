@@ -1,5 +1,7 @@
 .godot/
-build/
+# 내보낸 배포판. build/.gdignore 만 저장소에 둔다(편집기가 내보낸 웹 PNG 를 가져오지 않게)
+build/*
+!build/.gdignore
 results/
 *.tmp
 /android/
