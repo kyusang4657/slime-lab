@@ -3,8 +3,8 @@ extends SceneTree
 ##   godot --headless --path . --script res://tests/run_experiment.gd -- --seed=42 --generations=1000 --out=results/seed42
 ## Windows 는 콘솔에 RESULT 줄이 보이는 Godot_v4.4.1-stable_win64_console.exe 로 같은 인자(docs/ANALYSIS.md "Windows").
 ## 선택: --preset=이름  --set=키=값(여러 번)  --max-ticks=N  --no-lineage  --snapshot-every=N  --resume=스냅숏.json  --quiet
-## 인자 규칙(어기면 인자 오류): --seed 는 64비트 정수, --generations 는 0 보다 큰 유한한 수, --max-ticks 는 1~TICK_LIMIT,
-## --snapshot-every 는 0(끔)~TICK_LIMIT 의 정수(1e5·10k 처럼 글자가 섞이면 거부). 상대 경로는 프로젝트 폴더(--path) 기준.
+## 인자 규칙(어기면 인자 오류): --seed 는 64비트 정수, --generations 는 0 보다 큰 유한한 수, --max-ticks 는 1~SimConfig.TICK_MAX(1e9),
+## --snapshot-every 는 0(끔)~SimConfig.TICK_MAX 의 정수(1e5·10k 처럼 글자가 섞이면 거부). 상대 경로는 프로젝트 폴더(--path) 기준.
 ## --resume: 설정·씨앗은 스냅숏의 것을 쓴다 — --seed·--preset·--set 과 함께 주면 인자 오류. 이어 돌린 summary.json 은
 ## preset = ""·overrides = {}(스냅숏에는 예설정 이름이 없음 — 실험실에서 스냅숏을 연 실험과 같음, 실제 설정은 config),
 ## resumed_from = 실제로 읽은 파일, resume_status = "loaded"(본 파일) · "backup"(본 파일이 깨져 .bak 에서 — 경고 줄을 찍음).
@@ -13,14 +13,13 @@ extends SceneTree
 ## 있으면 그것을 모두 지우고 새로 쓴다(앞 실행의 lineage.csv·snapshot-N.json·.bak 이 새 결과와 섞이지 않게). OUT_KEEP(.gdignore·
 ## analyze.py 의 run.log·OS 가 만드는 파일)은 그대로 둔다. 그 밖의 파일이나 하위 폴더가 하나라도 있으면 아무것도 지우지 않고 오류 2.
 ## 설정 오류는 결과 폴더를 보기 전에 거른다(설정이 틀리면 앞 결과를 건드리지 않음).
-## 쓰는 순서: (중간 스냅숏) → final.snapshot.json → SimRecorder.write_all(summary.json·CSV).
+## 쓰는 순서: (중간 스냅숏) → final.snapshot.json → SimRecorder.write_all(CSV → summary.json 마지막, 임시 이름 → 바꾸기 —
+## CSV 하나라도 못 쓰면 summary.json 은 쓰지 않음). summary.json 이 있으면 다 쓴 결과다.
 ## 끝나는 조건: 살아 있는 개체 평균 세대 ≥ generations, 멸종, 틱 상한. 마지막 줄은 RESULT: ...(쓰기 실패면 끝에 write_failed=…).
 ## 종료 코드: 정상 0, 인자·설정·결과 폴더 오류 2, 파일 쓰기 실패 3(--snapshot-every 의 중간 스냅숏 포함 — 오류 줄도 찍고
 ## summary.json 의 write_failed 에도 적음). 검사: tools/test_runner_cli.py(명령줄 그대로), tests/run_tests.gd test_runner.
 
 const PROGRESS_SECONDS := 10.0
-## 틱 상한 2^31−1: 틱을 담는 세계 배열(PackedInt32Array)이 뒤집히지 않는 가장 큰 틱(검토 J01). 설정의 run.max_ticks 도 이 안에서 쓴다.
-const TICK_LIMIT := 2147483647
 ## 64비트 정수의 끝(--seed 범위 — 넘으면 to_int 가 엔진 오류 줄만 찍고 말없이 잘라 버림)
 const INT64_MAX := 9223372036854775807
 ## 실행기가 결과 폴더에 쓰는 파일. 같은 폴더를 다시 쓰면 지우고 새로 쓴다(각각 OUT_SUFFIXES 를 붙인 SimSnapshot 부산물까지).
@@ -72,12 +71,12 @@ static func parse_args(args: PackedStringArray) -> Dictionary:
 			a.preset = s.substr(9)
 			_add_once(cond, "--preset")
 		elif s.begins_with("--max-ticks="):
-			var r := int_arg("--max-ticks", s.substr(12), 1, TICK_LIMIT)
+			var r := int_arg("--max-ticks", s.substr(12), 1, SimConfig.TICK_MAX)
 			if r.has("error"):
 				return r
 			a.max_ticks = r.value
 		elif s.begins_with("--snapshot-every="):
-			var r := int_arg("--snapshot-every", s.substr(17), 0, TICK_LIMIT)
+			var r := int_arg("--snapshot-every", s.substr(17), 0, SimConfig.TICK_MAX)
 			if r.has("error"):
 				return r
 			a.snapshot_every = r.value
@@ -161,7 +160,9 @@ static func run(a: Dictionary) -> int:
 		return cleared.code
 	if say and cleared.removed > 0:
 		print("앞 실행의 결과 파일 %d개를 지우고 새로 씁니다: %s" % [cleared.removed, out_dir])
-	var max_ticks: int = a.max_ticks if a.max_ticks > 0 else mini(int(wd.cfg.run.max_ticks), TICK_LIMIT)
+	# 틱 상한은 SimConfig.TICK_MAX(1e9) 안: 틱을 담는 세계 배열(PackedInt32Array, 2^31−1 까지)이 뒤집히지 않게(검토 J01).
+	# --max-ticks 는 parse_args 가, 설정 run.max_ticks 는 SimConfig.validate 가 이 범위를 지킨다(여기서도 한 번 더 자름).
+	var max_ticks: int = a.max_ticks if a.max_ticks > 0 else mini(int(wd.cfg.run.max_ticks), SimConfig.TICK_MAX)
 	var rec := SimRecorder.new()
 	var rec_every := int(wd.cfg.record.every)
 	rec.record(wd)

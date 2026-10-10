@@ -8,7 +8,7 @@ godot 은 환경 변수 GODOT 또는 PATH 의 godot(tools/test_analyze.py 와 �
 `godot --headless --path . --import` 가 되어 있어야 한다(CI 는 앞 단계에서 함).
 
 지키는 계약(tests/run_experiment.gd 머리 주석·docs/ANALYSIS.md "헤드리스 실행기"):
-- 인자: --max-ticks·--snapshot-every 는 정수와 범위(틱 상한 2^31−1), --generations 는 0 보다 큰 유한한 수, --seed 는 64비트.
+- 인자: --max-ticks·--snapshot-every 는 정수와 범위(틱 상한 SimConfig.TICK_MAX = 1e9), --generations 는 0 보다 큰 유한한 수, --seed 는 64비트.
   어기면 종료 코드 2(검토 I20·J01). INT64_MIN 씨앗도 RESULT 줄에 바르게(J31).
 - --resume: --seed·--preset·--set 과 함께면 2. 이어 돌린 해시 = 끊김 없는 해시, summary.json 은 preset ""·overrides {}·
   resumed_from·resume_status(I05). 본 파일이 깨지면 경고하고 백업을 썼다고 적음(I06). 곧바로 끝나도 같은 틱 한 줄(I23).
@@ -41,8 +41,10 @@ RUNNER = "res://tests/run_experiment.gd"
 TIMEOUT = 300
 ## 동시에 띄우는 godot 수(인자 오류 검사)
 PARALLEL = 4
-## 틱을 담는 세계 배열(PackedInt32Array)의 상한 = 실행기 TICK_LIMIT
-TICK_LIMIT = 2**31 - 1
+## 실행기의 틱 상한 = SimConfig.TICK_MAX(scripts/sim/sim_config.gd 에서 읽음 — 틱을 담는 세계 배열 PackedInt32Array 의
+## 2^31−1 보다 작고, 최대 나이 + 수명 흔들림도 그 안)
+TICK_LIMIT = int(re.search(r"^const TICK_MAX := (\d+)$", (REPO / "scripts/sim/sim_config.gd").read_text(encoding="utf-8"),
+                           re.M).group(1))
 ## 개체 없이 시작 → 틱 0 에 멸종으로 끝남(인자가 잘못 받아들여졌을 때도 검사가 오래 걸리지 않게)
 EMPTY = "--set=population.initial=0"
 
@@ -100,10 +102,10 @@ class RunnerCase(unittest.TestCase):
 
 class TestArgs(RunnerCase):
     def test_bad_numbers_rejected(self) -> None:
-        """to_int 로만 읽던 인자: 1e5 → 15틱, abc → 상한 없음, 2^31 → 틱 배열이 뒤집힘 — 모두 종료 코드 2 로 거부(I20·J01)."""
+        """to_int 로만 읽던 인자: 1e5 → 15틱, abc → 상한 없음, 틱 상한(1e9) 넘음 → 2^31 넘으면 틱 배열이 뒤집힘 — 모두 종료 코드 2 로 거부(I20·J01)."""
         cases = [
             "--max-ticks=1e5", "--max-ticks=10k", "--max-ticks=abc", "--max-ticks=-5", "--max-ticks=0",
-            f"--max-ticks={TICK_LIMIT + 1}", "--max-ticks=99999999999999999999",
+            f"--max-ticks={TICK_LIMIT + 1}", f"--max-ticks={2**31}", "--max-ticks=99999999999999999999",
             "--snapshot-every=1e4", "--snapshot-every=abc", "--snapshot-every=-1", f"--snapshot-every={TICK_LIMIT + 1}",
             "--generations=-5", "--generations=0", "--generations=1_0", "--generations=1e400",
             "--seed=99999999999999999999", "--seed=-9223372036854775809",
@@ -119,7 +121,7 @@ class TestArgs(RunnerCase):
             self.assertFalse(outs[c].exists(), f"{c}: 인자 오류인데 결과 폴더를 만듦")
 
     def test_limits_accepted(self) -> None:
-        """경계값은 받는다: --max-ticks 2^31−1, --snapshot-every 0(끔), 64비트 끝 씨앗."""
+        """경계값은 받는다: --max-ticks = 틱 상한(1e9), --snapshot-every 0(끔), 64비트 끝 씨앗."""
         out = self.tmp / "limits"
         cp = run_runner(f"--out={out}", EMPTY, f"--max-ticks={TICK_LIMIT}", "--snapshot-every=0",
                         "--seed=9223372036854775807", "--generations=1e3", "--quiet")

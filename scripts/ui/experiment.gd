@@ -151,9 +151,10 @@ func _adopt(w: SimWorld) -> void:
 ## 한 틱 진행 + 기록(record.every 마다, 그리고 멸종한 틱 — 실행기가 멸종에서 멈추며 쓰는 끝 줄과 같은 줄).
 ## 멸종한(개체가 0 인) 세계는 진행하지 않고 false — 실행기의 끝 조건(is_extinct)과 같다(검토 I13·I08: 예전엔 빈 세계가
 ## 계속 돌아 연대기·요약·스냅숏이 실행기와 달라졌고, 처음부터 개체 0 이면 있지도 않은 "멸종" 을 틱 1 에 남겼음).
+## 틱 상한 SimConfig.TICK_MAX 에서도 멈춘다(실행기의 --max-ticks 상한과 같음 — 틱을 담는 int32 배열이 뒤집히지 않게, 검토 J01).
 ## 이번 step 에서 한 줄을 기록했으면 true.
 func step() -> bool:
-	if is_over():
+	if is_over() or world.tick >= SimConfig.TICK_MAX:
 		return false
 	world.step()
 	if world.tick % _every == 0 or world.is_extinct():
@@ -200,7 +201,8 @@ func display_name() -> String:
 ## 진행 중에도 쓸 수 있다. 마지막 기록 줄이 지금 틱이 아니면 끝 줄(tail_row)을 timeseries.csv 에 더하고, 요약·스냅숏은 그 끝
 ## 줄을 뽑은 세계 사본(기간 출생·사망 수를 끝 줄에 보고해 0 이 된 상태)으로 쓴다 — 실행기가 끝 줄을 기록한 뒤 저장하는 것과
 ## 같은 파일(검토 J32: 예전엔 원래 세계를 저장해 끝 줄에 쓴 출생·사망을 스냅숏에 다시 담았고, 이어 붙이면 두 번 셌음).
-## 기록기·세계는 그대로. 실패한 파일 이름 목록(성공이면 빈 배열).
+## 쓰는 순서는 실행기와 같다: final.snapshot.json → CSV → summary.json(마지막 — summary.json 이 있으면 다 쓴 것, 검토 I07).
+## summary.json 의 write_failed = 그보다 먼저 못 쓴 스냅숏. 기록기·세계는 그대로. 실패한 파일 이름 목록(성공이면 빈 배열).
 func export_dir(dir: String, with_lineage: bool = true) -> PackedStringArray:
 	var abs_dir := ProjectSettings.globalize_path(dir)
 	var rec := recorder
@@ -211,14 +213,16 @@ func export_dir(dir: String, with_lineage: bool = true) -> PackedStringArray:
 		rec.rows = recorder.rows.duplicate()
 		rec.rows.append(t.row)
 		out = t.world
-	var extra := {
-		end_reason = "exported", source = "lab", preset = preset, overrides = overrides, label = label, tag = tag,
-		snapshot_from = snapshot_path, rows = rec.rows.size(),
-	}
-	var failed := rec.write_all(abs_dir, out, extra, with_lineage)
+	var failed := PackedStringArray()
+	DirAccess.make_dir_recursive_absolute(abs_dir)
 	var serr := SimSnapshot.save_file(out, abs_dir.path_join("final.snapshot.json"))
 	if serr != "":
 		failed.append("final.snapshot.json(" + serr + ")")
+	var extra := {
+		end_reason = "exported", source = "lab", preset = preset, overrides = overrides, label = label, tag = tag,
+		snapshot_from = snapshot_path, rows = rec.rows.size(), write_failed = Array(failed),
+	}
+	failed.append_array(rec.write_all(abs_dir, out, extra, with_lineage))
 	return failed
 
 

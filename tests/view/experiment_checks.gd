@@ -6,7 +6,7 @@ extends RefCounted
 ## 실행기와 같음. 배수가 아닌 틱의 final.snapshot.json 도 실행기와 같음. 스냅숏 읽기가 끊긴 결과(빈 사전)는 실패, 백업이면 이유.
 
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 85
+const MIN_CHECKS := 88
 ## "세계 그대로" 비교(스냅숏 모든 절 — 틱을 진행하지 않은 채 역사 해시를 견주면 아무것도 증명하지 못함, 검토 I89)
 const WorldCompare := preload("res://tests/view/world_compare.gd")
 const TICKS := 400
@@ -69,6 +69,8 @@ func run(t) -> void:
 	t.check(Experiment.from_snapshot("user://없는파일.json").experiment == null, "없는 스냅숏 거부")
 	_load_results(t, x)
 	_odd_tick(t, root)
+	_export_order(t, root)
+	_tick_cap(t)
 	_labels(t)
 	# LabMain 을 거쳐 진행해도 기록·신호가 같다
 	var lab: LabMain = load("res://scenes/lab.tscn").instantiate()
@@ -277,6 +279,37 @@ func _empty_start(t, lab: LabMain, root: String) -> void:
 			"실험실도 틱 0 그대로(진행 %d틱, 기록 %d줄), 표지 \"%s\", 막대 \"%s\", 안내 \"%s\""
 			% [moved, x.rows().size(), lab._extinct_badge.text, lab.speed_text(), lab.info_panel.summary_text()])
 	lab.new_experiment("default", {}, 1)
+
+
+## 쓰는 순서 = 실행기: final.snapshot.json → CSV → summary.json(마지막). 스냅숏을 못 쓰면 CSV·summary.json 은 쓰고
+## summary.json 의 write_failed 에 그 스냅숏을 적는다(검토 I07 — 예전엔 summary.json 을 먼저 써서, 스냅숏을 못 써도
+## 요약은 다 쓴 결과처럼 보였음). 스냅숏 임시 파일 자리에 폴더를 두어 열기를 실패시킨다.
+func _export_order(t, root: String) -> void:
+	var x: Experiment = Experiment.create("default", {}, 3).experiment
+	x.step_n(40)
+	var dir := root.path_join("order")
+	DirAccess.make_dir_recursive_absolute(dir.path_join("final.snapshot.json.tmp"))
+	# 일부러 낸 쓰기 실패의 엔진 오류 줄(SimSnapshot.save_file 의 push_error)은 감춘다 — CI 는 화면 검사 로그의 "ERROR:" 를 실패로 봄
+	Engine.print_error_messages = false
+	var failed := x.export_dir(dir)
+	Engine.print_error_messages = true
+	var sm = JSON.parse_string(FileAccess.get_file_as_string(dir.path_join("summary.json")))
+	var wf: Array = sm.get("write_failed", []) if typeof(sm) == TYPE_DICTIONARY else []
+	t.check(failed.size() == 1 and failed[0].begins_with("final.snapshot.json(") and FileAccess.file_exists(dir.path_join("timeseries.csv")),
+			"스냅숏을 못 쓰면 실패 목록에 그것만(%s), CSV 는 씀" % ", ".join(failed))
+	t.check(wf.size() == 1 and str(wf[0]).begins_with("final.snapshot.json("),
+			"summary.json 은 스냅숏 다음에 써서 write_failed 에 스냅숏(%s)" % str(wf))
+
+
+## 틱 상한(SimConfig.TICK_MAX = 실행기 --max-ticks 의 상한)에서 더 진행하지 않음(검토 J01 — 틱을 담는 int32 배열이 뒤집히지 않게).
+func _tick_cap(t) -> void:
+	var x: Experiment = Experiment.create("default", {}, 1).experiment
+	x.world.tick = SimConfig.TICK_MAX - 1
+	x.step()
+	var at_cap := x.world.tick
+	var more := x.step_n(3)
+	t.check(at_cap == SimConfig.TICK_MAX and more == 0 and x.world.tick == SimConfig.TICK_MAX,
+			"틱 상한 %d 에서 멈춤(틱 %d, 그 뒤 기록 %d줄)" % [SimConfig.TICK_MAX, x.world.tick, more])
 
 
 ## 실험 이름: 바꾼 값을 짧게(세 주요 값 = 짧은 이름, 나머지 = 키=값), 최대 lab.label_max_overrides 개 + "외 K개".
