@@ -913,7 +913,8 @@ func _build() -> void:
 				for n in TRAIT_NAMES:
 					_trait_opt.add_item(n)
 				_trait_opt.select(trait_index)
-				_trait_opt.focus_mode = Control.FOCUS_NONE
+				# 키보드로 닿음(Tab·Enter — 스페이스는 LabMain 이 먼저 멈춤으로 씀, J16)
+				ParamPanel.keyboard_focus(_trait_opt)
 				_compact(_trait_opt, "OptionButton")
 				_trait_opt.item_selected.connect(set_trait)
 				title_row.add_child(_trait_opt)
@@ -932,6 +933,12 @@ func _build() -> void:
 		_views.append(v)
 
 
+## 마우스로 누르면 이 패널 단추·고르기 상자의 키보드 초점을 푼다(Tab 으로 고른 뒤 지도를 누르고 Enter 를 쳐도 눌리지 않게 —
+## ParamPanel.release_button_focus, J16).
+func _input(event: InputEvent) -> void:
+	ParamPanel.release_button_focus(self, event)
+
+
 ## 카드 바탕: 공용 CardPanel 모양에서 여백만 그래프에 맞게
 func _card_style() -> StyleBox:
 	var base := UiTheme.build().get_stylebox("panel", UiTheme.CARD) as StyleBoxFlat
@@ -948,7 +955,7 @@ func _toggle(text: String, group: ButtonGroup) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.toggle_mode = true
-	b.focus_mode = Control.FOCUS_NONE
+	ParamPanel.keyboard_focus(b)
 	if group != null:
 		b.button_group = group
 	_compact(b, "Button")

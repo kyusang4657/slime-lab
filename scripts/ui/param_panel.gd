@@ -33,8 +33,12 @@ const KIND_FLOAT := "float"
 const KIND_BOOL := "bool"
 ## 수·참거짓이 아닌 잎(배열·글자): 보이기만 하고 패널에서 바꾸지 않음
 const KIND_OTHER := "other"
-## 스냅숏 대화 상자의 시작 폴더(LabMain.default_export_dir 와 같은 곳)
+## 스냅숏 대화 상자의 시작 폴더(LabMain.default_export_dir 와 같은 곳). 실제로 쓰는 폴더는 snapshot_dir(검사가 바꿈)
 const SNAPSHOT_DIR := "user://experiments"
+## 씨앗 = 64비트 정수 전체(실험실·실행기·스냅숏과 같음). 글자 비교용 한계(부호를 뺀 숫자)와 실수로 받은 씨앗의 한계(2^63)
+const SEED_DIGITS_MAX := "9223372036854775807"
+const SEED_DIGITS_MIN := "9223372036854775808"
+const SEED_FLOAT_LIMIT := 9223372036854775808.0
 const TEXT_SAME := "지금 실험과 같음"
 const TEXT_PENDING := "바꾼 값 %d개 · 새 실험을 눌러 적용"
 const TEXT_PENDING_COMPARE := "바꾼 값 %d개 · 나란히 시작을 눌러 적용"
@@ -133,6 +137,18 @@ var _open_dialog: FileDialog
 var _confirm_dialog: ConfirmationDialog
 # 확인 대화 상자에서 "끝내기" 를 누르면 할 동작
 var _pending_discard := Callable()
+## 스냅숏 대화 상자의 시작 폴더(처음 값 SNAPSHOT_DIR — 검사는 프로세스마다 다른 임시 폴더로 바꿔 공용 폴더를 만들지 않음)
+var snapshot_dir := SNAPSHOT_DIR
+# 비교 중 저장이 실제로 쓸 -A/-B 파일이 이미 있을 때 묻는 대화 상자와, "덮어쓰기" 를 누르면 쓸 경로(고른 이름)
+var _overwrite_dialog: ConfirmationDialog
+var _overwrite_path := ""
+# 저장 대화 상자가 떠 있는 동안 패널이 실험실을 멈춰 두었는가(닫히면 다시 재생 — 이름의 틱 = 파일 안 틱)
+var _save_hold := false
+# 마우스 왼쪽 단추가 눌린 채인가(ParamPanel._input 이 LabMain._input 보다 먼저 받음 — 자식이 먼저)
+var _mouse_down := false
+# 칸 밖을 마우스로 눌러(LabMain 이 초점을 풀어 확정) 난 해석 오류 {col, key}. 같은 누름이 새 실험·나란히 시작 단추면
+# 시작하지 않는다(단추를 Enter·신호로 누를 때 칸을 먼저 확정하는 것과 같은 규칙). 단추를 뗀 뒤(지연 호출) 잊음.
+var _click_err := {}
 
 # 설정 잎 키(sim-defaults.json 순서)와 종류, 예설정별 설정·잎 값(캐시), 한국어 이름표
 static var _leaf_order: Array[String] = []
@@ -206,7 +222,7 @@ func current_settings(which: int = 0) -> Dictionary:
 
 
 ## 값 하나를 바꾼다(검사·자동화용, 칸에 적은 것과 같음). key = 설정 키("mutation.rate" 등), "preset"(예설정 이름),
-## "seed"(씨앗, 0~ui.param.seed_max 로 자름). 글자 값은 칸에 적은 것처럼 해석한다.
+## "seed"(씨앗, 64비트 정수 그대로 — 자르지 않음). 글자 값은 칸에 적은 것처럼 해석한다.
 ## 돌려주는 값: 이 값 또는 이 칸 조건의 오류 문장("" = 문제 없음). 지금 실험에는 적용하지 않는다(apply() 가 함).
 func set_value(key: String, value: Variant, which: int = 0) -> String:
 	var c := clampi(which, 0, _cols.size() - 1)
@@ -386,8 +402,13 @@ func is_highlighted(key: String, which: int = 0, advanced: bool = false) -> bool
 	return not row.is_empty() and _stripe_on(row.stripe as ColorRect)
 
 
-## 그 키 줄 아래 오류 글(보이지 않으면 "").
+## 그 키 줄 아래 오류 글(보이지 않으면 ""). key = "seed" 면 씨앗 칸 아래.
 func row_error(key: String, which: int = 0, advanced: bool = false) -> String:
+	if key == KEY_SEED and not advanced:
+		if which < 0 or which >= _cards.size():
+			return ""
+		var sl := _cards[which].seed_err as Label
+		return sl.text if sl.visible else ""
 	var row: Dictionary = _adv_rows.get(key, {}) if advanced else _main_row(which, key)
 	if row.is_empty():
 		return ""
@@ -396,8 +417,8 @@ func row_error(key: String, which: int = 0, advanced: bool = false) -> String:
 
 
 ## 노드 찾기(검사·캡처용): "apply"·"start_compare"·"revert"·"compare"·"export"·"save"·"open"·"sound"·"advanced"·
-## "scroll"·"footer"·"next_title"·"random:0"·"seed:0"·"seed_note:0"·"preset:0"·"slider:<키>:0"·"field:<키>:0"·"card:1"·
-## "card_side:1"·"adv:<키>"·"adv_name:<키>"·"adv_target:1"·"save_dialog"·"open_dialog"·"confirm_dialog".
+## "scroll"·"footer"·"next_title"·"random:0"·"seed:0"(씨앗 글 칸 LineEdit)·"preset:0"·"slider:<키>:0"·"field:<키>:0"·"card:1"·
+## "card_side:1"·"adv:<키>"·"adv_name:<키>"·"adv_target:1"·"save_dialog"·"open_dialog"·"confirm_dialog"·"overwrite_dialog".
 func control(id: String) -> Node:
 	var p := id.split(":")
 	var w := int(p[p.size() - 1]) if p.size() > 1 and p[p.size() - 1].is_valid_int() else 0
@@ -416,7 +437,6 @@ func control(id: String) -> Node:
 		"next_title": return _next_title
 		"random": return _cards[w].random
 		"seed": return _cards[w].seed
-		"seed_note": return _cards[w].seed_note
 		"preset": return _cards[w].preset
 		"card": return _cards[w].root
 		"card_side": return _cards[w].side
@@ -430,6 +450,7 @@ func control(id: String) -> Node:
 		"save_dialog": return _save_dialog
 		"open_dialog": return _open_dialog
 		"confirm_dialog": return _confirm_dialog
+		"overwrite_dialog": return _overwrite_dialog
 	return null
 
 
@@ -468,24 +489,30 @@ func _set_preset(c: int, preset_name: String) -> String:
 	return ""
 
 
-## 씨앗 값 해석: 정수(글자도 됨)를 0~seed_max 로 자른다. {value, error}
-func _parse_seed(value: Variant) -> Dictionary:
-	var v := 0
+## 씨앗 값 해석: 64비트 정수 그대로(실험실·실행기·스냅숏과 같이 자르지 않음). 글자는 십진 정수만(부호 하나 + 숫자) —
+## 소수("42.7")·식("2+3"·"0x10"·"1e3")·글자 섞임("42 f")·64비트 범위 밖은 오류. {value, error}
+## (예전 씨앗 칸은 실수 SpinBox 라 Enter 가 글자를 식으로 계산해 다른 씨앗이 되고, 2^53 넘는 씨앗은 다른 수로 보였음)
+static func _parse_seed(value: Variant) -> Dictionary:
 	match typeof(value):
 		TYPE_INT:
-			v = int(value)
+			return {value = int(value), error = ""}
 		TYPE_FLOAT:
-			if not is_finite(float(value)) or float(value) != floorf(float(value)):
+			var f := float(value)
+			if not is_finite(f) or f != floorf(f) or absf(f) >= SEED_FLOAT_LIMIT:
 				return {value = 0, error = "씨앗은 정수여야 합니다: %s" % str(value)}
-			v = int(value)
+			return {value = int(f), error = ""}
 		TYPE_STRING, TYPE_STRING_NAME:
 			var s := str(value).strip_edges()
 			if not s.is_valid_int():
 				return {value = 0, error = "씨앗은 정수여야 합니다: %s" % s}
-			v = s.to_int()
-		_:
-			return {value = 0, error = "씨앗은 정수여야 합니다"}
-	return {value = clampi(v, 0, _seed_max), error = ""}
+			# is_valid_int 는 자릿수를 보지 않는다(넘치는 수를 to_int 하면 엔진 오류) — 숫자 글자를 한계와 견줌
+			var neg := s.begins_with("-")
+			var digits := s.trim_prefix("-").trim_prefix("+").lstrip("0")
+			var limit := SEED_DIGITS_MIN if neg else SEED_DIGITS_MAX
+			if digits.length() > limit.length() or (digits.length() == limit.length() and digits > limit):
+				return {value = 0, error = "씨앗은 -%s ~ %s 사이 정수여야 합니다: %s" % [SEED_DIGITS_MIN, SEED_DIGITS_MAX, s]}
+			return {value = s.to_int(), error = ""}
+	return {value = 0, error = "씨앗은 정수여야 합니다"}
 
 
 ## 설정 값 해석(칸에 적은 글자 또는 값) → 그 키의 종류. {value, error}
@@ -742,8 +769,8 @@ func _on_experiments_changed(list: Array) -> void:
 
 
 ## 지금 실험의 조건을 패널 칸으로. 만든 실험이면 그 조건 그대로, 스냅숏이면 다른 값이 가장 적은 예설정 + 다른 값.
-## 씨앗은 자르지 않고 그대로(명령줄 --seed=-5·범위 밖 씨앗의 스냅숏도 새 실험이 같은 씨앗으로 다시 시작 — 칸에는
-## 범위 밖이라는 안내가 붙음). 그렇게 만든 조건이 SimConfig.build 를 통과하지 못하면 {}(패널 값 그대로 둠).
+## 씨앗은 자르지 않고 그대로(명령줄 --seed=-5·2^53 넘는 씨앗의 스냅숏도 칸에 그 글자 그대로, 새 실험이 같은 씨앗으로
+## 다시 시작). 그렇게 만든 조건이 SimConfig.build 를 통과하지 못하면 {}(패널 값 그대로 둠).
 func _settings_from_running(r: Dictionary) -> Dictionary:
 	var preset := str(r.preset)
 	var ov: Dictionary = r.overrides
@@ -872,15 +899,11 @@ func _refresh_card(c: int) -> void:
 	var side := TEXT_COL_NEXT if _running.size() < 2 else COL_SIDES[c]
 	if (card.side as Label).text != side:
 		(card.side as Label).text = side
-	var spin := card.seed as SpinBox
-	# 지금 실험에서 가져온 씨앗은 패널 범위(0~seed_max) 밖일 수 있다(명령줄·스냅숏) — 자르지 않고 그대로 보이고 안내
-	var seed_v := int(col.seed)
-	var outside := seed_v < 0 or seed_v > _seed_max
-	spin.allow_lesser = seed_v < 0
-	spin.allow_greater = seed_v > _seed_max
-	if not spin.get_line_edit().has_focus() and int(spin.value) != seed_v:
-		spin.set_value_no_signal(float(seed_v))
-	_set_err(card.seed_note as Label, ("씨앗 %d 은 칸 범위(0~%d) 밖 — 지금 실험의 씨앗 그대로 씀(고쳐 적으면 범위 안으로)" % [seed_v, _seed_max]) if outside else "")
+	# 씨앗 칸 = 씨앗 글자 그대로(64비트 정수 — 실수로 바꾸지 않으므로 2^53 넘는 씨앗도 그 수, INT64_MIN 도 "-…" 하나)
+	var sle := card.seed as LineEdit
+	var seed_t := str(int(col.seed))
+	if not sle.has_focus() and sle.text != seed_t:
+		sle.text = seed_t
 	_mark(card.seed_stripe as ColorRect, card.seed_label as Label, _is_diff(c, KEY_SEED), false)
 	var seed_err := card.seed_err as Label
 	_set_err(seed_err, str(col.field_msg) if str(col.field_key) == KEY_SEED else "")
@@ -1075,24 +1098,25 @@ func _end_edits() -> String:
 	return err
 
 
-## 패널 안의 초점(글 칸·씨앗 칸)을 푼다. 확정은 이미 했으므로 초점이 빠질 때의 확정은 아무것도 하지 않는다.
+## 패널 안 글 칸(숫자 칸·씨앗 칸)의 초점을 푼다. 확정은 이미 했으므로 초점이 빠질 때의 확정은 아무것도 하지 않는다.
+## 단추·고르기 상자의 초점은 그대로(키보드로 Tab·Enter 를 쓰는 사람이 누른 단추에서 이어 가게 — J16).
 func _release_focus() -> void:
 	if not is_inside_tree():
 		return
 	var f := get_viewport().gui_get_focus_owner()
-	if f != null and is_ancestor_of(f):
+	if f is LineEdit and is_ancestor_of(f):
 		f.release_focus()
 
 
-## 입력 중인 칸(초점이 있는 글 칸·씨앗)을 확정한다(단추는 초점을 받지 않아 칸이 그대로 초점을 쥐고 있을 수 있음).
+## 입력 중인 칸(초점이 있는 글 칸·씨앗)을 확정한다(단추를 신호·Enter 로 누르면 칸이 그대로 초점을 쥐고 있을 수 있음).
 ## 돌려주는 값: 해석할 수 없어 확정하지 못한 글자의 오류(첫째, 비교 모드면 "A: "/"B: " 머리, 없으면 "") — 그 줄 아래에도 남음.
 func _commit_edits() -> String:
 	var first := ""
 	for c in _cards.size():
 		var card: Dictionary = _cards[c]
-		var spin := card.seed as SpinBox
-		if spin.get_line_edit().has_focus():
-			first = _first_error(first, _commit_seed(spin, c, spin.get_line_edit().text), c)
+		var sle := card.seed as LineEdit
+		if sle.has_focus():
+			first = _first_error(first, _commit_seed(sle, c), c)
 		var rows: Dictionary = card.rows
 		for key: String in rows:
 			var le := rows[key].field as LineEdit
@@ -1122,30 +1146,27 @@ func _commit_field(le: LineEdit, key: String, c: int) -> String:
 	return err if bad else ""
 
 
-## 씨앗 칸 확정. SpinBox 는 해석할 수 없는 글자를 말없이 지금 값으로 되돌리므로("42 f" 를 적고 새 실험을 누르면 옛 씨앗으로
-## 시작) 먼저 보고 그 줄 아래 오류로 알린다. text = 칸 글자(Enter 면 SpinBox 가 되돌리기 전에 받은 글자).
-func _commit_seed(spin: SpinBox, c: int, text: String) -> String:
-	var t := text.strip_edges()
-	if t == str(int(spin.value)):
-		return ""
-	if t.is_valid_int() or t.is_valid_float():
-		# SpinBox 가 범위로 자르고 value_changed → _on_seed_changed → set_value
-		spin.get_line_edit().text = t
-		spin.apply()
+## 씨앗 칸 확정 — Enter·초점 빠짐(칸 밖 클릭 포함)·단추 앞 모두 이 하나(_parse_seed 규칙). 지금 씨앗과 글자가 같으면
+## 아무것도 안 함. 해석할 수 없는 글자는 버리고(씨앗 그대로) 그 줄 아래 오류, 칸 글자는 지금 씨앗으로.
+## 돌려주는 값 = 그 해석 오류("" = 확정함). 씨앗 칸은 글 칸(LineEdit)이라 SpinBox 의 식 계산·실수 반올림이 끼지 않는다.
+func _commit_seed(le: LineEdit, c: int) -> String:
+	var t := le.text.strip_edges()
+	if t == str(int(_cols[c].seed)):
 		return ""
 	var err := set_value(KEY_SEED, t, c)
-	spin.get_line_edit().text = str(int(spin.value))
-	return err
+	var bad := str(_cols[c].field_key) == KEY_SEED and err != ""
+	le.text = str(int(_cols[c].seed))
+	return err if bad else ""
 
 
-func _on_seed_submitted(text: String, spin: SpinBox, c: int) -> void:
-	_commit_seed(spin, c, text)
-	spin.get_line_edit().release_focus()
+func _on_seed_submitted(_t: String, le: LineEdit, c: int) -> void:
+	_commit_seed(le, c)
+	le.release_focus()
 	_refresh()
 
 
-func _on_seed_focus_exited(spin: SpinBox, c: int) -> void:
-	_commit_seed(spin, c, spin.get_line_edit().text)
+func _on_seed_focus_exited(le: LineEdit, c: int) -> void:
+	_note_click_err(_commit_seed(le, c), c, KEY_SEED)
 
 
 ## 고급 설정 칸에 초점이 들어옴: 적는 글자는 지금 보이는 칸(_adv_col)의 것. 줄의 "마지막으로 쓴 값" 은 잊는다
@@ -1165,7 +1186,48 @@ func _on_field_submitted(_t: String, le: LineEdit, key: String, which: int) -> v
 
 
 func _on_field_focus_exited(le: LineEdit, key: String, which: int) -> void:
-	_commit_field(le, key, _edit_col(which))
+	var c := _edit_col(which)
+	_note_click_err(_commit_field(le, key, c), c, key)
+
+
+## 초점이 빠지며 확정한 글자에 해석 오류가 났고 그것이 마우스 누름 때문이면(LabMain 이 칸 밖 누름에서 초점을 풂) 기억한다 —
+## 그 누름이 새 실험·나란히 시작 단추면 단추가 시작하지 않게(_take_click_err).
+func _note_click_err(err: String, c: int, key: String) -> void:
+	if err != "" and _mouse_down:
+		_click_err = {col = c, key = key}
+
+
+## 같은 누름에서 기억한 해석 오류(그 줄 아래 오류가 그대로일 때만, 비교 모드면 "A: "/"B: " 머리). 꺼내면 잊는다.
+func _take_click_err() -> String:
+	var e := _click_err
+	_click_err = {}
+	if e.is_empty():
+		return ""
+	var col := _cols[int(e.col)]
+	if str(col.field_key) != str(e.key) or str(col.field_msg) == "":
+		return ""
+	return _first_error("", str(col.field_msg), int(e.col))
+
+
+func _forget_click_err() -> void:
+	if not _mouse_down:
+		_click_err = {}
+
+
+## 마우스 왼쪽 단추 누름·뗌(실험실 어디서든). 패널은 LabMain 의 조상이 아니라 자식이라 이 _input 이 LabMain._input 보다
+## 먼저 불린다 — 누를 때 표시해 두면 LabMain 이 그 누름으로 칸 초점을 풀 때 "누름 때문" 임을 안다. 뗄 때는 그 누름의
+## 단추 신호(pressed — 뗄 때 남)가 끝난 뒤 잊는다(지연 호출). 누르면 패널 단추의 키보드 초점도 푼다(release_button_focus).
+func _input(event: InputEvent) -> void:
+	var mb := event as InputEventMouseButton
+	if mb == null or mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if mb.pressed:
+		release_button_focus(self, event)
+		_mouse_down = true
+		_click_err = {}
+	else:
+		_mouse_down = false
+		_forget_click_err.call_deferred()
 
 
 ## 글 칸에서 Esc = 적던 글자를 버리고 초점 풀기(단축키는 LabMain 이 글 칸 초점 중에는 무시함).
@@ -1177,11 +1239,10 @@ func _on_field_gui_input(ev: InputEvent, le: LineEdit, key: String, which: int) 
 		le.accept_event()
 
 
-func _on_seed_gui_input(ev: InputEvent, spin: SpinBox) -> void:
+func _on_seed_gui_input(ev: InputEvent, le: LineEdit, c: int) -> void:
 	var k := ev as InputEventKey
 	if k != null and k.pressed and not k.echo and k.keycode == KEY_ESCAPE:
-		var le := spin.get_line_edit()
-		le.text = str(int(spin.value))
+		le.text = str(int(_cols[c].seed))
 		le.release_focus()
 		le.accept_event()
 
@@ -1221,12 +1282,6 @@ func _on_preset_selected(idx: int, which: int) -> void:
 	set_value(KEY_PRESET, pn, which)
 
 
-func _on_seed_changed(v: float, which: int) -> void:
-	if _syncing:
-		return
-	set_value(KEY_SEED, int(v), which)
-
-
 ## 무작위 씨앗: 화면 쪽 시각으로 씨앗을 준 따로 쓰는 난수기에서 고른다(시뮬레이션 난수·Godot 전역 난수와 무관).
 func random_seed(which: int = 0) -> int:
 	_end_edits()
@@ -1250,7 +1305,8 @@ func _on_export() -> void:
 		_report(TEXT_NO_LAB, "")
 		return
 	if web_mode:
-		_report(_lab.download_results(), "결과를 내려받을 수 없습니다")
+		# download_results 는 실패 알림을 스스로 띄운다(데스크톱 export_to 와 같이 알림 하나 — 예전에는 패널이 하나 더 띄웠음)
+		_report(_lab.download_results(), "")
 		return
 	export_to(_lab.default_export_dir())
 
@@ -1289,10 +1345,13 @@ func _running_ticks() -> int:
 
 
 ## 새 실험 단추: 지금 실험이 confirm_discard_ticks 이상 돌았으면 먼저 묻는다(조건 오류·입력 오류면 묻지 않고 그 오류를 보임).
+## 입력 오류 = 입력 중이던 칸을 확정하다 난 해석 오류 — 단추를 마우스로 누르면 칸은 그 누름에서 먼저 확정된다(_take_click_err).
 func _on_apply_pressed() -> void:
 	var fe := _end_edits()
+	if fe == "":
+		fe = _take_click_err()
 	if fe == "" and str(_cols[0].error) == "":
-		var q := "%s(틱 %d)을 끝내고 패널 조건으로 0틱부터 새로 시작할까요?" % [_running_name(), _running_ticks()]
+		var q := "%s(틱 %s)을 끝내고 패널 조건으로 0틱부터 새로 시작할까요?" % [_running_name(), ChroniclePanel.commas(_running_ticks())]
 		if _ask_discard(_running_ticks(), q, _apply_now.bind("")):
 			return
 	_apply_now(fe)
@@ -1301,8 +1360,10 @@ func _on_apply_pressed() -> void:
 ## 나란히 시작 단추: 새 실험 단추와 같은 확인.
 func _on_start_compare_pressed() -> void:
 	var fe := _end_edits()
+	if fe == "":
+		fe = _take_click_err()
 	if fe == "" and str(_cols[0].error) == "" and str(_cols[1].error) == "":
-		var q := "%s(틱 %d)을 끝내고 A·B 를 0틱부터 나란히 시작할까요?" % [_running_name(), _running_ticks()]
+		var q := "%s(틱 %s)을 끝내고 A·B 를 0틱부터 나란히 시작할까요?" % [_running_name(), ChroniclePanel.commas(_running_ticks())]
 		if _ask_discard(_running_ticks(), q, _apply_compare_now.bind("")):
 			return
 	_apply_compare_now(fe)
@@ -1313,7 +1374,7 @@ func _on_start_compare_pressed() -> void:
 func _on_compare_toggled(on: bool) -> void:
 	if not on and _lab_ok() and _lab.is_comparing():
 		var bt := _lab.experiments[1].world.tick
-		if _ask_discard(bt, "B 실험(틱 %d)을 버리고 A 만 계속할까요?" % bt, set_compare_mode.bind(false)):
+		if _ask_discard(bt, "B 실험(틱 %s)을 버리고 A 만 계속할까요?" % ChroniclePanel.commas(bt), set_compare_mode.bind(false)):
 			_compare_btn.set_pressed_no_signal(true)
 			return
 	set_compare_mode(on)
@@ -1329,28 +1390,59 @@ func _ask_discard(ticks: int, question: String, action: Callable) -> bool:
 	if confirm_discard_ticks <= 0 or ticks < confirm_discard_ticks or not _lab_ok():
 		return false
 	if _confirm_dialog == null:
-		var d := ConfirmationDialog.new()
-		d.name = "DiscardDialog"
-		d.title = "실험을 끝낼까요?"
-		d.ok_button_text = "끝내기"
-		d.cancel_button_text = "취소"
-		d.dialog_autowrap = true
+		var d := _make_confirm("DiscardDialog", "실험을 끝낼까요?", "끝내기")
 		var eb := d.add_button("내보내고 끝내기", false, ACTION_EXPORT)
 		eb.name = "ExportButton"
 		d.confirmed.connect(_on_discard_confirmed)
 		d.canceled.connect(_on_discard_canceled)
 		d.custom_action.connect(_on_discard_action)
-		add_child(d)
 		_confirm_dialog = d
 	var ex := "내려받고 끝내기" if web_mode else "내보내고 끝내기"
 	(_confirm_dialog.find_child("ExportButton", true, false) as Button).text = ex
 	_pending_discard = action
 	# 낱말 단위 줄바꿈(한글 음절 사이 "끝내/기" 에서 끊지 않게)
 	_confirm_dialog.dialog_text = UiTheme.keep_words("%s\n끝낸 실험은 되돌릴 수 없습니다. 결과를 남기려면 \"%s\"." % [question, ex])
-	_confirm_dialog.popup_centered(Vector2i(UiConfig.integer("param.confirm_width"), 0))
-	# 기본 초점은 취소(Enter·스페이스 한 번에 오래 돈 실험을 버리지 않게)
-	_confirm_dialog.get_cancel_button().grab_focus()
+	_popup_confirm(_confirm_dialog)
 	return true
+
+
+## 확인 대화 상자(낱말 단위 줄바꿈, 실험실 모양). 패널 자식으로 붙인다.
+func _make_confirm(node_name: String, title_text: String, ok_text: String) -> ConfirmationDialog:
+	var d := ConfirmationDialog.new()
+	d.name = node_name
+	d.title = title_text
+	d.ok_button_text = ok_text
+	d.cancel_button_text = "취소"
+	d.dialog_autowrap = true
+	style_dialog(d)
+	add_child(d)
+	return d
+
+
+## 확인 대화 상자를 폭 ui.param.confirm_width 로 가운데 띄우고 높이는 글·단추에 맞춘다(I50: 글이 처음에 좁은 폭으로 접혀
+## 잰 높이가 남아 글과 단추 사이가 크게 비었음). 기본 초점은 취소(Enter·스페이스 한 번에 실험·파일을 버리지 않게).
+func _popup_confirm(d: ConfirmationDialog) -> void:
+	var w := UiConfig.integer("param.confirm_width")
+	d.popup_centered(Vector2i(w, 0))
+	d.size = Vector2i(w, ceili(d.get_contents_minimum_size().y))
+	d.move_to_center()
+	d.get_cancel_button().grab_focus()
+
+
+## 대화 상자를 실험실 모양으로(I50 — 엔진 기본 회색 창 대신): 바탕 = 패널 색, 창 테두리·제목 줄 = 위쪽 막대 색 + 패널 테두리
+## 색, 제목 = 굵은 글꼴·글 색. 테두리 모양(제목 줄 높이·둘레 여백)은 엔진 기본 그대로 두고 색만 바꾼다.
+static func style_dialog(d: AcceptDialog) -> void:
+	var pad := UiConfig.num("theme.panel_padding")
+	d.add_theme_stylebox_override("panel", UiTheme.box(UiTheme.color("panel"), Color(0, 0, 0, 0), 0, 0, pad, pad))
+	var def := ThemeDB.get_default_theme()
+	for key in ["embedded_border", "embedded_unfocused_border"]:
+		var sb := (def.get_stylebox(key, "Window") as StyleBoxFlat).duplicate() as StyleBoxFlat
+		sb.bg_color = UiTheme.color("topbar")
+		sb.border_color = UiTheme.color("panel_border")
+		sb.set_border_width_all(UiConfig.integer("theme.border_width"))
+		d.add_theme_stylebox_override(key, sb)
+	d.add_theme_color_override("title_color", UiTheme.color("text"))
+	d.add_theme_font_override("title_font", UiTheme.bold_font())
 
 
 func _on_discard_confirmed() -> void:
@@ -1397,10 +1489,13 @@ func _apply_web_mode() -> void:
 	_open_btn.visible = not web_mode
 
 
-## 스냅숏 대화 상자(저장·열기, 파일 시스템, *.json, 시작 폴더 user://experiments — 없으면 만듦)를 띄운다.
+## 스냅숏 대화 상자(저장·열기, 파일 시스템, *.json, 시작 폴더 snapshot_dir = user://experiments — 없으면 만듦)를 띄운다.
+## 저장: 기본 이름에 지금 틱, 대화 상자가 떠 있는 동안 실험실을 멈춘다(닫히면 다시 재생 — J06: 예전에는 그사이 실험이 돌아
+## 이름의 틱과 파일 안 틱이 달랐음). 열기: 폴더에서 가장 최근 스냅숏(*.json)을 골라 둔 채 연다(J20: 내보내기 하위 폴더가
+## 골라진 채 열려 이름을 쳐도 엔진 대화 상자의 "열기" 단추가 꺼져 있었음).
 func open_snapshot_dialog(save: bool) -> FileDialog:
 	_end_edits()
-	var dir := ProjectSettings.globalize_path(SNAPSHOT_DIR)
+	var dir := ProjectSettings.globalize_path(snapshot_dir)
 	DirAccess.make_dir_recursive_absolute(dir)
 	var d := _save_dialog if save else _open_dialog
 	if d == null:
@@ -1415,45 +1510,109 @@ func open_snapshot_dialog(save: bool) -> FileDialog:
 		# 잘못 띄움 — 엔진 4.4 의 is_readable 이 경로를 UTF-8 로 넘기지 않음). 못 쓰면(헤드리스·포털 없는 Linux) 엔진 대화 상자.
 		d.use_native_dialog = true
 		d.file_selected.connect(_on_snapshot_save if save else _on_snapshot_open)
+		style_dialog(d)
 		add_child(d)
 		if save:
+			d.canceled.connect(_end_save_hold)
+			d.visibility_changed.connect(_on_save_dialog_visibility)
 			_save_dialog = d
 		else:
+			# 엔진 대화 상자: 폴더 줄이 골라진 채면 이름을 쳐도 "열기" 가 꺼져 있다 — 이름이 있으면 켬(없는 파일이면 엔진이 무시)
+			d.get_line_edit().text_changed.connect(func(t: String) -> void:
+				if t.strip_edges() != "":
+					d.get_ok_button().disabled = false)
 			_open_dialog = d
 	d.current_dir = dir
 	if save:
 		d.current_file = _default_snapshot_name()
+		_hold_for_save()
+	else:
+		d.current_file = _newest_snapshot(dir)
 	d.popup_centered(Vector2i(UiConfig.integer("param.dialog_width"), UiConfig.integer("param.dialog_height")))
 	return d
 
 
+## 폴더에서 가장 최근에 바뀐 스냅숏 파일 이름(*.json, 없으면 "").
+static func _newest_snapshot(abs_dir: String) -> String:
+	var best := ""
+	var best_t := -1
+	for f in DirAccess.get_files_at(abs_dir):
+		if f.get_extension().to_lower() != "json":
+			continue
+		var t := FileAccess.get_modified_time(abs_dir.path_join(f))
+		if t > best_t or (t == best_t and f > best):
+			best = f
+			best_t = t
+	return best
+
+
+## 저장 대화 상자를 띄우는 동안 실험실을 멈춘다(재생 중이었을 때만 — 닫히면 _end_save_hold 가 다시 재생).
+func _hold_for_save() -> void:
+	if not _save_hold and _lab_ok() and not _lab.is_paused():
+		_lab.set_paused(true)
+		_save_hold = true
+
+
+func _end_save_hold() -> void:
+	if not _save_hold:
+		return
+	_save_hold = false
+	if _lab_ok():
+		_lab.set_paused(false)
+
+
+## 저장 대화 상자가 닫힘(고름·취소·창 닫기 모두): 덮어쓰기를 묻는 중이 아니면 다시 재생. 고른 경우 file_selected 가 먼저 불려
+## 저장(또는 덮어쓰기 물음)을 마친 뒤라 지연 호출로 본다.
+func _on_save_dialog_visibility() -> void:
+	if _save_dialog != null and not _save_dialog.visible:
+		_end_save_hold_unless_asking.call_deferred()
+
+
+func _end_save_hold_unless_asking() -> void:
+	if _overwrite_path == "":
+		_end_save_hold()
+
+
 ## 저장 파일 기본 이름 snapshot-<날짜-시각>-seed<N>-tick<T>.json(시각은 이름에만 씀). 비교 중이면 두 씨앗
 ## "-seed<A>-vs-seed<B>"(LabMain.default_export_dir 와 같은 규칙 — 4단계 검토 G44: 예전엔 A 씨앗만이라 -B.json 에도 A 씨앗).
+## 씨앗은 str() 로 쓴다(J31: "%d" 는 INT64_MIN 에 부호를 두 번 붙여 "seed--9223…" 이 됐음).
 func _default_snapshot_name() -> String:
 	var t := Time.get_datetime_dict_from_system()
 	var stamp := "%04d%02d%02d-%02d%02d%02d" % [t.year, t.month, t.day, t.hour, t.minute, t.second]
 	var x: Experiment = _lab.experiment(0) if _lab != null and is_instance_valid(_lab) else null
 	if x == null:
 		return "snapshot-%s.json" % stamp
-	var seeds := "seed%d" % x.seed_value
+	var seeds := "seed" + str(x.seed_value)
 	var xb := _lab.experiment(1)
 	if xb != null:
-		seeds += "-vs-seed%d" % xb.seed_value
+		seeds += "-vs-seed" + str(xb.seed_value)
 	return "snapshot-%s-%s-tick%d.json" % [stamp, seeds, x.world.tick]
 
 
-## 저장: 혼자면 그 파일, 비교 중이면 <이름>-A.json·<이름>-B.json 두 파일. 성공 알림은 LabMain 이 띄운다.
-func save_snapshot_to(path: String) -> String:
-	if _lab == null or not is_instance_valid(_lab):
-		_report(TEXT_NO_LAB, "")
-		return TEXT_NO_LAB
-	var errs: Array[String] = []
+## 고른 경로로 저장할 때 실제로 쓰는 파일: 혼자면 [path], 비교 중이면 [<이름>-A.json, <이름>-B.json](실험 순서).
+func snapshot_paths(path: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	if not _lab_ok():
+		return out
 	var n := _lab.experiments.size()
 	for k in n:
 		var p := path
 		if n > 1:
 			p = "%s-%s.%s" % [path.get_basename(), _lab.experiments[k].tag, path.get_extension() if path.get_extension() != "" else "json"]
-		var e := _lab.save_snapshot(p, k)
+		out.append(p)
+	return out
+
+
+## 저장(묻지 않음 — 검사·자동화용, 대화 상자의 "덮어쓰기" 도 이것): 혼자면 그 파일, 비교 중이면 <이름>-A.json·<이름>-B.json
+## 두 파일. 성공 알림은 LabMain 이 띄운다.
+func save_snapshot_to(path: String) -> String:
+	if _lab == null or not is_instance_valid(_lab):
+		_report(TEXT_NO_LAB, "")
+		return TEXT_NO_LAB
+	var errs: Array[String] = []
+	var paths := snapshot_paths(path)
+	for k in paths.size():
+		var e := _lab.save_snapshot(paths[k], k)
 		if e != "":
 			errs.append(e)
 	var err := "\n".join(errs)
@@ -1471,8 +1630,46 @@ func open_snapshot_from(path: String) -> String:
 	return err
 
 
+## 저장 대화 상자에서 고름. 비교 중이면 대화 상자(엔진·운영 체제)가 본 것은 고른 <이름>.json 뿐이라 실제로 쓸 -A/-B 가
+## 이미 있으면 직접 묻는다(J05: 예전에는 같은 이름으로 두 번 저장하면 묻지 않고 덮어썼음). 혼자면 대화 상자가 이미 물었음.
 func _on_snapshot_save(path: String) -> void:
-	save_snapshot_to(path)
+	var paths := snapshot_paths(path)
+	var existing: Array[String] = []
+	if paths.size() > 1:
+		for p in paths:
+			if FileAccess.file_exists(ProjectSettings.globalize_path(p)):
+				existing.append(p.get_file())
+	if existing.is_empty():
+		save_snapshot_to(path)
+		_end_save_hold()
+		return
+	_overwrite_path = path
+	# 파일 대화 상자(배타 창)가 닫힌 뒤에 띄운다(배타 창 둘을 겹쳐 띄우지 않게)
+	_ask_overwrite.call_deferred(existing)
+
+
+func _ask_overwrite(existing: Array[String]) -> void:
+	if _overwrite_dialog == null:
+		_overwrite_dialog = _make_confirm("OverwriteDialog", "스냅숏을 덮어쓸까요?", "덮어쓰기")
+		_overwrite_dialog.confirmed.connect(_on_overwrite_confirmed)
+		_overwrite_dialog.canceled.connect(_on_overwrite_canceled)
+	var names := "\n".join(existing)
+	_overwrite_dialog.dialog_text = UiTheme.keep_words("비교 중 저장은 A·B 두 파일을 씁니다. 이미 있는 파일:") + "\n" + names \
+			+ "\n" + UiTheme.keep_words("덮어쓰면 바로 앞 파일만 .bak 으로 남습니다.")
+	_popup_confirm(_overwrite_dialog)
+
+
+func _on_overwrite_confirmed() -> void:
+	var p := _overwrite_path
+	_overwrite_path = ""
+	if p != "":
+		save_snapshot_to(p)
+	_end_save_hold()
+
+
+func _on_overwrite_canceled() -> void:
+	_overwrite_path = ""
+	_end_save_hold()
 
 
 func _on_snapshot_open(path: String) -> void:
@@ -1613,7 +1810,6 @@ func _build() -> void:
 	_apply_web_mode()
 	_sound_check = _check_box()
 	_sound_check.text = "소리"
-	_sound_check.focus_mode = Control.FOCUS_NONE
 	_sound_check.toggled.connect(_on_sound_toggled)
 	_body.add_child(_sound_check)
 	_sync_sound()
@@ -1656,7 +1852,7 @@ func _build_card(c: int) -> Dictionary:
 	opt.fit_to_longest_item = false
 	opt.clip_text = true
 	opt.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	opt.focus_mode = Control.FOCUS_NONE
+	keyboard_focus(opt)
 	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var ps := SimConfig.presets()
 	for pname in SimConfig.preset_names():
@@ -1676,23 +1872,18 @@ func _build_card(c: int) -> Dictionary:
 	sl.text = "씨앗"
 	sl.custom_minimum_size.x = lw
 	srow.add_child(sl)
-	var spin := SpinBox.new()
-	spin.min_value = 0
-	spin.max_value = _seed_max
-	spin.step = 1
-	spin.rounded = true
-	spin.select_all_on_focus = true
-	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	spin.custom_minimum_size.x = UiConfig.num("param.seed_field_min_width")
-	spin.get_line_edit().add_theme_constant_override("minimum_character_width", 0)
-	spin.tooltip_text = "씨앗 0 ~ %d (같은 씨앗·조건 = 같은 역사)" % _seed_max
-	spin.value_changed.connect(_on_seed_changed.bind(c))
-	# Enter = 확정하고 초점 풀기(지도로 돌아가면 단축키가 바로 동작), Esc = 적던 글자 버리기,
-	# 해석할 수 없는 글자는 SpinBox 가 말없이 되돌리기 전에 그 줄 아래 오류로
-	spin.get_line_edit().text_submitted.connect(_on_seed_submitted.bind(spin, c))
-	spin.get_line_edit().focus_exited.connect(_on_seed_focus_exited.bind(spin, c))
-	spin.get_line_edit().gui_input.connect(_on_seed_gui_input.bind(spin))
-	srow.add_child(spin)
+	# 씨앗 = 글 칸(LineEdit) + 정수 해석(_parse_seed). 예전 SpinBox 는 실수라 2^53 넘는 씨앗을 다른 수로 보였고, Enter 의
+	# 지연된 식 계산("2+3" → 5)·초점 빠짐·LabMain 의 apply 가 해석 오류를 덮어 다른 씨앗을 넣었다(I14·J18).
+	var sle := _field(UiConfig.num("param.seed_field_min_width"))
+	sle.name = "Seed"
+	sle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sle.tooltip_text = "씨앗 — 정수(같은 씨앗·조건 = 같은 역사, 실험실·실행기·스냅숏과 같이 64비트 정수 전체). 무작위는 0 ~ %d" % _seed_max
+	# Enter = 확정하고 초점 풀기(지도로 돌아가면 단축키가 바로 동작), Esc = 적던 글자 버리기, 초점이 빠지면 확정 —
+	# 해석할 수 없는 글자는 모두 그 줄 아래 오류(씨앗 그대로)
+	sle.text_submitted.connect(_on_seed_submitted.bind(sle, c))
+	sle.focus_exited.connect(_on_seed_focus_exited.bind(sle, c))
+	sle.gui_input.connect(_on_seed_gui_input.bind(sle, c))
+	srow.add_child(sle)
 	var rnd := _button("무작위", "화면 쪽 시각으로 고른 씨앗(시뮬레이션 난수와 무관)")
 	# 글자가 잘리지 않게(씨앗 칸이 대신 줄어듦)
 	rnd.clip_text = false
@@ -1701,16 +1892,12 @@ func _build_card(c: int) -> Dictionary:
 	srow.add_child(rnd)
 	var serr := _err_label()
 	v.add_child(serr)
-	# 지금 실험의 씨앗이 칸 범위 밖일 때의 안내(오류 아님 — 흐린 글)
-	var snote := _err_label()
-	snote.add_theme_color_override("font_color", _c_dim)
-	v.add_child(snote)
 
 	var rows := {}
 	for key in MAIN_KEYS:
 		rows[key] = _build_main_row(v, c, key)
-	return {root = root, head = head, side = side, preset = opt, seed = spin, seed_stripe = sstripe, seed_label = sl,
-			seed_err = serr, seed_note = snote, random = rnd, rows = rows}
+	return {root = root, head = head, side = side, preset = opt, seed = sle, seed_stripe = sstripe, seed_label = sl,
+			seed_err = serr, random = rnd, rows = rows}
 
 
 ## 주요 값 한 줄: [띠][이름 ……][숫자 칸] / [슬라이더] / [오류].
@@ -1766,7 +1953,7 @@ func _build_advanced() -> void:
 	_adv_toggle.name = "AdvancedToggle"
 	_adv_toggle.theme_type_variation = UiTheme.FLAT_BUTTON
 	_adv_toggle.toggle_mode = true
-	_adv_toggle.focus_mode = Control.FOCUS_NONE
+	keyboard_focus(_adv_toggle, true)
 	_adv_toggle.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_adv_toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_adv_toggle.tooltip_text = "sim-defaults.json 의 모든 설정 키(수·참거짓은 바꿀 수 있음)"
@@ -1779,7 +1966,7 @@ func _build_advanced() -> void:
 		b.text = COL_TAGS[c]
 		b.toggle_mode = true
 		b.button_group = _adv_target_group
-		b.focus_mode = Control.FOCUS_NONE
+		keyboard_focus(b)
 		b.tooltip_text = "%s 칸의 고급 설정" % COL_TAGS[c]
 		b.pressed.connect(set_advanced_target.bind(c))
 		_adv_target.add_child(b)
@@ -1832,7 +2019,6 @@ func _build_advanced() -> void:
 		var field: Control
 		if kind == KIND_BOOL:
 			var cb := _check_box()
-			cb.focus_mode = Control.FOCUS_NONE
 			cb.toggled.connect(_on_adv_toggled.bind(key))
 			field = cb
 		else:
@@ -1881,18 +2067,44 @@ func _button(text: String, tip: String) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.tooltip_text = tip
-	b.focus_mode = Control.FOCUS_NONE
+	keyboard_focus(b)
 	b.clip_text = true
 	b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	return b
 
 
-## 바탕 없는 확인 상자(기본 모양의 못 씀·올림 바탕이 패널 위에서 큰 어두운 상자로 보이지 않게).
+## 키보드로 닿는 단추·고르기 상자(J16): Tab 으로 초점을 받고 Enter 로 누른다. 스페이스는 그대로 멈춤 — LabMain._input 이
+## GUI 보다 먼저 스페이스를 먹으므로 초점 단추가 눌리지 않는다. 마우스로 누르면 초점을 남기지 않는다(누른 뒤 Enter 가 같은
+## 단추를 다시 누르지 않게, 초점 테두리가 남지 않게 — 마우스 쓰는 사람에게는 예전과 같음). ring = 공용 모양의 초점 테두리가
+## 비어 있는 종류(확인 상자·납작한 단추)에 단추 초점 테두리를 씀. 그래프·연대기 패널도 이것을 쓴다.
+static func keyboard_focus(c: Control, ring: bool = false) -> void:
+	c.focus_mode = Control.FOCUS_ALL
+	if ring:
+		c.add_theme_stylebox_override("focus", UiTheme.build().get_stylebox("focus", "Button"))
+	c.gui_input.connect(func(ev: InputEvent) -> void:
+		var mb := ev as InputEventMouseButton
+		if mb != null and mb.pressed and c.has_focus():
+			c.release_focus())
+
+
+## 패널 안 단추·고르기 상자에 키보드 초점이 있을 때 마우스 왼쪽 단추를 누르면(어디든) 그 초점을 푼다 — Tab 으로 단추를
+## 고른 뒤 지도를 누르고 Enter 를 치면 그 단추가 눌리지 않게. 누른 것이 키보드 초점을 받는 단추면 엔진이 그 단추에 초점을
+## 다시 주고 keyboard_focus 가 곧 푼다. 글 칸 초점은 LabMain 이 다룬다(칸 밖 누름에서 확정하며 풂). 패널의 _input 이 부른다.
+static func release_button_focus(panel: Control, event: InputEvent) -> void:
+	var mb := event as InputEventMouseButton
+	if mb == null or not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT or not panel.is_inside_tree():
+		return
+	var f := panel.get_viewport().gui_get_focus_owner()
+	if f != null and not (f is LineEdit) and panel.is_ancestor_of(f):
+		f.release_focus()
+
+
+## 바탕 없는 확인 상자(기본 모양의 못 씀·올림 바탕이 패널 위에서 큰 어두운 상자로 보이지 않게). 키보드 초점은 단추 테두리.
 func _check_box() -> CheckBox:
 	var cb := CheckBox.new()
-	cb.focus_mode = Control.FOCUS_NONE
-	for st in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
+	for st in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
 		cb.add_theme_stylebox_override(st, StyleBoxEmpty.new())
+	keyboard_focus(cb, true)
 	return cb
 
 

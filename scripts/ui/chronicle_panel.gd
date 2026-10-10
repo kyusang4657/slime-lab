@@ -115,8 +115,8 @@ func _build() -> void:
 	head.add_child(_hint)
 	_filter_btn = OptionButton.new()
 	_filter_btn.name = "Filter"
-	# 스페이스(멈춤)·숫자 키(속도)를 가로채지 않게
-	_filter_btn.focus_mode = Control.FOCUS_NONE
+	# 키보드로 닿음(Tab·Enter). 스페이스(멈춤)·숫자 키(속도)는 LabMain._input 이 GUI 보다 먼저 받으므로 가로채지 않는다(J16)
+	ParamPanel.keyboard_focus(_filter_btn)
 	_filter_btn.tooltip_text = "사건 종류 거르기(괄호 = 사건 수)"
 	var px := UiConfig.integer("chronicle.swatch_px")
 	for g in FILTER_NAMES.size():
@@ -153,6 +153,12 @@ func _build() -> void:
 	_bar.value_changed.connect(func(_v: float) -> void: _list.queue_redraw())
 	_sync_filter_labels()
 	_list.set_rows([], 0, false, [], EMPTY_TEXT, false)
+
+
+## 마우스로 누르면 이 패널 단추·고르기 상자의 키보드 초점을 푼다(Tab 으로 고른 뒤 지도를 누르고 Enter 를 쳐도 눌리지 않게 —
+## ParamPanel.release_button_focus, J16).
+func _input(event: InputEvent) -> void:
+	ParamPanel.release_button_focus(self, event)
 
 
 # ════════════════════════════ 연결 ════════════════════════════

@@ -31,9 +31,10 @@ const GEN_PIN_TEXT := "4.3"
 const GEN_TOL := 0.0551
 ## 다시 읽은 바로 뒤 틱(G04): 씨앗 2 는 126 → 127틱 진행에서 "저장 발견"·"저장고 1호"(틱 번호 126)가 나옴
 const REBUILD_W := 126
-const SNAP_PATH := "user://chronicle_checks_rebuild.json"
+## 프로세스마다 따로(저장소 사본 여럿에서 함께 돌려도 서로의 파일을 지우지 않게 — I37)
+var SNAP_PATH := "user://chronicle_checks_rebuild-%d.json" % OS.get_process_id()
 ## 이 모듈이 하는 검사 수(조건부 검사도 고정 씨앗이라 늘 같음 — 중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 86
+const MIN_CHECKS := 90
 
 
 func run(t) -> void:
@@ -145,7 +146,7 @@ func _real_chronicle(t) -> void:
 		t.check(panel.filter() == ChroniclePanel.FILTER_DISCOVERY and panel.item_count() == int(want.get(ChroniclePanel.FILTER_DISCOVERY, 0)),
 				"거르기 단추로 발견만")
 		t.check(btn.get_item_text(idx) == "발견 (%d)" % int(want.get(ChroniclePanel.FILTER_DISCOVERY, 0)), "거르기 항목에 사건 수: " + btn.get_item_text(idx))
-		t.check(btn.focus_mode == Control.FOCUS_NONE, "거르기 단추는 초점을 받지 않음(스페이스 = 멈춤)")
+		t.check(btn.focus_mode == Control.FOCUS_ALL, "거르기 단추는 키보드 초점을 받음(Tab·Enter — 스페이스는 실험실이 먼저 멈춤으로, J16)")
 	panel.set_filter(ChroniclePanel.FILTER_ALL)
 	t.check(panel.item_count() == x.world.chronicle.size(), "전체로 되돌림")
 	# 연대기 사전을 고치지 않음(줄은 우리 사본)
@@ -379,9 +380,50 @@ func _with_lab(t) -> void:
 		var before := lab.selected_id()
 		panel.activate_item(ni)
 		t.check(cursor.back() == int(panel.item(ni).tick) and lab.selected_id() == before, "행위자 없는 줄은 시점만")
+	await _keyboard(t, lab, panel)
 	panel.queue_free()
 	lab.queue_free()
 	await t.frames(1)
+
+
+## 키보드(J16): 거르기 단추에 초점이 있어도 스페이스는 실험실 멈춤(LabMain._input 이 먼저 받음 — 차림표가 열리지 않음),
+## Enter 는 거르기 차림표를 연다. 마우스로 누르면 초점을 남기지 않는다(예전과 같은 마우스 동작).
+func _keyboard(t, lab: LabMain, panel: ChroniclePanel) -> void:
+	var fb := panel.get_node_or_null("Head/Filter") as OptionButton
+	t.check(fb != null, "거르기 단추")
+	if fb == null:
+		return
+	fb.grab_focus()
+	await t.frames(1)
+	var paused0 := lab.is_paused()
+	_key(t, KEY_SPACE)
+	t.check(fb.has_focus() and lab.is_paused() != paused0 and not fb.get_popup().visible, "거르기 단추 초점에서 스페이스 = 멈춤(차림표 안 열림)")
+	_key(t, KEY_ENTER)
+	await t.frames(1)
+	t.check(fb.get_popup().visible, "Enter → 거르기 차림표 열림")
+	fb.get_popup().hide()
+	# 마우스로 누르려면 단추가 창 안에 있어야 함(헤드리스 기본 창은 작음)
+	var root0: Vector2i = t.root.size
+	t.root.size = Vector2i(UiConfig.integer("lab.min_width"), UiConfig.integer("lab.min_height"))
+	await t.frames(3)
+	fb.grab_focus()
+	_click(t, fb.get_global_rect().get_center())
+	await t.frames(1)
+	t.check(fb.get_popup().visible and not fb.has_focus(), "마우스로 누르면 차림표가 열리고 초점은 남기지 않음")
+	fb.get_popup().hide()
+	t.root.size = root0
+	lab.set_paused(true)
+	await t.frames(1)
+
+
+func _key(t, code: Key) -> void:
+	for pressed in [true, false]:
+		var e := InputEventKey.new()
+		e.keycode = code
+		e.physical_keycode = code
+		e.unicode = 32 if code == KEY_SPACE and pressed else 0
+		e.pressed = pressed
+		t.root.push_input(e)
 
 
 ## ⑤ 다시 읽은 바로 뒤 틱의 사건(G04). 발견·저장고·첫 밭·밭 잃음은 한 틱을 진행하는 도중에 진행 전 틱 번호를 달고 나온다.

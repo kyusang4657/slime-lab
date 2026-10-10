@@ -4,7 +4,7 @@ extends RefCounted
 ## 비교 모드는 패널 단위로(LabMain.start_compare 를 거친 종단은 integration4_checks), 실험 둘을 직접 만들어 LabMain 이 내는 것과 같은 호출로 몬다:
 ##   x.tag = "A"/"B" → panel.load_experiments([a, b])(= experiments_changed) → 진행할 때마다 append_row(k, rows().back())(= recorded).
 
-const MIN_CHECKS := 119
+const MIN_CHECKS := 123
 ## 합성 줄 수(긴 실행 흉내: 실험 둘 × 이만큼)와 그 줄 간격(틱)
 const LONG_ROWS := 6000
 const LONG_EVERY := 20
@@ -475,8 +475,67 @@ func _lab_checks(t) -> void:
 	t.check(lab.new_experiment("default", {}, 2) == "", "새 실험")
 	t.check(panel.series.size() == 1 and panel.series_points(0, 0) == 1 and panel.series[0].markers.is_empty(), "새 실험 → 지우고 새 기록 1줄")
 	t.check(panel.legend_texts() == PackedStringArray([lab.experiments[0].display_name()]), "범례 = 실험 이름")
+	await _keyboard_checks(t, lab, panel)
 	lab.queue_free()
 	await t.frames(1)
+
+
+## 키보드(J16): 가로축 틱/세대·출생·사망·평균 특성 고르기는 키보드 초점을 받는다(Tab 으로 닿음). 초점이 있어도 스페이스는
+## 실험실 멈춤(LabMain._input 이 GUI 보다 먼저 받음 — 단추가 눌리지 않음), Enter 는 누름. 마우스로 누르면 초점을 남기지 않음.
+func _keyboard_checks(t, lab: LabMain, panel: GraphPanel) -> void:
+	var bad: Array[String] = []
+	for n in ["XTick", "XGen", "Flows", "Trait"]:
+		var c := _find_named(panel, n) as Control
+		if c == null or c.focus_mode != Control.FOCUS_ALL:
+			bad.append(n)
+	t.check(bad.is_empty(), "그래프 조작(가로축·출생·사망·평균 특성)이 키보드 초점을 받음(못 받음: %s)" % ", ".join(bad))
+	var flows := _find_named(panel, "Flows") as Button
+	if flows == null:
+		return
+	lab.set_paused(true)
+	flows.grab_focus()
+	await t.frames(1)
+	var on0 := flows.button_pressed
+	_key(t, KEY_SPACE)
+	t.check(flows.has_focus() and not lab.is_paused() and flows.button_pressed == on0, "출생·사망 단추 초점에서 스페이스 = 재생/멈춤(단추 안 눌림)")
+	_key(t, KEY_ENTER)
+	t.check(flows.button_pressed != on0 and panel.show_flows == flows.button_pressed and flows.has_focus(), "Enter → 출생·사망 켜고 끔·초점 그대로")
+	_key(t, KEY_ENTER)
+	# 마우스로 누르려면 단추가 창 안에 있어야 함(헤드리스 기본 창은 작음)
+	var root0: Vector2i = t.root.size
+	t.root.size = Vector2i(UiConfig.integer("lab.min_width"), UiConfig.integer("lab.min_height"))
+	await t.frames(3)
+	flows.grab_focus()
+	_click(t, flows.get_global_rect().get_center())
+	await t.frames(1)
+	t.check(flows.button_pressed != on0 and not flows.has_focus(), "마우스로 누르면 출생·사망 켜짐·초점을 남기지 않음")
+	t.root.size = root0
+	panel.set_show_flows(on0)
+	lab.set_paused(true)
+
+
+func _find_named(n: Node, node_name: String) -> Node:
+	return n.find_child(node_name, true, false)
+
+
+func _key(t, code: Key) -> void:
+	for pressed in [true, false]:
+		var e := InputEventKey.new()
+		e.keycode = code
+		e.physical_keycode = code
+		e.unicode = 32 if code == KEY_SPACE and pressed else 0
+		e.pressed = pressed
+		t.root.push_input(e)
+
+
+func _click(t, pos: Vector2) -> void:
+	for pressed in [true, false]:
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_LEFT
+		mb.pressed = pressed
+		mb.position = pos
+		mb.global_position = pos
+		t.root.push_input(mb)
 
 
 ## 마우스가 움직일 때: 선·눈금 그래프(GraphView)는 다시 그리지 않고 마우스 겹만(G23), 마우스 값 계산은 한 번(G07 —
