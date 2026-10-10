@@ -3,13 +3,16 @@ extends RefCounted
 ## 정점 색, 닫힌 겉면(눈·입 구멍 메움에 틈이 없음), 캐시, 재질, 조립기 기본 도형. tests/run_view_tests.gd 가 불러 run(t) 을 부른다.
 
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 76
+const MIN_CHECKS := 77
 ## 법선은 메시에 압축(8면체 부호화)되어 저장되므로 길이 허용 오차를 둔다
 const NORMAL_TOL := 0.02
 ## 어두운 정점(눈·입) 판정 밝기
 const DARK := 0.25
 ## 위치를 같은 점으로 묶을 때의 격자 크기(정점 두 벌 경계를 하나로)
 const WELD := 0.00001
+## 소품 메시를 만드는 함수(몸통에 이름 없는 수치가 없어야 함 — 검토 I55)와 몸통에 그대로 써도 되는 수(번호·반·하나)
+const PROP_FUNCS: Array[String] = ["plant_mesh", "berry_mesh", "storehouse_mesh", "_profile", "_door", "farm_mesh", "_slab", "_ridge"]
+const PLAIN_NUMBERS: Array[String] = ["0", "1", "2", "3", "0.0", "0.5", "1.0"]
 
 
 func run(t) -> void:
@@ -19,7 +22,38 @@ func run(t) -> void:
 	_closed_surface(t)
 	_cache_and_materials(t)
 	_props(t)
+	_named_numbers(t)
 	_proc_geo(t)
+
+
+## 소품 메시(풀포기·열매·저장고·밭) 몸통의 모양 수치는 이름 붙은 상수(VIEW-API 공통 규칙 2). 함수 몸통(지역 const 줄은 뺌)에서
+## 주석·글자를 지우고 남은 수 가운데 번호·반·하나가 아닌 것을 센다(고치기 전: 0.35·2.3·0.56·0.44·프로필 반지름 등 수십 개).
+func _named_numbers(t) -> void:
+	var lines := FileAccess.get_file_as_string("res://scripts/view/slime_geo.gd").split("\n")
+	var num := RegEx.new()
+	num.compile("(?<![\\w.])\\d+(\\.\\d+)?")
+	var strings := RegEx.new()
+	strings.compile("\"[^\"]*\"")
+	var found := 0
+	var bad := PackedStringArray()
+	for f in PROP_FUNCS:
+		var head := -1
+		for i in lines.size():
+			if lines[i].begins_with("static func %s(" % f):
+				head = i
+				break
+		if head == -1:
+			continue
+		found += 1
+		var i := head + 1
+		while i < lines.size() and (lines[i].begins_with("\t") or lines[i].strip_edges() == ""):
+			var code := strings.sub(lines[i], "", true).split("#")[0].strip_edges()
+			if not code.begins_with("const "):
+				for m in num.search_all(code):
+					if not PLAIN_NUMBERS.has(m.get_string()):
+						bad.append("%s: %s" % [f, m.get_string()])
+			i += 1
+	t.check(found == PROP_FUNCS.size() and bad.is_empty(), "소품 메시 함수 %d개 몸통에 이름 없는 수치 없음 %s" % [found, bad])
 
 
 ## 메시마다 삼각형 예산(ui.json)과 triangle_count 가 번호 배열과 일치하는지

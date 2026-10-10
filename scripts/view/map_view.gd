@@ -36,31 +36,22 @@ const SALT_STACK := 7
 const SALT_BREATH := 8
 ## 북(0)·동(1)·남(2)·서(3) → 모델(정면 -Z)의 Y 회전 = -방향 × 90°.
 const QUARTER := PI * 0.5
+## 저장고 문(과 문 앞 자리)을 낼 이웃을 찾는 순서(SimGrid 방향 번호: 남·동·서·북 — 처음 카메라 쪽부터).
+const DOOR_ORDER: Array[int] = [2, 1, 3, 0]
 ## 정점 색 RGBA8: 한 채널 최댓값, 불투명 알파 비트(가장 높은 바이트).
 const BYTE := 255.0
 const OPAQUE := 0xff << 24
-## 옆면 그늘: 물 옆면은 물 색을 이만큼 어둡게, 모든 옆면의 아래 모서리는 위 모서리보다 이만큼 어둡게.
-const SIDE_WATER_DARK := 0.35
-const SIDE_BOTTOM_DARK := 0.25
 ## 뷰포트 크기를 아직 모를 때의 화면비.
 const DEFAULT_ASPECT := 16.0 / 9.0
 ## 높이 차이가 이보다 작으면 옆면을 만들지 않음.
 const SIDE_EPS := 0.001
-## 겹친 개체가 이 수를 넘으면 둘레를 조금씩 넓힘.
-const STACK_RING := 4
-const STACK_GROW := 0.12
-const STACK_MAX := 0.42
 ## 걸음 중 눌림·늘어남에서 부피를 대략 지키는 지수(가로 = 세로^-1/2).
 const VOLUME_EXP := -0.5
-## 둥근 그림자 원판: 안쪽 고리 반지름과 그 진하기(바깥 고리는 투명).
-const DISC_INNER := 0.55
-const DISC_INNER_ALPHA := 0.85
-## 뛰어오르면 그림자가 이만큼까지 작아짐(높이 1 당).
-const SHADOW_SHRINK := 1.5
-## 먹기·줍기 동작의 고개 끄덕임 주기(틱당 반 번).
-const BOB_FREQ := PI
 ## 고리 메시 바깥 반지름(SlimeGeo.ring_mesh, 배율 1). 화면 최소 크기를 반지름으로 바꿀 때 쓴다.
 const RING_OUTER := 1.0
+## 겹침 둘레 반지름의 상한(칸) = stack_max() 를 클래스를 읽을 때 한 번 계산해 둔 값. 예전 상수 이름을 쓰는 검사
+## (tests/view/lab_checks.gd)를 위해 남긴다 — 새 코드는 stack_max() 를 쓴다.
+static var STACK_MAX := 0.0
 
 var world: SimWorld
 var follow_selected := false
@@ -103,6 +94,9 @@ var _water_depth := 0.0
 var _rock_height := 0.0
 var _skirt := 0.0
 var _rock_side := 0.0
+## 옆면 그늘: 물 옆면은 물 색을 이만큼 어둡게, 모든 옆면의 아래 모서리는 위 모서리보다 이만큼 어둡게.
+var _water_side_dark := 0.0
+var _side_bottom_dark := 0.0
 var _terrain_every := 10
 var _terrain_min_frames := 1
 var _plant_every := 2
@@ -130,11 +124,19 @@ var _night_boost := 1.0
 var _shadow_off := Vector2.ZERO
 var _breath_w := 0.0
 var _bob := 0.0
+## 먹기·줍기 끄덕임: alpha(틱 진행률) 1 당 각도(라디안) = TAU × map.action_bob_per_tick.
+var _bob_w := 0.0
+## 뛰어오르면 둥근 그림자가 작아지는 정도(높이 1 당).
+var _shadow_shrink := 0.0
 var _pick_r := 0.0
 var _farm_lift := 0.0
 var _hop := 0.0
 var _squash := 0.0
 var _stack := 0.0
+## 겹친 개체가 slime.stack_ring 을 넘으면 한 마리마다 둘레를 stack_grow 배씩 넓히되 stack_offset × stack_max_k 까지.
+var _stack_ring := 0
+var _stack_grow := 0.0
+var _stack_max := 0.0
 var _sat := 0.0
 var _val := 0.0
 var _radius := 0.0
@@ -238,7 +240,7 @@ var _shown_tick := -1
 var _cur_off := PackedFloat32Array()
 var _prev_off := PackedFloat32Array()
 var _offsets_tick := -1
-## 저장고 칸 표시(칸마다 1/0). 저장고 목록이 바뀔 때 다시 만든다.
+## 저장고 칸 표시(칸마다 0 = 저장고 아님, 1 + 문 방향(0~3), 1 + DIR_COUNT = 둘레가 모두 막힘). 저장고 목록이 바뀔 때 다시 만든다.
 var _store_mask := PackedByteArray()
 ## 표시 배율(멀리서 작은 슬라임을 키움, 1 = 실제 크기). update_view 마다 카메라 거리로 정한다.
 var _display_k := 1.0
@@ -262,6 +264,10 @@ var _dragged := false
 var _press_pos := Vector2.ZERO
 ## 묶은 뒤 사용자가(또는 focus_on·따라가기가) 카메라를 움직였는지. 아니면 뷰포트 크기가 바뀔 때 다시 맞춘다.
 var _camera_touched := false
+
+
+static func _static_init() -> void:
+	STACK_MAX = stack_max()
 
 
 func _init() -> void:
@@ -297,6 +303,8 @@ func _load_ui() -> void:
 	_rock_height = UiConfig.num("map.rock_height")
 	_skirt = UiConfig.num("map.skirt_depth")
 	_rock_side = UiConfig.num("map.rock_side_shade")
+	_water_side_dark = UiConfig.num("map.water_side_dark")
+	_side_bottom_dark = UiConfig.num("map.side_bottom_dark")
 	_terrain_every = maxi(1, UiConfig.integer("map.terrain_refresh_ticks"))
 	_terrain_min_frames = maxi(1, UiConfig.integer("map.terrain_min_frames"))
 	_plant_every = maxi(1, UiConfig.integer("map.plant_refresh_ticks"))
@@ -322,11 +330,16 @@ func _load_ui() -> void:
 	_night_boost = UiConfig.num("map.night_slime_boost")
 	_breath_w = TAU * UiConfig.num("map.breath_hz")
 	_bob = UiConfig.num("map.action_bob")
+	_bob_w = TAU * UiConfig.num("map.action_bob_per_tick")
+	_shadow_shrink = UiConfig.num("map.blob_shadow_shrink")
 	_pick_r = UiConfig.num("map.pick_radius")
 	_farm_lift = UiConfig.num("map.farm_lift")
 	_hop = UiConfig.num("slime.hop_height")
 	_squash = UiConfig.num("slime.squash")
 	_stack = UiConfig.num("slime.stack_offset")
+	_stack_ring = UiConfig.integer("slime.stack_ring")
+	_stack_grow = UiConfig.num("slime.stack_grow")
+	_stack_max = stack_max()
 	_sat = UiConfig.num("slime.saturation")
 	_val = UiConfig.num("slime.value")
 	_radius = UiConfig.num("slime.radius")
@@ -405,7 +418,7 @@ func _build_nodes() -> void:
 	shm.albedo_color = Color(0.0, 0.0, 0.0, UiConfig.num("map.blob_shadow_alpha"))
 	shm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	shm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var disc := _disc_mesh(UiConfig.integer("map.blob_shadow_segments"))
+	var disc := _disc_mesh(UiConfig.integer("map.blob_shadow_segments"), UiConfig.num("map.blob_shadow_inner"), UiConfig.num("map.blob_shadow_inner_alpha"))
 	_shadow_mm = _add_mm("SlimeShadows", disc, shm, false, false)
 
 	_ring = MeshInstance3D.new()
@@ -464,15 +477,16 @@ func _add_mm(node_name: String, mesh: Mesh, mat: Material, colors: bool, shadows
 
 
 ## 바닥에 눕힌 부드러운 원판(반지름 1, 가운데 진하고 가장자리 투명). 둥근 그림자용.
-static func _disc_mesh(segs: int) -> ArrayMesh:
+## inner = 안쪽 고리 반지름, inner_alpha = 그 진하기(가운데 1, 바깥 고리는 투명).
+static func _disc_mesh(segs: int, inner: float, inner_alpha: float) -> ArrayMesh:
 	var v := PackedVector3Array([Vector3.ZERO])
 	var cl := PackedColorArray([Color(1, 1, 1, 1)])
 	var ix := PackedInt32Array()
 	segs = maxi(segs, 6)
 	for k in segs:
 		var a := TAU * float(k) / float(segs)
-		v.append(Vector3(cos(a) * DISC_INNER, 0.0, sin(a) * DISC_INNER))
-		cl.append(Color(1, 1, 1, DISC_INNER_ALPHA))
+		v.append(Vector3(cos(a) * inner, 0.0, sin(a) * inner))
+		cl.append(Color(1, 1, 1, inner_alpha))
 		v.append(Vector3(cos(a), 0.0, sin(a)))
 		cl.append(Color(1, 1, 1, 0))
 	for k in segs:
@@ -576,6 +590,11 @@ func fit_map() -> void:
 	follow_selected = false
 	_frame_camera()
 	_camera_touched = false
+
+
+## 겹친 개체 둘레 반지름의 상한(칸 단위, 타일 크기를 곱하기 전) = ui.slime.stack_offset × ui.slime.stack_max_k.
+static func stack_max() -> float:
+	return UiConfig.num("slime.stack_offset") * UiConfig.num("slime.stack_max_k")
 
 
 ## 지금 표시 배율(멀리서 작은 슬라임을 키운 배수, 가까이서는 1). 검사·캡처용.
@@ -777,7 +796,7 @@ func _build_terrain() -> void:
 		if kind == SimGrid.TILE_ROCK:
 			side = Color(_c_rock.r * _rock_side, _c_rock.g * _rock_side, _c_rock.b * _rock_side)
 		elif kind == SimGrid.TILE_WATER:
-			side = _c_water.darkened(SIDE_WATER_DARK)
+			side = _c_water.darkened(_water_side_dark)
 		for d in SimGrid.DIR_COUNT:
 			var nx: int = x + SimGrid.DX[d]
 			var ny: int = y + SimGrid.DY[d]
@@ -804,7 +823,7 @@ func _build_terrain() -> void:
 					a = Vector3(x0, 0.0, z0 + tl)
 					b = Vector3(x0, 0.0, z0)
 			var nrm := Vector3(float(SimGrid.DX[d]), 0.0, float(SimGrid.DY[d]))
-			var lo_shade := side.darkened(SIDE_BOTTOM_DARK)
+			var lo_shade := side.darkened(_side_bottom_dark)
 			_quad_grad(verts, norms, cols, idx,
 				Vector3(a.x, hc, a.z), Vector3(b.x, hc, b.z), Vector3(b.x, hn, b.z), Vector3(a.x, hn, a.z),
 				nrm, side, lo_shade)
@@ -1086,7 +1105,8 @@ func _ground_at(c: int) -> float:
 
 ## 칸 점유에 따른 둘레 자리 [x0, z0, x1, z1, …](배열 순서 = id 오름차순 = 칸 안 자리 순서).
 ## 여러 개체가 한 칸에 있으면 slime.stack_offset 둘레에 나누고, 저장고 칸이면 움집 안에 묻히지 않게
-## 문 앞(+Z, 남쪽) 반지름 map.store_slime_offset 의 호에 나눠 세운다. 이전 틱 배열로도 불러 둘레 자리를 보간한다.
+## 문 앞(_door_dir: 지나갈 수 있는 이웃 쪽, 보통 남쪽 +Z) 반지름 map.store_slime_offset 의 호에 나눠 세운다.
+## 이전 틱 배열로도 불러 둘레 자리를 보간한다.
 func _calc_offsets(xs: PackedInt32Array, ys: PackedInt32Array) -> PackedFloat32Array:
 	var n := xs.size()
 	var out := PackedFloat32Array()
@@ -1110,11 +1130,19 @@ func _calc_offsets(xs: PackedInt32Array, ys: PackedInt32Array) -> PackedFloat32A
 		if stores and _store_mask[c] != 0:
 			var step := _store_arc if m < 2 else minf(_store_arc, _store_arc_max / float(m - 1))
 			var a := (float(k) - float(m - 1) * 0.5) * step
-			ox = sin(a) * _store_off * tl
-			oz = cos(a) * _store_off * tl
+			# 문 방향 이웃 쪽(지나갈 수 있는 칸)으로. 둘레가 모두 막힌 저장고는 남쪽, 몸이 칸 밖으로 나가지 않는 반지름까지만
+			var d := int(_store_mask[c]) - 1
+			var r := _store_off
+			var face := 0.0
+			if d < SimGrid.DIR_COUNT:
+				face = atan2(float(SimGrid.DX[d]), float(SimGrid.DY[d]))
+			else:
+				r = minf(_store_off, 0.5 - _radius)
+			ox = sin(face + a) * r * tl
+			oz = cos(face + a) * r * tl
 		elif m > 1:
 			var ang := TAU * (float(k) / float(m) + _hash01(c, SALT_STACK))
-			var r := minf(_stack * (1.0 + STACK_GROW * float(maxi(0, m - STACK_RING))), STACK_MAX) * tl
+			var r := minf(_stack * (1.0 + _stack_grow * float(maxi(0, m - _stack_ring))), _stack_max) * tl
 			ox = cos(ang) * r
 			oz = sin(ang) * r
 		out[i * 2] = ox
@@ -1211,7 +1239,7 @@ func _update_slimes(alpha: float) -> void:
 	var e := alpha * alpha * (3.0 - 2.0 * alpha)
 	var hop_s := sin(PI * alpha)
 	var sq_s := sin(TAU * alpha)
-	var bob_s := sin(BOB_FREQ * alpha)
+	var bob_s := sin(_bob_w * alpha)
 	var tl := _tile
 	var dk := _display_k
 	var pn := _prev_id.size() if _has_prev and po_off.size() == _prev_id.size() * 2 else 0
@@ -1290,7 +1318,7 @@ func _update_slimes(alpha: float) -> void:
 		buf[o + 14] = col.b * gain
 		buf[o + 15] = 1.0
 		# 둥근 그림자: 뛰어오른 만큼 작게(땅 높이 위)
-		var sr := _radius * s * _shadow_scale / (1.0 + SHADOW_SHRINK * hy)
+		var sr := _radius * s * _shadow_scale / (1.0 + _shadow_shrink * hy)
 		var so := i * XF
 		sbuf[so] = sr
 		sbuf[so + 1] = 0.0
@@ -1421,16 +1449,44 @@ func _sync_buildings() -> void:
 		for c in _last_stores:
 			if c >= 0 and c < _n_tiles:
 				_store_mask[c] = 1
+		# 저장고 정면(-Z, 문)을 문 앞 자리 쪽(지나갈 수 있는 이웃, 보통 남쪽 = 처음 카메라 쪽)으로 돌린다
+		var yaws := PackedFloat32Array()
+		for c in _last_stores:
+			var d := _door_dir(c) if c >= 0 and c < _n_tiles else -1
+			if d >= 0:
+				_store_mask[c] = 1 + d
+			elif c >= 0 and c < _n_tiles:
+				_store_mask[c] = 1 + SimGrid.DIR_COUNT
+			yaws.append(-float(d if d >= 0 else DOOR_ORDER[0]) * QUARTER)
 		_offsets_tick = -1
-		# 저장고 정면(-Z, 문)을 남쪽(처음 카메라 쪽)으로: Y 축 반 바퀴
-		_fill_static(_store_mm, _last_stores, _store_base, 0.0, _store_col, -1.0)
+		_fill_static(_store_mm, _last_stores, _store_base, 0.0, _store_col, yaws)
 	if world.farms != _last_farms:
 		_last_farms = world.farms.duplicate()
-		_fill_static(_farm_mm, _last_farms, _farm_base, _farm_lift, _farm_col, 1.0)
+		_fill_static(_farm_mm, _last_farms, _farm_base, _farm_lift, _farm_col, PackedFloat32Array())
 
 
-## 칸 가운데에 크기 1 로 놓는다. face = 1(그대로) 또는 -1(Y 축 반 바퀴, x·z 뒤집기).
-func _fill_static(mm: MultiMesh, cells: PackedInt32Array, base: float, lift: float, col: Color, face: float) -> void:
+## 저장고 칸 c 의 문 방향(SimGrid 방향 번호): DOOR_ORDER(남 → 동 → 서 → 북) 가운데 지도 안·지나갈 수 있고 다른 저장고가 아닌
+## 첫 이웃, 없으면 지나갈 수 있는 첫 이웃, 그것도 없으면 -1. 물·바위·지도 끝은 바뀌지 않으므로 저장고 목록이 바뀔 때만 부른다.
+## 문 앞에 선 개체가 바위 속에 묻히거나 지도 밖 허공에 걸리지 않게(검토 I54).
+func _door_dir(c: int) -> int:
+	var W := world.w
+	var x := c % W
+	var y := c / W
+	var fallback := -1
+	for d in DOOR_ORDER:
+		var nx: int = x + SimGrid.DX[d]
+		var ny: int = y + SimGrid.DY[d]
+		if nx < 0 or ny < 0 or nx >= W or ny >= world.h or not SimGrid.passable(world.tiles[ny * W + nx]):
+			continue
+		if _store_mask[ny * W + nx] == 0:
+			return d
+		if fallback == -1:
+			fallback = d
+	return fallback
+
+
+## 칸 가운데에 크기 1 로 놓는다. yaws = 칸마다 Y 축 회전(라디안, 모자라면 0). 직각 회전만 쓰므로 cos·sin 을 반올림해 정확히.
+func _fill_static(mm: MultiMesh, cells: PackedInt32Array, base: float, lift: float, col: Color, yaws: PackedFloat32Array) -> void:
 	var n := cells.size()
 	mm.instance_count = n
 	if n == 0:
@@ -1441,11 +1497,19 @@ func _fill_static(mm: MultiMesh, cells: PackedInt32Array, base: float, lift: flo
 	for k in n:
 		var c := cells[k]
 		var o := k * XFC
-		buf[o] = face
+		var co := 1.0
+		var si := 0.0
+		if k < yaws.size():
+			# + 0.0: 반올림한 -0 을 0 으로
+			co = roundf(cos(yaws[k])) + 0.0
+			si = roundf(sin(yaws[k])) + 0.0
+		buf[o] = co
+		buf[o + 2] = si
 		buf[o + 3] = (float(c % W) + 0.5) * _tile
 		buf[o + 5] = 1.0
 		buf[o + 7] = base + lift
-		buf[o + 10] = face
+		buf[o + 8] = 0.0 - si
+		buf[o + 10] = co
 		buf[o + 11] = (float(c / W) + 0.5) * _tile
 		buf[o + 12] = col.r
 		buf[o + 13] = col.g
