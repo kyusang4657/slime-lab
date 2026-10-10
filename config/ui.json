@@ -127,6 +127,7 @@
 		"terrain_min_frames": 2,
 		"plant_refresh_ticks": 2,
 		"plant_min_frames": 2,
+		"chunk_tiles": 64,
 		"plant_hide_frac": 0.04,
 		"plant_jitter": 0.16,
 		"plant_height_jitter": 0.25,

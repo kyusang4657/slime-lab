@@ -9,7 +9,7 @@ const EPS := 0.0005
 const SLIME_US_LIMIT := 6000.0
 const TIMING_FRAMES := 120
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 92
+const MIN_CHECKS := 97
 ## 틱 경계에서 가만히 있는 개체를 지켜볼 틱 수
 const STILL_TICKS := 60
 ## 저장고 움집 처마 반지름(SlimeGeo.storehouse_mesh 의 가장 넓은 지붕 둘레)
@@ -20,6 +20,11 @@ const BIG_MAPS: Array[Vector2i] = [Vector2i(128, 96), Vector2i(200, 150)]
 const TECH_CONSTS: Array[String] = ["XF", "XFC", "HASH_A", "HASH_B", "HASH_C", "HASH_MASK", "HASH_DIV", "SALT_JITTER", "SALT_PLANT_X",
 	"SALT_PLANT_Z", "SALT_PLANT_YAW", "SALT_PLANT_H", "SALT_PLANT_TINT", "SALT_STACK", "SALT_BREATH", "QUARTER", "BYTE", "OPAQUE",
 	"DEFAULT_ASPECT", "SIDE_EPS", "VOLUME_EXP", "RING_OUTER", "DOOR_ORDER"]
+## 큰 지도 갱신 비용 검사(검토 I52): 견줄 큰 지도, 진행하며 잴 프레임 수, 시간 비 상한 = 칸 수 비 / COST_RATIO_DIV
+## (칸 수에 비례하면 시간 비 ≈ 칸 수 비 21 배). 절대 시간이 아니라 같은 실행 안의 비율만 본다.
+const COST_MAP := Vector2i(256, 256)
+const COST_FRAMES := 80
+const COST_RATIO_DIV := 4.0
 ## 깊이 고르기 검사: 카메라 거리(가까이, 표시 배율 1), 누를 높이(몸 높이에 대한 비), 큰 개체 크기
 const PICK_DIST := 6.0
 const PICK_TOP_K := 0.85
@@ -56,6 +61,7 @@ func run(t) -> void:
 	_check_buildings(t, mv)
 	_check_determinism(t, mv)
 	_check_big_maps(t, mv)
+	_check_big_map_cost(t, mv)
 	_check_pick_depth(t, mv)
 	_check_extinct(t, mv)
 	_check_ui_tuning(t)
@@ -159,14 +165,14 @@ func _check_motion(t, mv: MapView, w: SimWorld) -> void:
 			alone_ok = false
 		alone_n += 1
 	t.check(alone_ok and alone_n > 0, "alpha=1 에서 혼자 있는 개체 %d 마리가 칸 가운데" % alone_n)
-	# 겹친 개체는 가운데에서 조금(최대 STACK_MAX 칸) 비켜 남
+	# 겹친 개체는 가운데에서 조금(최대 stack_offset × stack_max_k 칸) 비켜 남
 	var stack_ok := true
 	for i in w.population():
 		if int(occ[w.s_y[i] * w.w + w.s_x[i]]) < 2:
 			continue
 		var p := mv.slime_instance_position(i)
 		var d := Vector2(p.x - (float(w.s_x[i]) + 0.5), p.z - (float(w.s_y[i]) + 0.5)).length()
-		stack_ok = stack_ok and d > EPS and d <= MapView.STACK_MAX + EPS
+		stack_ok = stack_ok and d > EPS and d <= MapView.stack_max() + EPS
 	t.check(stack_ok, "같은 칸의 개체는 작은 둘레에 나뉘어 놓임")
 	# alpha 0.5: 움직인 개체는 두 칸 사이, 위로 뜸(앞 틱·지금 틱 모두 혼자 있던 개체 — 둘레 자리도 보간하므로)
 	var pocc := {}
@@ -814,6 +820,83 @@ func _check_big_maps(t, mv: MapView) -> void:
 			cam.call("zoom_at", Vector2(VP_SIZE) * 0.5, -1.0)
 		t.check(float(cam.get("distance")) >= fitted - EPS and float(cam.call("distance_max")) >= fitted * UiConfig.num("camera.fit_zoom_out_factor") - EPS,
 				"%d×%d 지도: 축소로 맞춘 거리 이상까지(최대 %.0f)" % [sz.x, sz.y, float(cam.call("distance_max"))])
+
+
+# ── 큰 지도: 식물·땅 색 갱신은 한 프레임에 덩어리 하나, 바뀐 것만(검토 I52) ──
+
+func _median(a: Array) -> float:
+	if a.is_empty():
+		return 0.0
+	var b := a.duplicate()
+	b.sort()
+	return float(b[b.size() / 2])
+
+
+## 세계를 붙이고 1틱씩 진행하며 식물·땅 색 갱신이 있었던 프레임의 시간(µs)·본 수를 모은다.
+## (view_stats 에 plant_n·terrain_n 이 없던 예전 코드로 되돌려 보면: 시간이 바뀐 프레임 = 갱신, 본 수 = 지도 전체.)
+func _refresh_costs(mv: MapView, w: SimWorld) -> Dictionary:
+	mv.bind(w)
+	var pu := []
+	var pn := []
+	var tu := []
+	var tn := []
+	var last := mv.view_stats()
+	var n_plants := (mv.get_node("Plants") as MultiMeshInstance3D).multimesh.instance_count
+	for f in COST_FRAMES:
+		mv.before_steps()
+		w.step()
+		mv.update_view(1.0)
+		var st := mv.view_stats()
+		var p_n := int(st.get("plant_n", n_plants if st.plant_us != last.plant_us else 0))
+		var t_n := int(st.get("terrain_n", w.w * w.h if st.terrain_us != last.terrain_us else 0))
+		last = st
+		if p_n > 0:
+			pu.append(int(st.plant_us))
+			pn.append(p_n)
+		if t_n > 0:
+			tu.append(int(st.terrain_us))
+			tn.append(t_n)
+	return {
+		plant_us = _median(pu), plant_n = int(pn.max()) if not pn.is_empty() else 0, terrain_us = _median(tu),
+		terrain_n = int(tn.max()) if not tn.is_empty() else 0, plant_steps = pu.size(), terrain_steps = tu.size(),
+		tiles = w.w * w.h, chunks = int(mv.view_stats().get("chunks", 1)),
+	}
+
+
+func _check_big_map_cost(t, mv: MapView) -> void:
+	var small := _refresh_costs(mv, t.make_world({}, 3))
+	var big_w: SimWorld = t.make_world({"map.width": COST_MAP.x, "map.height": COST_MAP.y}, 3)
+	var big := _refresh_costs(mv, big_w)
+	var chunk := UiConfig.integer("map.chunk_tiles")
+	var tile_ratio := float(big.tiles) / float(small.tiles)
+	var p_ratio := float(big.plant_us) / maxf(float(small.plant_us), 1.0)
+	var t_ratio := float(big.terrain_us) / maxf(float(small.terrain_us), 1.0)
+	print("  큰 지도 비용: %d×%d(덩어리 %d) / 기본(덩어리 %d) — 칸 수 %.1f배, 식물 한 프레임 %.0f/%.0fµs = %.2f배(본 수 최대 %d/%d), 땅 색 %.0f/%.0fµs = %.2f배(최대 %d/%d칸)" % [
+		COST_MAP.x, COST_MAP.y, int(big.chunks), int(small.chunks), tile_ratio, float(big.plant_us), float(small.plant_us), p_ratio,
+		int(big.plant_n), int(small.plant_n), float(big.terrain_us), float(small.terrain_us), t_ratio, int(big.terrain_n), int(small.terrain_n)])
+	t.check(int(small.chunks) == 1 and int(big.chunks) == ceili(float(COST_MAP.x) / chunk) * ceili(float(COST_MAP.y) / chunk),
+			"기본 지도는 덩어리 하나, %d×%d 는 %d칸 덩어리 %d개" % [COST_MAP.x, COST_MAP.y, chunk, int(big.chunks)])
+	t.check(int(big.plant_steps) > 0 and int(big.terrain_steps) > 0 and int(big.plant_n) <= chunk * chunk and int(big.terrain_n) <= chunk * chunk,
+			"%d×%d: 한 프레임에 다시 보는 풀포기 %d·칸 %d ≤ 덩어리 %d칸(지도 %d칸, 고치기 전 모든 칸)" % [
+			COST_MAP.x, COST_MAP.y, int(big.plant_n), int(big.terrain_n), chunk * chunk, int(big.tiles)])
+	t.check(int(small.plant_steps) > 0 and p_ratio < tile_ratio / COST_RATIO_DIV,
+			"식물 갱신 한 프레임 시간이 칸 수에 비례하지 않음: %.2f배 < 칸 수 비 %.1f / %.0f" % [p_ratio, tile_ratio, COST_RATIO_DIV])
+	t.check(int(small.terrain_steps) > 0 and t_ratio < tile_ratio / COST_RATIO_DIV,
+			"땅 색 갱신 한 프레임 시간이 칸 수에 비례하지 않음: %.2f배 < 칸 수 비 %.1f / %.0f" % [t_ratio, tile_ratio, COST_RATIO_DIV])
+	# 나눠 돌아도 결국 지도 전체가 지금 세계를 그린다: 화면 없이 몇 틱 더 진행한 뒤 프레임만 돌리면(새 바퀴가 모든 덩어리를 돎)
+	# 처음부터 묶은 MapView 와 모든 칸의 땅 색·풀포기 배율·보이는 수가 같다
+	big_w.step_n(UiConfig.integer("map.plant_refresh_ticks") + UiConfig.integer("map.terrain_refresh_ticks"))
+	for f in 4 * int(big.chunks) + UiConfig.integer("map.plant_min_frames") + UiConfig.integer("map.terrain_min_frames"):
+		mv.update_view(1.0)
+	var ref := MapView.new()
+	ref.bind(big_w)
+	var diff := 0
+	for c in big_w.w * big_w.h:
+		if mv.terrain_tile_color(c) != ref.terrain_tile_color(c) or mv.plant_scale_at(c).y != ref.plant_scale_at(c).y:
+			diff += 1
+	t.check(diff == 0 and int(mv.view_stats().plants) == int(ref.view_stats().plants),
+			"덩어리로 나눠 돈 갱신이 새로 묶은 것과 같음(다른 칸 %d, 보이는 풀포기 %d / %d)" % [diff, int(mv.view_stats().plants), int(ref.view_stats().plants)])
+	ref.free()
 
 
 # ── 고르기는 깊이를 본다: 겹친 칸의 앞 개체·낮은 고각의 큰 개체 머리(검토 I53) ──

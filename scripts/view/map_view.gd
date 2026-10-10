@@ -3,9 +3,12 @@ extends Node3D
 ## 지도 관찰 창(3D). 계약: docs/VIEW-API.md "MapView". 시뮬레이션은 docs/SIM-API.md 의 질의로 읽기만 한다.
 ##
 ## 그리기 구성(그리기 호출 수가 개체 수와 무관하도록):
-##   땅 = ArrayMesh 하나(칸마다 평평한 사각형 + 높이 차이의 옆면, 정점 색). 색은 ui.map.terrain_refresh_ticks 마다
+##   땅 = 덩어리마다 ArrayMesh 하나(칸마다 평평한 사각형 + 높이 차이의 옆면, 정점 색). 색은 ui.map.terrain_refresh_ticks 마다
 ##        위 사각형 부분의 색 영역만 다시 올린다(surface_update_attribute_region).
-##   식물·바닥 먹이·슬라임·운반 열매·저장고·밭 = MultiMesh 하나씩. 선택 고리 = MeshInstance3D 하나.
+##   풀포기 = 덩어리마다 MultiMesh 하나. 바닥 먹이·슬라임·운반 열매·저장고·밭 = MultiMesh 하나씩. 선택 고리 = MeshInstance3D 하나.
+##   덩어리 = ui.map.chunk_tiles² 칸(기본 지도 64×48 은 덩어리 하나). 큰 지도에서는 식물·땅 색 갱신 한 바퀴를 한 프레임에
+##   덩어리 하나씩 나눠 돌고, 먹이량·칸 종류가 바뀐 풀포기·색이 바뀐 칸만 버퍼에 쓰며, 쓴 덩어리만 올린다
+##   (한 프레임 비용이 지도 크기가 아니라 덩어리 크기에 비례 — 검토 I52).
 ## 보간: before_steps() 가 진행 전 위치(id → 칸)를 기억하고, update_view(alpha) 가 그 칸에서 지금 칸으로 옮긴다.
 ## 두 배열 모두 id 오름차순이므로 사전 없이 두 포인터로 맞춘다. 보간은 언제나 **마지막 한 틱**만:
 ## LabMain 은 step() 마다 그 직전에 before_steps() 를 불러 기억이 지금 틱의 한 틱 전이 되게 하고,
@@ -59,8 +62,8 @@ var follow_selected := false
 var _camera: OrbitCamera
 var _sun: DirectionalLight3D
 var _env: Environment
+## 첫 덩어리의 땅·풀포기(노드 이름 "Terrain"·"Plants"). 덩어리가 여럿이면 나머지는 "Terrain_k"·"Plants_k".
 var _terrain_mi: MeshInstance3D
-var _terrain_mesh: ArrayMesh
 var _plant_mm: MultiMesh
 var _drop_mm: MultiMesh
 var _slime_mm: MultiMesh
@@ -185,9 +188,21 @@ var _drop_col := Color.WHITE
 var _store_col := Color.WHITE
 var _farm_col := Color.WHITE
 
+# ── 덩어리(큰 지도) ──
+var _chunk := 64
+var _n_chunks := 1
+## 덩어리 k 의 칸 범위(행 우선, 덩어리 순서도 행 우선)
+var _chunk_rect: Array[Rect2i] = []
+var _terrain_mis: Array[MeshInstance3D] = []
+var _terrain_meshes: Array[ArrayMesh] = []
+var _plant_mms: Array[MultiMesh] = []
+
 # ── 땅 ──
 var _n_tiles := 0
+## 위 사각형 색(RGBA8, 정점 4개씩)을 덩어리 순서로 이어 붙인 것. 칸 c 의 자리 = _tile_pos[c], 덩어리 k = _tchunk_start[k] ~ [k + 1]
 var _top_rgba := PackedInt32Array()
+var _tile_pos := PackedInt32Array()
+var _tchunk_start := PackedInt32Array()
 var _static_rgba := PackedInt32Array()
 var _jit := PackedFloat32Array()
 var _fert_lo := 0.0
@@ -196,6 +211,10 @@ var _terrain_tris := 0
 var _terrain_tick := -1
 var _terrain_frames := 0
 var _terrain_last_us := 0
+## 땅 색 갱신 한 바퀴가 진행 중인지와 다음 덩어리, 이번 프레임에 다시 칠한 칸 수
+var _terrain_pass := false
+var _terrain_cursor := 0
+var _terrain_last_n := 0
 
 # ── 식물·바닥 먹이 ──
 var _plant_tile := PackedInt32Array()
@@ -206,18 +225,30 @@ var _plant_kind := PackedByteArray()
 var _plant_tint := PackedFloat32Array()
 var _plant_buf := PackedFloat32Array()
 var _plant_inv_ref := 0.0
-## 칸 → 풀포기 번호(-1 없음), 풀포기마다 줄이기 전 배율(먹이량), 슬라임이 서 있어 줄였는지(1)
+## 칸 → 풀포기 번호(-1 없음), 풀포기마다 줄이기 전 배율(먹이량, 바뀌었는지 정확히 견주려고 64비트), 슬라임이 서 있어 줄였는지(1)
 var _plant_of_tile := PackedInt32Array()
-var _plant_s := PackedFloat32Array()
+var _plant_s := PackedFloat64Array()
 var _plant_occ := PackedByteArray()
 var _plant_stamp := PackedInt32Array()
 var _stamp := 0
 var _shrunk := PackedInt32Array()
-var _plant_dirty := false
 var _plant_visible := 0
 var _plant_tick := -1
 var _plant_frames := 0
 var _plant_last_us := 0
+## 풀포기는 덩어리 순서로 놓는다: 덩어리 k = _pchunk_start[k] ~ [k + 1], 풀포기 → 덩어리, 덩어리마다 보이는 수·바닥 먹이 칸
+var _pchunk_start := PackedInt32Array()
+var _plant_chunk := PackedInt32Array()
+var _pchunk_vis := PackedInt32Array()
+var _chunk_drops: Array[PackedInt32Array] = []
+## 버퍼를 고쳐 다시 올려야 할 덩어리(표시·목록)
+var _pchunk_dirty := PackedByteArray()
+var _dirty_chunks := PackedInt32Array()
+## 식물 갱신 한 바퀴가 진행 중인지와 다음 덩어리, 이번 프레임에 본 풀포기 수, 마지막 프레임이 식물 갱신이었는지
+var _plant_pass := false
+var _plant_cursor := 0
+var _plant_last_n := 0
+var _last_was_plants := false
 var _drop_buf := PackedFloat32Array()
 var _drop_tiles := PackedInt32Array()
 var _drop_count := 0
@@ -313,6 +344,7 @@ func _load_ui() -> void:
 	_terrain_min_frames = maxi(1, UiConfig.integer("map.terrain_min_frames"))
 	_plant_every = maxi(1, UiConfig.integer("map.plant_refresh_ticks"))
 	_plant_min_frames = maxi(1, UiConfig.integer("map.plant_min_frames"))
+	_chunk = maxi(1, UiConfig.integer("map.chunk_tiles"))
 	_p_min = UiConfig.num("map.plant_min_scale")
 	_p_max = UiConfig.num("map.plant_max_scale")
 	_p_hide = UiConfig.num("map.plant_hide_frac")
@@ -399,6 +431,7 @@ func _build_nodes() -> void:
 
 	_terrain_mi = MeshInstance3D.new()
 	_terrain_mi.name = "Terrain"
+	_terrain_mis = [_terrain_mi]
 	var tm := StandardMaterial3D.new()
 	tm.vertex_color_use_as_albedo = true
 	tm.vertex_color_is_srgb = true
@@ -411,6 +444,7 @@ func _build_nodes() -> void:
 	_farm_mm = _add_mm("Farms", SlimeGeo.farm_mesh(), shared, true, false)
 	_store_mm = _add_mm("Stores", SlimeGeo.storehouse_mesh(), shared, true, true)
 	_plant_mm = _add_mm("Plants", SlimeGeo.plant_mesh(), shared, true, false)
+	_plant_mms = [_plant_mm]
 	_drop_mm = _add_mm("Dropped", SlimeGeo.berry_mesh(), shared, true, false)
 	_slime_mm = _add_mm("Slimes", SlimeGeo.slime_mesh(), SlimeGeo.slime_material(), true, true)
 	_carry_mm = _add_mm("Carry", SlimeGeo.berry_mesh(), shared, true, true)
@@ -568,6 +602,8 @@ func bind(w: SimWorld) -> void:
 	_shown_tick = -1
 	_terrain_tick = -1
 	_plant_tick = -1
+	_terrain_pass = false
+	_plant_pass = false
 	_offsets_tick = -1
 	_last_stores = PackedInt32Array()
 	_last_farms = PackedInt32Array()
@@ -577,10 +613,11 @@ func bind(w: SimWorld) -> void:
 	_farm_mm.instance_count = 0
 	_camera_touched = false
 	if world == null:
-		_terrain_mi.mesh = null
+		_set_chunks(0, 0)
 		for mm in [_plant_mm, _drop_mm, _slime_mm, _shadow_mm, _carry_mm, _store_mm, _farm_mm]:
 			(mm as MultiMesh).instance_count = 0
 		return
+	_set_chunks(world.w, world.h)
 	_n_tiles = world.w * world.h
 	_tile_cnt.resize(_n_tiles)
 	_tile_cnt.fill(0)
@@ -592,6 +629,43 @@ func bind(w: SimWorld) -> void:
 	_build_plants()
 	_frame_camera()
 	update_view(1.0)
+
+
+## 지도(W×H 칸)를 _chunk² 칸 덩어리로 나누고 덩어리마다 땅 MeshInstance3D·풀포기 MultiMesh 노드를 맞춘다
+## (첫 덩어리는 늘 있는 "Terrain"·"Plants", 남는 노드는 지움). W·H 가 0 이면 덩어리 하나에 메시 없음.
+func _set_chunks(W: int, H: int) -> void:
+	var ncx := maxi(1, ceili(float(W) / float(_chunk)))
+	var ncy := maxi(1, ceili(float(H) / float(_chunk)))
+	_n_chunks = ncx * ncy
+	_chunk_rect.clear()
+	for cy in ncy:
+		for cx in ncx:
+			var x0 := cx * _chunk
+			var y0 := cy * _chunk
+			_chunk_rect.append(Rect2i(x0, y0, mini(_chunk, W - x0), mini(_chunk, H - y0)))
+	while _terrain_mis.size() > _n_chunks:
+		var mi: MeshInstance3D = _terrain_mis.pop_back()
+		remove_child(mi)
+		mi.free()
+	while _terrain_mis.size() < _n_chunks:
+		var mi := MeshInstance3D.new()
+		mi.name = "Terrain_%d" % _terrain_mis.size()
+		mi.material_override = _terrain_mi.material_override
+		add_child(mi)
+		_terrain_mis.append(mi)
+	while _plant_mms.size() > _n_chunks:
+		var mm: MultiMesh = _plant_mms.pop_back()
+		var node := get_node_or_null("Plants_%d" % _plant_mms.size())
+		if node != null:
+			remove_child(node)
+			node.free()
+		mm.instance_count = 0
+	while _plant_mms.size() < _n_chunks:
+		_plant_mms.append(_add_mm("Plants_%d" % _plant_mms.size(), SlimeGeo.plant_mesh(), SlimeGeo.shared_material(), true, false))
+	_terrain_meshes.resize(_n_chunks)
+	for k in _n_chunks:
+		_terrain_mis[k].mesh = null
+		_terrain_meshes[k] = null
 
 
 ## step() 을 부르기 **직전마다** 호출(LabMain 은 한 프레임에 여러 틱을 돌리면 틱마다 부른다). 보간용으로 지금 위치(id → 칸)를
@@ -660,18 +734,28 @@ func update_view(alpha: float, delta: float = 1.0 / 60.0) -> void:
 		_prev_off = _calc_offsets(_prev_x, _prev_y) if _has_prev else PackedFloat32Array()
 		_update_plant_occupancy()
 		_offsets_tick = t
-	# 식물과 땅 색은 틱이 일정 이상 지났을 때만, 같은 프레임에 둘 다 하지 않게
+	# 식물과 땅 색: 한 바퀴는 틱이 일정 이상 지났을 때 시작해 한 프레임에 덩어리 하나씩(기본 지도는 덩어리 하나라 한 프레임에 끝).
+	# 같은 프레임에 둘 다 하지 않고, 두 바퀴가 함께 진행 중이면 번갈아. 묶은 직후·세계가 되돌아가면 전체를 한 번에.
 	_plant_frames += 1
 	_terrain_frames += 1
+	_plant_last_n = 0
+	_terrain_last_n = 0
 	var did_plants := false
-	if _plant_tick == -1 or (t - _plant_tick >= _plant_every and _plant_frames >= _plant_min_frames) or t < _plant_tick:
-		_refresh_plants()
+	var plants_due := _plant_pass or (t - _plant_tick >= _plant_every and _plant_frames >= _plant_min_frames)
+	var terrain_due := _terrain_pass or (t - _terrain_tick >= _terrain_every and _terrain_frames >= _terrain_min_frames)
+	if _plant_tick == -1 or t < _plant_tick:
+		_refresh_plants(true)
 		did_plants = true
-	elif _plant_dirty:
-		_plant_mm.buffer = _plant_buf
-		_plant_dirty = false
-	if _terrain_tick == -1 or ((t - _terrain_tick >= _terrain_every and _terrain_frames >= _terrain_min_frames) and not did_plants) or t < _terrain_tick:
-		_recolor_terrain()
+	elif plants_due and not (terrain_due and _last_was_plants):
+		_refresh_plants(false)
+		did_plants = true
+	elif not _dirty_chunks.is_empty():
+		_upload_plant_chunks()
+	if _terrain_tick == -1 or t < _terrain_tick:
+		_recolor_terrain(true)
+	elif not did_plants and terrain_due:
+		_recolor_terrain(false)
+	_last_was_plants = did_plants
 	_display_k = _calc_display_scale()
 	_update_slimes(clampf(alpha, 0.0, 1.0))
 	_update_light()
@@ -779,26 +863,27 @@ func get_camera() -> Camera3D:
 
 ## 성능 기록용 수치. plants = 먹이가 있어 보이는 풀포기 수, triangles_estimate = 그리기에 넘기는 삼각형
 ## (숨긴 풀포기도 배율 0 인스턴스로 넘어가므로 풀포기 인스턴스 전부 + 슬라임 발밑 그림자 포함).
+## chunks = 덩어리 수, plant_n·terrain_n = 이번 프레임에 다시 본 풀포기·칸 수(갱신이 없었으면 0), *_us = 마지막 갱신 시간.
 func view_stats() -> Dictionary:
 	if world == null:
-		return {slimes = 0, plants = 0, stores = 0, farms = 0, triangles_estimate = 0}
+		return {slimes = 0, plants = 0, stores = 0, farms = 0, triangles_estimate = 0, chunks = 0, plant_n = 0, terrain_n = 0}
 	var n := world.s_id.size()
-	var tris := _terrain_tris + n * (int(_tri.slime) + int(_tri.shadow)) + _plant_mm.instance_count * int(_tri.plant)
+	var tris := _terrain_tris + n * (int(_tri.slime) + int(_tri.shadow)) + _plant_tile.size() * int(_tri.plant)
 	tris += (_drop_count + _carry_count) * int(_tri.berry)
 	tris += world.store_tiles.size() * int(_tri.store) + world.farms.size() * int(_tri.farm)
 	if _ring.visible:
 		tris += int(_tri.ring)
 	return {
 		slimes = n, plants = _plant_visible, stores = world.store_tiles.size(), farms = world.farms.size(),
-		triangles_estimate = tris,
+		triangles_estimate = tris, chunks = _n_chunks, plant_n = _plant_last_n, terrain_n = _terrain_last_n,
 		slime_us = _slime_last_us, plant_us = _plant_last_us, terrain_us = _terrain_last_us,
 	}
 
 
 # ════════════════════════════ 땅 ════════════════════════════
 
-## 땅 메시 하나: 앞부분 = 칸마다 위 사각형(칸 순서, 정점 4개), 뒷부분 = 높이 차이·지도 가장자리 옆면.
-## 위 사각형의 색만 바뀌므로(풀밭 ↔ 밭, 먹이량, 계절) 색 영역 앞부분만 다시 올리면 된다.
+## 덩어리마다 땅 메시 하나: 앞부분 = 칸마다 위 사각형(덩어리 안 행 우선, 정점 4개), 뒷부분 = 높이 차이·지도 가장자리 옆면.
+## 위 사각형의 색만 바뀌므로(풀밭 ↔ 밭, 먹이량, 계절) 색 영역 앞부분만 다시 올리면 된다. 덩어리 하나(기본 지도)면 칸 순서 그대로.
 func _build_terrain() -> void:
 	var W := world.w
 	var H := world.h
@@ -841,74 +926,96 @@ func _build_terrain() -> void:
 		var j := _jit[c]
 		_static_rgba[c] = _rgba(col.r * j, col.g * j, col.b * j)
 
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var cols := PackedColorArray()
-	var idx := PackedInt32Array()
+	_tile_pos.resize(n)
+	_tchunk_start.resize(_n_chunks + 1)
+	_terrain_tris = 0
+	var pos := 0
+	for k in _n_chunks:
+		_tchunk_start[k] = pos
+		var r := _chunk_rect[k]
+		var verts := PackedVector3Array()
+		var norms := PackedVector3Array()
+		var cols := PackedColorArray()
+		var idx := PackedInt32Array()
+		_terrain_quads(r, heights, verts, norms, cols, idx)
+		for y in range(r.position.y, r.end.y):
+			for x in range(r.position.x, r.end.x):
+				_tile_pos[y * W + x] = pos
+				pos += 1
+		var arr := []
+		arr.resize(Mesh.ARRAY_MAX)
+		arr[Mesh.ARRAY_VERTEX] = verts
+		arr[Mesh.ARRAY_NORMAL] = norms
+		arr[Mesh.ARRAY_COLOR] = cols
+		arr[Mesh.ARRAY_INDEX] = idx
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		_terrain_meshes[k] = mesh
+		_terrain_mis[k].mesh = mesh
+		_terrain_mis[k].cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		_terrain_tris += idx.size() / 3
+	_tchunk_start[_n_chunks] = pos
+	_top_rgba.resize(n * 4)
+	# 새 메시는 흰색이라 모든 칸을 "바뀜"으로(색 값에는 늘 불투명 알파가 있어 0 과 같지 않다)
+	_top_rgba.fill(0)
+	_recolor_terrain(true)
+
+
+## 덩어리 r 의 땅 사각형: ① 위 사각형(행 우선) ② 옆면 — 이웃(또는 지도 밖 = 바닥 깊이)이 더 낮은 쪽 모서리마다.
+func _terrain_quads(r: Rect2i, heights: PackedFloat32Array, verts: PackedVector3Array, norms: PackedVector3Array,
+		cols: PackedColorArray, idx: PackedInt32Array) -> void:
+	var W := world.w
+	var H := world.h
 	var tl := _tile
-	# ① 위 사각형(칸 순서)
-	for c in n:
-		var x0 := float(c % W) * tl
-		var z0 := float(c / W) * tl
-		var hy := heights[c]
-		_quad(verts, norms, cols, idx,
-			Vector3(x0, hy, z0), Vector3(x0 + tl, hy, z0), Vector3(x0 + tl, hy, z0 + tl), Vector3(x0, hy, z0 + tl),
-			Vector3.UP, Color.WHITE)
-	# ② 옆면: 이웃(또는 지도 밖 = 바닥 깊이)이 더 낮은 쪽 모서리마다 세운다
-	var floor_y := -_water_depth - _skirt
-	for c in n:
-		var x := c % W
-		var y := c / W
-		var hc := heights[c]
-		var kind := world.tiles[c]
-		var side := _c_bank
-		if kind == SimGrid.TILE_ROCK:
-			side = Color(_c_rock.r * _rock_side, _c_rock.g * _rock_side, _c_rock.b * _rock_side)
-		elif kind == SimGrid.TILE_WATER:
-			side = _c_water.darkened(_water_side_dark)
-		for d in SimGrid.DIR_COUNT:
-			var nx: int = x + SimGrid.DX[d]
-			var ny: int = y + SimGrid.DY[d]
-			var hn := floor_y
-			if nx >= 0 and ny >= 0 and nx < W and ny < H:
-				hn = heights[ny * W + nx]
-			if hn >= hc - SIDE_EPS:
-				continue
+	for y in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
 			var x0 := float(x) * tl
 			var z0 := float(y) * tl
-			var a := Vector3.ZERO
-			var b := Vector3.ZERO
-			match d:
-				0:
-					a = Vector3(x0, 0.0, z0)
-					b = Vector3(x0 + tl, 0.0, z0)
-				1:
-					a = Vector3(x0 + tl, 0.0, z0)
-					b = Vector3(x0 + tl, 0.0, z0 + tl)
-				2:
-					a = Vector3(x0 + tl, 0.0, z0 + tl)
-					b = Vector3(x0, 0.0, z0 + tl)
-				_:
-					a = Vector3(x0, 0.0, z0 + tl)
-					b = Vector3(x0, 0.0, z0)
-			var nrm := Vector3(float(SimGrid.DX[d]), 0.0, float(SimGrid.DY[d]))
-			var lo_shade := side.darkened(_side_bottom_dark)
-			_quad_grad(verts, norms, cols, idx,
-				Vector3(a.x, hc, a.z), Vector3(b.x, hc, b.z), Vector3(b.x, hn, b.z), Vector3(a.x, hn, a.z),
-				nrm, side, lo_shade)
-	var arr := []
-	arr.resize(Mesh.ARRAY_MAX)
-	arr[Mesh.ARRAY_VERTEX] = verts
-	arr[Mesh.ARRAY_NORMAL] = norms
-	arr[Mesh.ARRAY_COLOR] = cols
-	arr[Mesh.ARRAY_INDEX] = idx
-	_terrain_mesh = ArrayMesh.new()
-	_terrain_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-	_terrain_mi.mesh = _terrain_mesh
-	_terrain_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	_terrain_tris = idx.size() / 3
-	_top_rgba.resize(n * 4)
-	_recolor_terrain()
+			var hy := heights[y * W + x]
+			_quad(verts, norms, cols, idx,
+				Vector3(x0, hy, z0), Vector3(x0 + tl, hy, z0), Vector3(x0 + tl, hy, z0 + tl), Vector3(x0, hy, z0 + tl),
+				Vector3.UP, Color.WHITE)
+	var floor_y := -_water_depth - _skirt
+	for y in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			var c := y * W + x
+			var hc := heights[c]
+			var kind := world.tiles[c]
+			var side := _c_bank
+			if kind == SimGrid.TILE_ROCK:
+				side = Color(_c_rock.r * _rock_side, _c_rock.g * _rock_side, _c_rock.b * _rock_side)
+			elif kind == SimGrid.TILE_WATER:
+				side = _c_water.darkened(_water_side_dark)
+			for d in SimGrid.DIR_COUNT:
+				var nx: int = x + SimGrid.DX[d]
+				var ny: int = y + SimGrid.DY[d]
+				var hn := floor_y
+				if nx >= 0 and ny >= 0 and nx < W and ny < H:
+					hn = heights[ny * W + nx]
+				if hn >= hc - SIDE_EPS:
+					continue
+				var x0 := float(x) * tl
+				var z0 := float(y) * tl
+				var a := Vector3.ZERO
+				var b := Vector3.ZERO
+				match d:
+					0:
+						a = Vector3(x0, 0.0, z0)
+						b = Vector3(x0 + tl, 0.0, z0)
+					1:
+						a = Vector3(x0 + tl, 0.0, z0)
+						b = Vector3(x0 + tl, 0.0, z0 + tl)
+					2:
+						a = Vector3(x0 + tl, 0.0, z0 + tl)
+						b = Vector3(x0, 0.0, z0 + tl)
+					_:
+						a = Vector3(x0, 0.0, z0 + tl)
+						b = Vector3(x0, 0.0, z0)
+				var nrm := Vector3(float(SimGrid.DX[d]), 0.0, float(SimGrid.DY[d]))
+				var lo_shade := side.darkened(_side_bottom_dark)
+				_quad_grad(verts, norms, cols, idx,
+					Vector3(a.x, hc, a.z), Vector3(b.x, hc, b.z), Vector3(b.x, hn, b.z), Vector3(a.x, hn, a.z),
+					nrm, side, lo_shade)
 
 
 ## 사각형 하나(정점 4개, 삼각형 2개). 법선 n 쪽에서 보아 앞면이 되도록 감는 방향을 고른다(Godot 앞면 = 시계 방향).
@@ -938,16 +1045,35 @@ static func _quad_grad(v: PackedVector3Array, nm: PackedVector3Array, cl: Packed
 
 
 ## 위 사각형 색 다시 계산: 풀밭 = 비옥도(척박 → 기름짐) + 먹이량만큼 먹이 색 + 계절 색, 밭 = 밭 색, 물·바위 = 고정.
-## 칸마다 RGBA8 정수 하나를 정점 4개에 넣고 색 영역 앞부분만 올린다.
-func _recolor_terrain() -> void:
+## 칸마다 RGBA8 정수 하나를 정점 4개에 넣고, 색이 바뀐 칸이 있는 덩어리만 색 영역 앞부분을 올린다.
+## full = 모든 덩어리를 지금(묶은 직후·세계가 되돌아감), 아니면 진행 중인 한 바퀴의 다음 덩어리 하나(없으면 새 바퀴를 시작).
+func _recolor_terrain(full: bool) -> void:
 	var t0 := Time.get_ticks_usec()
+	if full or not _terrain_pass:
+		_terrain_pass = true
+		_terrain_cursor = 0
+		_terrain_tick = world.tick
+	var tint := Color.WHITE
+	if world.season >= 0 and world.season < _season_tints.size():
+		tint = Color.WHITE.lerp(_season_tints[world.season], _season_k)
+	var last := _n_chunks if full else _terrain_cursor + 1
+	var done := 0
+	while _terrain_cursor < last:
+		done += _recolor_chunk(_terrain_cursor, tint)
+		_terrain_cursor += 1
+	if _terrain_cursor >= _n_chunks:
+		_terrain_pass = false
+		_terrain_frames = 0
+	_terrain_last_n = done
+	_terrain_last_us = Time.get_ticks_usec() - t0
+
+
+## 덩어리 k 의 위 사각형 색을 다시 계산해 바뀐 칸만 쓰고, 하나라도 바뀌었으면 그 메시의 색 영역을 올린다. 본 칸 수.
+func _recolor_chunk(k: int, tint: Color) -> int:
 	var tiles := world.tiles
 	var fert := world.fert
 	var food := world.food
 	var cap := world.food_cap
-	var tint := Color.WHITE
-	if world.season >= 0 and world.season < _season_tints.size():
-		tint = Color.WHITE.lerp(_season_tints[world.season], _season_k)
 	var pr := _c_poor.r * tint.r
 	var pg := _c_poor.g * tint.g
 	var pb := _c_poor.b * tint.b
@@ -962,37 +1088,45 @@ func _recolor_terrain() -> void:
 	var inv := _fert_inv
 	var farm := _c_farm
 	var out := _top_rgba
-	for c in _n_tiles:
-		var k := tiles[c]
-		var v := 0
-		if k == SimGrid.TILE_GRASS:
-			var u := clampf((fert[c] - lo) * inv, 0.0, 1.0)
-			var r := pr + rr * u
-			var g := pg + rg * u
-			var b := pb + rb * u
-			var cp := cap[c]
-			if cp > 0.0:
-				var f := food[c] / cp * fk
-				r += (fr - r) * f
-				g += (fg - g) * f
-				b += (fb - b) * f
-			var j := _jit[c] * BYTE
-			v = (int(clampf(r * j, 0.0, BYTE)) | (int(clampf(g * j, 0.0, BYTE)) << 8)
-				| (int(clampf(b * j, 0.0, BYTE)) << 16) | OPAQUE)
-		elif k == SimGrid.TILE_FARM:
-			var j2 := _jit[c]
-			v = _rgba(farm.r * j2, farm.g * j2, farm.b * j2)
-		else:
-			v = _static_rgba[c]
-		var o := c * 4
-		out[o] = v
-		out[o + 1] = v
-		out[o + 2] = v
-		out[o + 3] = v
-	_terrain_mesh.surface_update_attribute_region(0, 0, out.to_byte_array())
-	_terrain_tick = world.tick
-	_terrain_frames = 0
-	_terrain_last_us = Time.get_ticks_usec() - t0
+	var W := world.w
+	var r := _chunk_rect[k]
+	var o := _tchunk_start[k] * 4
+	var changed := false
+	for y in range(r.position.y, r.end.y):
+		for c in range(y * W + r.position.x, y * W + r.end.x):
+			var kind := tiles[c]
+			var v := 0
+			if kind == SimGrid.TILE_GRASS:
+				var u := clampf((fert[c] - lo) * inv, 0.0, 1.0)
+				var cr := pr + rr * u
+				var cg := pg + rg * u
+				var cb := pb + rb * u
+				var cp := cap[c]
+				if cp > 0.0:
+					var f := food[c] / cp * fk
+					cr += (fr - cr) * f
+					cg += (fg - cg) * f
+					cb += (fb - cb) * f
+				var j := _jit[c] * BYTE
+				v = (int(clampf(cr * j, 0.0, BYTE)) | (int(clampf(cg * j, 0.0, BYTE)) << 8)
+					| (int(clampf(cb * j, 0.0, BYTE)) << 16) | OPAQUE)
+			elif kind == SimGrid.TILE_FARM:
+				var j2 := _jit[c]
+				v = _rgba(farm.r * j2, farm.g * j2, farm.b * j2)
+			else:
+				v = _static_rgba[c]
+			if out[o] != v:
+				out[o] = v
+				out[o + 1] = v
+				out[o + 2] = v
+				out[o + 3] = v
+				changed = true
+			o += 4
+	if changed:
+		var a := _tchunk_start[k] * 4
+		var region := out if _n_chunks == 1 else out.slice(a, _tchunk_start[k + 1] * 4)
+		_terrain_meshes[k].surface_update_attribute_region(0, 0, region.to_byte_array())
+	return r.size.x * r.size.y
 
 
 ## 정점 색 영역 한 칸(RGBA8, 작은 쪽 바이트가 R).
@@ -1002,20 +1136,39 @@ static func _rgba(r: float, g: float, b: float) -> int:
 
 ## 칸 c 의 지금 위 사각형 색(검사용).
 func terrain_tile_color(c: int) -> Color:
-	if c < 0 or c * 4 >= _top_rgba.size():
+	if c < 0 or c >= _tile_pos.size() or _tile_pos[c] * 4 >= _top_rgba.size():
 		return Color.BLACK
-	var v := _top_rgba[c * 4]
+	var v := _top_rgba[_tile_pos[c] * 4]
 	return Color8(v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff)
 
 
 # ════════════════════════════ 식물·바닥 먹이 ════════════════════════════
 
 ## 통과 가능 칸마다 풀포기 하나(물·바위는 바뀌지 않으므로 개수는 고정). 칸 안 위치·방향·키·밝기는 칸 해시.
+## 풀포기는 덩어리 순서(덩어리 안 행 우선)로 놓는다 — 덩어리 하나(기본 지도)면 칸 순서 그대로.
 func _build_plants() -> void:
 	_plant_tile = PackedInt32Array()
-	for c in _n_tiles:
-		if SimGrid.passable(world.tiles[c]):
-			_plant_tile.append(c)
+	_plant_chunk = PackedInt32Array()
+	_pchunk_start.resize(_n_chunks + 1)
+	var W0 := world.w
+	for k in _n_chunks:
+		_pchunk_start[k] = _plant_tile.size()
+		var r := _chunk_rect[k]
+		for y in range(r.position.y, r.end.y):
+			for c in range(y * W0 + r.position.x, y * W0 + r.end.x):
+				if SimGrid.passable(world.tiles[c]):
+					_plant_tile.append(c)
+					_plant_chunk.append(k)
+	_pchunk_start[_n_chunks] = _plant_tile.size()
+	_pchunk_vis.resize(_n_chunks)
+	_pchunk_vis.fill(0)
+	_pchunk_dirty.resize(_n_chunks)
+	_pchunk_dirty.fill(0)
+	_dirty_chunks = PackedInt32Array()
+	_chunk_drops.resize(_n_chunks)
+	for k in _n_chunks:
+		_chunk_drops[k] = PackedInt32Array()
+		_plant_mms[k].instance_count = _pchunk_start[k + 1] - _pchunk_start[k]
 	var n := _plant_tile.size()
 	_plant_cs.resize(n)
 	_plant_sn.resize(n)
@@ -1030,12 +1183,10 @@ func _build_plants() -> void:
 	_plant_stamp.fill(0)
 	_stamp = 0
 	_shrunk = PackedInt32Array()
-	_plant_dirty = false
 	_plant_of_tile.resize(_n_tiles)
 	_plant_of_tile.fill(-1)
 	for k in n:
 		_plant_of_tile[_plant_tile[k]] = k
-	_plant_mm.instance_count = n
 	_plant_buf.resize(n * XFC)
 	_plant_buf.fill(0.0)
 	var W := world.w
@@ -1063,9 +1214,40 @@ func _build_plants() -> void:
 	_drop_buf.resize(0)
 
 
-## 풀포기 크기(먹이량 비례, 거의 없으면 0 = 숨김)와 바닥 먹이 열매를 다시 쓴다. 바뀌는 값만 버퍼에 쓴다.
-func _refresh_plants() -> void:
+## 풀포기 크기(먹이량 비례, 거의 없으면 0 = 숨김)와 바닥 먹이 열매를 다시 쓴다. 먹이량 배율·칸 종류가 바뀐 풀포기만 버퍼에 쓰고
+## 쓴 덩어리만 올린다. full = 모든 덩어리를 지금(묶은 직후·세계가 되돌아감), 아니면 진행 중인 한 바퀴의 다음 덩어리 하나
+## (없으면 새 바퀴를 시작) — 한 프레임 비용이 지도 크기가 아니라 덩어리 크기(ui.map.chunk_tiles²)에 비례한다.
+func _refresh_plants(full: bool) -> void:
 	var t0 := Time.get_ticks_usec()
+	if full or not _plant_pass:
+		_plant_pass = true
+		_plant_cursor = 0
+		_plant_tick = world.tick
+	var last := _n_chunks if full else _plant_cursor + 1
+	var done := 0
+	while _plant_cursor < last:
+		done += _refresh_plant_chunk(_plant_cursor)
+		_plant_cursor += 1
+	if _plant_cursor >= _n_chunks:
+		_plant_pass = false
+		_plant_frames = 0
+	var vis := 0
+	var nd := 0
+	for k in _n_chunks:
+		vis += _pchunk_vis[k]
+		var drops := _chunk_drops[k]
+		for c in drops:
+			_drop_tiles[nd] = c
+			nd += 1
+	_plant_visible = vis
+	_upload_plant_chunks()
+	_write_dropped(nd)
+	_plant_last_n = done
+	_plant_last_us = Time.get_ticks_usec() - t0
+
+
+## 덩어리 j 의 풀포기: 배율을 다시 계산해 바뀐 것만 버퍼에 쓰고(쓰면 덩어리를 올릴 목록에), 보이는 수·바닥 먹이 칸을 센다. 본 풀포기 수.
+func _refresh_plant_chunk(j: int) -> int:
 	var food := world.food
 	var tiles := world.tiles
 	var dropped := world.dropped
@@ -1078,14 +1260,23 @@ func _refresh_plants() -> void:
 	var occ := _plant_occ
 	var ps := _plant_s
 	var vis := 0
-	var nd := 0
-	for k in _plant_tile.size():
+	var drops := PackedInt32Array()
+	var wrote := false
+	var k0 := _pchunk_start[j]
+	var k1 := _pchunk_start[j + 1]
+	for k in range(k0, k1):
 		var c := _plant_tile[k]
 		var f := food[c] * inv
 		var s := 0.0
 		if f > hide:
 			s = smin + sspan * minf(f, 1.0)
 			vis += 1
+		if dropped[c] > 0.0:
+			drops.append(c)
+		var kind := tiles[c]
+		if s == ps[k] and kind == _plant_kind[k]:
+			continue
+		wrote = true
 		ps[k] = s
 		# 슬라임이 서 있는 칸의 풀포기는 몸을 뚫고 나오지 않게 줄인다(_update_plant_occupancy)
 		if occ[k] != 0:
@@ -1100,7 +1291,6 @@ func _refresh_plants() -> void:
 		buf[o + 7] = base * sy
 		buf[o + 8] = -sn
 		buf[o + 10] = cs
-		var kind := tiles[c]
 		if kind != _plant_kind[k]:
 			# 풀밭 ↔ 밭: 색만 바꿈(대용품 메시일 때만 밭 작물 색)
 			_plant_kind[k] = kind
@@ -1110,20 +1300,33 @@ func _refresh_plants() -> void:
 			buf[o + 13] = col.g * b
 			buf[o + 14] = col.b * b
 			buf[o + 15] = 1.0
-		if dropped[c] > 0.0:
-			_drop_tiles[nd] = c
-			nd += 1
-	_plant_mm.buffer = buf
-	_plant_dirty = false
-	_plant_visible = vis
-	_write_dropped(nd)
-	_plant_tick = world.tick
-	_plant_frames = 0
-	_plant_last_us = Time.get_ticks_usec() - t0
+	_pchunk_vis[j] = vis
+	_chunk_drops[j] = drops
+	if wrote:
+		_mark_plant_chunk(j)
+	return k1 - k0
+
+
+## 덩어리 j 의 풀포기 버퍼를 다시 올려야 한다고 적는다.
+func _mark_plant_chunk(j: int) -> void:
+	if _pchunk_dirty[j] == 0:
+		_pchunk_dirty[j] = 1
+		_dirty_chunks.append(j)
+
+
+## 적어 둔 덩어리의 풀포기 버퍼만 올린다(덩어리 하나면 버퍼 전체 그대로).
+func _upload_plant_chunks() -> void:
+	for j in _dirty_chunks:
+		_pchunk_dirty[j] = 0
+		var a := _pchunk_start[j]
+		var b := _pchunk_start[j + 1]
+		if b > a:
+			_plant_mms[j].buffer = _plant_buf if _n_chunks == 1 else _plant_buf.slice(a * XFC, b * XFC)
+	_dirty_chunks = PackedInt32Array()
 
 
 ## 슬라임이 서 있는(또는 이번 틱에 떠난) 칸의 풀포기를 map.plant_occupied_scale 배로 줄이고, 비게 된 칸은 되돌린다.
-## 틱이 바뀔 때만 부르고, 바뀐 풀포기의 변환만 버퍼에 다시 쓴다(올리기는 update_view 가 한 번).
+## 틱이 바뀔 때만 부르고, 바뀐 풀포기의 변환만 버퍼에 다시 쓴다(올리기는 update_view 가 바뀐 덩어리만 한 번).
 func _update_plant_occupancy() -> void:
 	if _occ_scale >= 1.0 or _plant_occ.size() != _plant_tile.size() or _plant_of_tile.size() != _n_tiles:
 		return
@@ -1151,7 +1354,8 @@ func _update_plant_occupancy() -> void:
 	_shrunk = now
 
 
-## 풀포기 k 의 3×3 기저(방향·배율)만 다시 쓴다(먹이량 배율 × 점유 줄이기).
+## 풀포기 k 의 3×3 기저(방향·배율)만 다시 쓴다(먹이량 배율 × 점유 줄이기). 덩어리 하나(기본 지도)면 덩어리째 올리게 적고,
+## 여럿이면 그 인스턴스 하나만 바로 보낸다(개체가 여러 덩어리에 흩어져도 덩어리 버퍼 전체를 다시 올리지 않게).
 func _write_plant_basis(k: int) -> void:
 	var s := _plant_s[k] * (_occ_scale if _plant_occ[k] != 0 else 1.0)
 	var o := k * XFC
@@ -1164,7 +1368,12 @@ func _write_plant_basis(k: int) -> void:
 	_plant_buf[o + 7] = _plant_base * sy
 	_plant_buf[o + 8] = -sn
 	_plant_buf[o + 10] = cs
-	_plant_dirty = true
+	var j := _plant_chunk[k]
+	if _n_chunks == 1 or _pchunk_dirty[j] != 0:
+		_mark_plant_chunk(j)
+	else:
+		_plant_mms[j].set_instance_transform(k - _pchunk_start[j], Transform3D(Vector3(cs, 0.0, -sn), Vector3(0.0, sy, 0.0),
+				Vector3(sn, 0.0, cs), Vector3(_plant_buf[o + 3], _plant_buf[o + 7], _plant_buf[o + 11])))
 
 
 ## 칸 c 의 땅 높이(밭은 흙판 윗면, 나머지 0 — 물·바위 칸에는 슬라임이 서지 않음).
