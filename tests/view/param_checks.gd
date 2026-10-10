@@ -8,10 +8,11 @@ extends RefCounted
 ## 검토 고침(g4): 씨앗 칸 = 글 칸 + 정수 해석(실제 키 Enter·실제 마우스 클릭·초점 빠짐 모두 같은 규칙, 64비트 씨앗 그대로),
 ## 고급 설정 0·범위("(검사)") → 줄 아래 오류, 비교 중 저장의 -A/-B 덮어쓰기 물음, 저장 대화 상자 동안 멈춤(이름 틱 = 내용 틱),
 ## 열기 대화 상자의 "열기" 단추, 단추·고르기 상자 키보드 초점(Tab·Enter, 스페이스 = 멈춤), 웹 내려받기 실패 알림 하나,
-## 확인 대화 상자 모양·틱 쉼표, 무작위가 세계 상태(스냅숏 글)를 바꾸지 않음.
+## 확인 대화 상자 모양·틱 쉼표, 무작위가 세계 상태(스냅숏 글)를 바꾸지 않음, 화면 글의 글자 범위(나눔고딕 두 굵기 — J17)·
+## 두뇌 열지도 범례 끝 글(weight_clamp 를 반올림하지 않음 — I44).
 ## 비교 시작 인자는 start_compare·stop_compare 를 가로채는 가짜 실험실(FakeLab)로도 확인한다(패널 단위 — 종단은 integration4_checks).
 
-const MIN_CHECKS := 247
+const MIN_CHECKS := 254
 ## 임시 폴더는 프로세스마다 따로(저장소 사본 여럿에서 함께 돌려도 서로 지우지 않게 — I37, run_tests.tmp_dir 와 같은 규칙)
 var TMP_DIR := "user://test_param-%d" % OS.get_process_id()
 var SNAP_PATH := TMP_DIR.path_join("snap.json")
@@ -24,6 +25,13 @@ const INT64_MAX := 9223372036854775807
 const INT64_MIN := -9223372036854775807 - 1
 ## 2^53 + 1: 실수(float64)로는 정확히 못 적는 첫 정수(예전 SpinBox 칸은 …992 로 보였음 — J18)
 const SEED_2P53_PLUS1 := 9007199254740993
+## 글자 범위 검사(J17): 앱 글꼴(보통·굵게)과 화면에 나올 수 있는 글이 있는 곳(스크립트는 주석 아닌 줄)
+const FONT_FILES: Array[String] = ["res://assets/fonts/NanumGothic-Regular.ttf", "res://assets/fonts/NanumGothic-Bold.ttf"]
+const FONT_SCAN_DIRS: Array[String] = ["res://scripts/ui", "res://scripts/view", "res://scripts/sim", "res://scenes", "res://config"]
+const FONT_SCAN_EXT: Array[String] = ["gd", "tscn", "json"]
+## 이 검사 묶음(g4) 밖에서 고치기로 넘긴 파일(handoff: config/sim-labels.json 말풍선의 '−'(U+2212) → '-'). 지금은 건너뛰되,
+## 그 파일에서 없는 글자가 사라지면 이 목록에서 지우라고 실패한다(목록이 남아 검사가 줄어든 채 잊히지 않게).
+const FONT_PENDING: Array[String] = ["res://config/sim-labels.json"]
 
 
 ## start_compare·stop_compare 호출을 기록만 하는 실험실(나머지는 진짜 LabMain).
@@ -78,6 +86,8 @@ func run(t) -> void:
 	await _seed_enter(t, lab, p)
 	await _seed_click(t, lab, p)
 	_labels(t, p)
+	_font_coverage(t)
+	await _brain_legend(t)
 	_float_text(t, p)
 	_refresh_cost(t, lab, p)
 	await _export(t, lab, p)
@@ -787,6 +797,85 @@ func _labels(t, p: ParamPanel) -> void:
 	t.check(g.tooltip_text.contains("[1.0,1.2,0.8,0.3]"), "읽기 전용 배열 칸 말풍선 = 전체 값: " + g.tooltip_text)
 	t.check((p.control("adv:metab.base") as LineEdit).tooltip_text.contains("기본 대사"), "고급 칸 말풍선에 한국어 이름")
 	p.set_advanced_open(false)
+
+
+## 글자 범위(검토 J17 — 이전 저장소 test_font_coverage 를 옮김): 화면에 나올 수 있는 글(scripts/ui·view·sim 의 주석 아닌 줄,
+## scenes, config/*.json — 설정 말풍선 sim-labels·화면 문자열 ui.json)의 모든 글자가 나눔고딕 보통·굵게 둘 다에 있는지.
+## 데스크톱은 시스템 글꼴이 대신 그려 가려지지만 웹 빌드에는 대체 글꼴이 없어 네모로 보인다(두뇌 범례 '−' U+2212 가 그랬음).
+func _font_coverage(t) -> void:
+	var fonts: Array[FontFile] = []
+	for f in FONT_FILES:
+		fonts.append(load(f) as FontFile)
+	t.check(fonts.size() == 2 and fonts.all(func(f: FontFile) -> bool: return f != null), "앱 글꼴 둘(보통·굵게)")
+	var files := PackedStringArray()
+	for dir in FONT_SCAN_DIRS:
+		for f in DirAccess.get_files_at(dir):
+			if FONT_SCAN_EXT.has(f.get_extension()):
+				files.append(dir.path_join(f))
+	var missing := {}
+	var pending_bad := {}
+	for path in files:
+		var bad := font_missing(FileAccess.get_file_as_string(path), path.get_extension() == "gd", fonts)
+		if FONT_PENDING.has(path):
+			pending_bad[path] = bad
+		elif not bad.is_empty():
+			missing[path] = bad
+	t.check(files.size() > 20 and missing.is_empty(), "화면 글 %d파일의 모든 글자가 글꼴 둘에 있음(없음: %s)" % [files.size(), str(missing)])
+	# 보류 파일은 검사 하나로(목록이 비어도 검사 수가 같게): 모두 아직 없는 글자가 있어야 함 — 고쳐진 파일은 목록에서 지울 것
+	var fixed := PackedStringArray()
+	for path in FONT_PENDING:
+		print("  (참고) 글자 범위 보류(다른 묶음이 고침): %s %s" % [path, str(pending_bad.get(path, "파일 없음"))])
+		if (pending_bad.get(path, "") as String).is_empty():
+			fixed.append(path)
+	t.check(fixed.is_empty(), "보류 파일(%d개)에 아직 없는 글자가 있음(고쳐졌으면 FONT_PENDING 에서 지울 것: %s)" % [FONT_PENDING.size(), ", ".join(fixed)])
+	t.check(font_missing("두뇌 −4", false, fonts) == "U+2212" and font_missing("# −4\n-4 ±·…—", true, fonts) == "", "글자 검사 자체: '−' 는 없음, 주석 줄은 건너뜀")
+
+
+## text 의 글자 가운데 fonts 어느 하나라도 없는 것("U+XXXX" 들, 공백으로 이음). is_script 면 주석 줄(# 로 시작)은 건너뜀.
+static func font_missing(text: String, is_script: bool, fonts: Array[FontFile]) -> String:
+	var body := text
+	if is_script:
+		var kept := PackedStringArray()
+		for ln in text.split("\n"):
+			if not ln.strip_edges().begins_with("#"):
+				kept.append(ln)
+		body = "\n".join(kept)
+	var seen := {}
+	for i in body.length():
+		var c := body.unicode_at(i)
+		if c < 32 or seen.has(c):
+			continue
+		seen[c] = true
+		for f in fonts:
+			if not f.has_char(c):
+				seen[c] = false
+				break
+	var out := PackedStringArray()
+	for c: int in seen:
+		if not seen[c]:
+			out.append("U+%04X" % c)
+	return " ".join(out)
+
+
+## 두뇌 열지도 범례(검토 I44·J17): 상한 brain.weight_clamp(고급 설정의 실수 키)를 반올림하지 않고 그대로("%.0f" 는 2.5 →
+## "±2", 0.5 → "±0" 이라 색 눈금과 어긋났음), 빼기는 글꼴에 있는 '-'(U+002D). 실제 그린 범례 글(last_legend)로 본다.
+func _brain_legend(t) -> void:
+	var want := {2.5: ["-2.5", "+2.5"], 0.5: ["-0.5", "+0.5"], 4.0: ["-4", "+4"]}
+	for wc: float in want:
+		var w: SimWorld = t.make_world({"brain.weight_clamp": wc}, 1)
+		if w == null:
+			t.check(false, "brain.weight_clamp %s 세계" % str(wc))
+			continue
+		var bv := BrainView.new()
+		bv.weight_clamp = float(w.cfg.brain.weight_clamp)
+		bv.set_genome(w.L, w.slime_info(w.s_id[0]).genome)
+		t.root.add_child(bv)
+		await t.frames(2)
+		var got := bv.last_legend
+		t.check(got == PackedStringArray(want[wc]) and UiTheme.has_glyphs("".join(got)),
+				"두뇌 범례 끝(weight_clamp %s) = %s (그린 것 %s)" % [str(wc), str(want[wc]), str(got)])
+		bv.queue_free()
+	await t.frames(1)
 
 
 ## 실수 글자 = JSON 글자(적용되는 cfg 값 그대로 — 14자리에서 잘리거나 아주 작은 값이 0.0 으로 보이지 않음).

@@ -36,7 +36,8 @@ const COL_KEYS: Array[String] = ["population", "births", "deaths", "mean_size", 
 const MEAN_COLS: Array[int] = [C_SIZE, C_SENSE, C_ENERGY, C_AGE, C_GEN]
 ## 평균 특성 고르기(OptionButton 항목 순서)
 const TRAIT_COLS: Array[int] = [C_SIZE, C_SENSE, C_ENERGY, C_AGE, C_GEN]
-const TRAIT_NAMES: Array[String] = ["크기", "감각", "에너지", "나이", "세대"]
+## 감지 = 개체의 감지 반경 s_sense(정보 창·README 와 같은 이름 — 검토 I51: 그래프만 "감각". 설정 절 sense "감각" 은 다른 것)
+const TRAIT_NAMES: Array[String] = ["크기", "감지", "에너지", "나이", "세대"]
 const TRAIT_UNITS: Array[String] = ["", "칸", "", "틱", "세대"]
 
 const FLOWS_TEXT := "출생·사망"
@@ -47,6 +48,10 @@ const X_LABEL := "가로축"
 const X_TICK_TEXT := "틱"
 const X_GEN_TEXT := "평균 세대"
 const EMPTY_LEGEND := "실험 없음"
+## 기록이 틱 0 보다 뒤에서 시작하는 실험(스냅숏에서 연 실험)의 머리 알림 — 그 앞의 발견 세로선·시점 표시는 가로축 범위
+## 밖이라 그리지 않으므로 그 사실을 그래프에 적는다(검토 J19). 비교면 앞에 이름표("A 기록은 …").
+const RECORD_NOTE := "기록은 틱 %s 부터"
+const RECORD_NOTE_TIP := "스냅숏에는 세계와 연대기만 담겨, 연 실험은 연 틱부터 다시 기록합니다.\n그 앞의 발견 세로선과 연대기 줄의 시점 표시는 그래프에 나오지 않습니다."
 ## 사건 종류(SIM-API): 발견
 const KIND_DISCOVERY := "discovery"
 ## 실험 이름에서 견줄 때 달라지는 끝 부분의 시작("기본 · 씨앗 1 · 바꾼 값 2개" 의 " · 씨앗 ") — 범례를 줄일 때 이 뒤는 남김
@@ -442,6 +447,7 @@ var _hover_key: Array = []
 
 # ── 노드 ──
 var _legend: LegendBar
+var _record_note: Label
 var _btn_tick: Button
 var _btn_gen: Button
 var _flows_btn: Button
@@ -538,6 +544,8 @@ func append_row(index: int, row: Dictionary) -> void:
 	series[index].append(row)
 	data_rev += 1
 	_dirty = true
+	if series[index].size() == 1:
+		_sync_record_note()
 
 
 ## 시점 표시(연대기 → 그래프). -1 = 지움.
@@ -553,11 +561,12 @@ func graph_count() -> int:
 	return _views.size()
 
 
-## graph 번째 그래프에서 index 번째 실험의 점 수(검사용). 세 그래프 모두 기록 줄 하나가 점 하나.
+## graph 번째 그래프가 index 번째 실험을 잇는 점 수(검사용, GraphView.series_point_count): 그 그래프의 줄인 선의 점 —
+## 줄이 그림 폭보다 적으면 기록 줄 수와 같음. 기록 줄 수 자체는 series[index].size().
 func series_points(graph: int, index: int) -> int:
 	if graph < 0 or graph >= _views.size() or index < 0 or index >= series.size():
 		return 0
-	return series[index].size()
+	return _views[graph].series_point_count(index)
 
 
 ## 가로축: "tick"(틱) / "gen"(평균 세대). 셋 모두 함께 바뀐다. 다른 값은 무시(지금 축 그대로).
@@ -640,6 +649,8 @@ func _x_range() -> Vector3:
 	if lo == INF:
 		lo = 0.0
 		hi = 0.0
+	else:
+		hi = maxf(hi, _cursor_hi())
 	# 줄이 몇 개 없을 때도 축이 너무 짧지 않게(새 실험의 첫 점이 왼쪽에서 자라 나가게)
 	var min_span := _x_min_gen if x_mode == X_GEN else _x_min_ticks
 	if hi - lo < min_span:
@@ -653,6 +664,28 @@ func _x_range() -> Vector3:
 	if x1 <= x0:
 		x1 = x0 + step
 	return Vector3(x0, x1, step)
+
+
+## 시점 표시가 마지막 기록 줄 뒤에 있으면 그 가로 값(없으면 -INF). 사건은 기록 간격 사이에도 나서, 멈춘 채 연대기의
+## 최신 줄을 누르면 그 틱이 가로축 끝(마지막 기록 줄을 올린 값)을 넘을 수 있다 — 가로축을 그 자리까지 넓혀 세로선이 보이게
+## (검토 I15: 세 그래프 모두 선이 없었음). 그 실험의 세계가 이미 지난 틱일 때만(세계에 없는 틱 99999 는 넓히지 않음).
+## 첫 기록 줄 앞(스냅숏에서 연 실험의 앞선 사건)은 넓히지 않는다 — 그 앞은 기록이 없다(머리의 record_note, J19).
+func _cursor_hi() -> float:
+	var hi := -INF
+	if cursor_tick < 0:
+		return hi
+	for k in series.size():
+		var s := series[k]
+		if s.size() == 0:
+			continue
+		var w := s.exp.world if s.exp != null else null
+		var now := float(w.tick) if w != null else s.tick[s.size() - 1]
+		if float(cursor_tick) > now:
+			continue
+		var cx := cursor_x(k)
+		if not is_nan(cx):
+			hi = maxf(hi, cx)
+	return hi
 
 
 ## index 번째 실험에서 가로 값 x 에 가장 가까운 기록 줄(없으면 -1). 틱 축은 틱의 이분 탐색, 세대 축은 정렬해 둔
@@ -852,6 +885,14 @@ func _build() -> void:
 	_legend = LegendBar.new(_fs_small, _key_w * LEGEND_KEY_SCALE, UiConfig.num("graph.key_gap"), UiConfig.num("graph.legend_gap"), _line_w, _dash)
 	_legend.name = "Legend"
 	head.add_child(_legend)
+	_record_note = Label.new()
+	_record_note.name = "RecordNote"
+	_record_note.theme_type_variation = UiTheme.DIM
+	_record_note.add_theme_font_size_override("font_size", _fs_small)
+	_record_note.tooltip_text = RECORD_NOTE_TIP
+	_record_note.mouse_filter = Control.MOUSE_FILTER_PASS
+	_record_note.visible = false
+	head.add_child(_record_note)
 	var xl := Label.new()
 	xl.text = X_LABEL
 	xl.theme_type_variation = UiTheme.DIM
@@ -980,6 +1021,7 @@ func _compact(c: Control, type: String) -> void:
 
 ## 머리 범례: 비교면 실험마다 선 견본(A 실선·B 점선) + display_name(), 혼자면 실험 이름만(선이 하나라 견본 없음)
 func _rebuild_legend() -> void:
+	_sync_record_note()
 	if _legend == null:
 		return
 	var list: Array[Dictionary] = []
@@ -1011,6 +1053,33 @@ static func split_name(text: String, tag: String) -> PackedStringArray:
 	if i < 0:
 		return PackedStringArray([head, rest, ""])
 	return PackedStringArray([head, rest.substr(0, i), rest.substr(i)])
+
+
+## 머리 알림 글: 첫 기록 줄이 틱 0 보다 뒤인 실험마다 "기록은 틱 N 부터"(비교면 "A 기록은 …", " · " 로 이음). 없으면 "".
+func record_note() -> String:
+	var parts := PackedStringArray()
+	for k in series.size():
+		var s := series[k]
+		if s.size() == 0 or s.tick[0] <= 0.0:
+			continue
+		var t := RECORD_NOTE % GraphView.fmt_num(s.tick[0], 0)
+		if is_compare():
+			t = "%s %s" % [s.tag if s.tag != "" else str(k + 1), t]
+		parts.append(t)
+	return " · ".join(parts)
+
+
+func _sync_record_note() -> void:
+	if _record_note == null:
+		return
+	var t := record_note()
+	_record_note.text = t
+	_record_note.visible = t != ""
+
+
+## 머리 알림이 보이면 그 글, 아니면 ""(검사용)
+func record_note_shown() -> String:
+	return _record_note.text if _record_note != null and _record_note.visible else ""
 
 
 ## 범례에 보이는 이름들(검사용)
