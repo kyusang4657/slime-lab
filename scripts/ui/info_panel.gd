@@ -485,7 +485,8 @@ func _relative_button(rid: int, rel: String) -> RelativeButton:
 	b.dead_alpha = UiConfig.num("info.dead_dot_alpha")
 	b.theme_type_variation = SMALL_BUTTON
 	b.dot_color = _hue_color(float(_world.lin_hue[rid])) if rid >= 0 and rid < _world.lin_hue.size() else _c_dim
-	b.focus_mode = Control.FOCUS_NONE
+	# 키보드 초점을 받는다(Tab 으로 가계를 옮겨 가고 Enter 로 누름 — 검토 J16). 스페이스는 실험실이 먼저 받아 멈춤(단추를 누르지 않음)
+	b.focus_mode = Control.FOCUS_ALL
 	# 휠은 바깥 스크롤 창으로 넘긴다(누르기는 단추가 받음)
 	b.mouse_filter = Control.MOUSE_FILTER_PASS
 	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -613,7 +614,8 @@ func _build_header() -> void:
 	_follow.text = "따라가기"
 	_follow.toggle_mode = true
 	_follow.theme_type_variation = SMALL_BUTTON
-	_follow.focus_mode = Control.FOCUS_NONE
+	# 키보드 초점을 받는다(Tab·Enter — 검토 J16; F 키도 같은 일)
+	_follow.focus_mode = Control.FOCUS_ALL
 	_follow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_follow.tooltip_text = "카메라가 이 개체를 따라갑니다 (F)"
 	_follow.toggled.connect(_on_follow_toggled)

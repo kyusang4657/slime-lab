@@ -4,6 +4,7 @@ extends RefCounted
 ## ① 파라미터 패널 값 → 새 실험의 설정·씨앗(헤드리스와 같은 역사) ② 패널로 비교 시작 → 지도 둘, 그래프 계열 둘, 연대기 A/B 줄
 ## ③ 연대기 줄을 실제 마우스로 누름 → 그 실험의 행위자 선택 + 그래프 시점 표시 ④ 패널의 CSV 내보내기 = 헤드리스 실행기 결과(글자까지)
 ## ⑤ 스냅숏 저장 → 열기 = 같은 상태·해시(비교 모드의 -A/-B 파일도) ⑥ 소리 상자 ↔ LabSound.enabled ⑦ 한국어 낱말 단위 줄바꿈.
+## 창은 최소 창(lab.min_width × lab.min_height — 검토 J29 뒤 1280×640).
 
 const MIN_CHECKS := 59
 const DT := 1.0 / 60.0
@@ -171,7 +172,7 @@ func _chronicle_click(t, lab: LabMain) -> void:
 	cp.scroll_to_item(bi)
 	await t.frames(2)
 	var r := cp.item_rect(bi)
-	t.check(r.size.y > 0.0 and lab.get_global_rect().encloses(r), "그 줄이 화면(1280×720) 안에 보임 %s" % str(r))
+	t.check(r.size.y > 0.0 and lab.get_global_rect().encloses(r), "그 줄이 화면(최소 창 %s) 안에 보임 %s" % [str(t.root.size), str(r)])
 	_click(t, r.get_center())
 	await t.frames(1)
 	lab.advance_frame(DT)

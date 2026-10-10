@@ -2,8 +2,16 @@ extends RefCounted
 ## 웹 체험판용 내려받기 검사: 결과 zip 의 내용, 스냅숏 JSON, 파라미터 패널의 웹 모드 단추.
 ## (브라우저 내려받기 호출 자체는 웹에서만 — 데스크톱에서는 같은 바이트를 user://downloads/ 에 저장해 확인)
 ## zip 을 만든 임시 폴더는 숨은 .gdignore 까지 지워져 남지 않는다(혼자·비교). 검사가 쓴 파일도 끝에 지운다.
+## 웹의 임시 폴더 이름은 프로세스 번호 없이, 묶기 실패는 알림 하나에 실패한 파일 이름.
 
-const MIN_CHECKS := 24
+const MIN_CHECKS := 29
+
+
+## 내보내기에서 두 파일을 실패로 돌려주는 실험(실제 디스크 오류 없이 — 엔진 ERROR 줄 없이 — 실패 길을 검사)
+class FailingExperiment extends Experiment:
+	func export_dir(_dir: String, _with_lineage: bool = true) -> PackedStringArray:
+		return PackedStringArray(["summary.json", "timeseries.csv"])
+
 
 
 func run(t) -> void:
@@ -58,6 +66,32 @@ func run(t) -> void:
 	written.append(ProjectSettings.globalize_path("user://downloads/" + lab.last_download_name))
 	t.check(lab.download_results() == "" and lab.last_download_name.contains("-seed3-vs-seed4"), "비교 결과 이름에 두 씨앗: %s" % lab.last_download_name)
 	written.append(ProjectSettings.globalize_path("user://downloads/" + lab.last_download_name))
+	lab.new_experiment("default", {}, 3)
+	# 웹의 임시 폴더 이름: 프로세스 번호 없이 µs + 번호(웹 엔진은 OS.get_process_id() 를 지원하지 않아 내려받을 때마다
+	# 브라우저 콘솔에 엔진 오류 두 줄 — 검토 I39), 데스크톱은 그대로 프로세스 번호
+	var d1 := LabMain.zip_tmp_dir(true)
+	var d2 := LabMain.zip_tmp_dir(true)
+	t.check(d1 != d2 and d1.begins_with(LabMain.WEB_EXPORT_DIR + "/web-") and not d1.contains("/%d-" % OS.get_process_id()),
+			"웹 임시 폴더 이름에 프로세스 번호 없음(%s · %s)" % [d1, d2])
+	t.check(LabMain.zip_tmp_dir(false).begins_with("%s/%d-" % [LabMain.WEB_EXPORT_DIR, OS.get_process_id()]), "데스크톱 임시 폴더 이름은 프로세스 번호")
+	# 묶기 실패: 알림 하나, 어느 실험의 어느 파일인지(검토 I40: 예전엔 "결과를 묶을 수 없습니다" 만 — 파일 이름이 없었고, 패널이
+	# 알림을 하나 더 띄움)
+	var good: Experiment = Experiment.create("default", {}, 3).experiment
+	var bad := FailingExperiment.new()
+	bad.preset = "default"
+	bad.seed_value = 4
+	bad.label = Experiment.default_label("default", {}, 4)
+	bad._adopt(t.make_world({}, 4))
+	lab._adopt_list([good, bad])
+	var msg := lab.download_results()
+	var errs := 0
+	for v in lab.visible_toasts():
+		errs += 1 if v.kind == "error" else 0
+	t.check(msg == "결과를 묶을 수 없습니다: B/summary.json, B/timeseries.csv" and errs == 1 and lab.visible_toasts()[-1].text == msg,
+			"비교 모드 묶기 실패 = 알림 하나·실패한 파일(%s, 오류 알림 %d)" % [msg, errs])
+	t.check(not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(lab.last_zip_tmp_dir)), "실패해도 임시 폴더를 지움")
+	lab._adopt_list([bad])
+	t.check(lab.download_results() == "결과를 묶을 수 없습니다: summary.json, timeseries.csv", "혼자 모드 묶기 실패 = 파일 이름만")
 	lab.new_experiment("default", {}, 3)
 	# 파라미터 패널의 웹 모드
 	var pp: ParamPanel = null

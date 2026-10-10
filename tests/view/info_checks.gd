@@ -9,7 +9,7 @@ const DEATH_GUARD := 1000
 ## 지켜볼 개체의 남은 수명 하한(틱): refresh 와 자식 단추 늘어남을 여러 번 겪도록
 const MIN_LIFE_LEFT := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 55
+const MIN_CHECKS := 56
 ## 1600×900 실험실에서 정보 창 높이(창 높이 − 위쪽 막대 최소 높이) — V07
 const LAB_HEIGHT_1600 := 900.0
 ## V07 을 재 볼 개체 수 한도
@@ -84,6 +84,12 @@ func run(t) -> void:
 		panel.set_follow(true)
 		t.check(fb.button_pressed and follows.size() == 2, "set_follow 는 단추만 맞추고 신호를 내지 않음")
 		panel.set_follow(false)
+	# 키보드: 따라가기·가계 단추가 초점을 받는다(Tab 으로 닿고 Enter 로 누름 — 검토 J16: 예전엔 모두 FOCUS_NONE).
+	# 스페이스는 실험실이 먼저 받아 멈춤(lab_checks)
+	var all_focus := fb != null and fb.focus_mode == Control.FOCUS_ALL and not _buttons(panel).is_empty()
+	for b in _buttons(panel):
+		all_focus = all_focus and b.focus_mode == Control.FOCUS_ALL
+	t.check(all_focus, "따라가기·가계 단추 %d개가 키보드 초점을 받음" % _buttons(panel).size())
 
 	# ── refresh 는 싸다: 자식 수가 그대로면 children_of 를 다시 부르지 않는다 ──
 	var scans := panel.children_scans
