@@ -12,7 +12,7 @@
 | --- | --- |
 | 검토 대상 | `3a7f2c0`(v0.1.0 — 5단계 마무리, 2026-10-08) |
 | 검토·고침 일시 / 담당 | 2026-10-10 / 제작 AI(Claude Code) — 검토는 에이전트 약 280개, 고침은 워크트리 6묶음(g1 시뮬레이션·설정·스냅숏 / g2 실행기·분석 도구 / g3 실험실 / g4 패널 / g5 3D 지도 / g6 빌드·CI) |
-| 고친 커밋 | 묶음별 고침(`f51ed39` ~ `e590dc3`) → 병합(`b968a66` ~ `219fac0`) → 병합 정리(`d2dda28`·`13b074d`·`bafa017` — 묶음 사이 넘김 메모 반영, 규칙 고침 뒤 새 역사에 맞춘 화면 검사·캡처) → 수치 다시 재기·캡처·타임랩스·분석 예시(`bf3209a`) → 문서(이 절·README·VIEW-API, DESIGN) |
+| 고친 커밋 | 묶음별 고침(`f51ed39` ~ `e590dc3`) → 병합(`b968a66` ~ `219fac0`) → 병합 정리(`d2dda28`·`13b074d`·`bafa017` — 묶음 사이 넘김 메모 반영, 규칙 고침 뒤 새 역사에 맞춘 화면 검사·캡처) → 수치 다시 재기·캡처·타임랩스·분석 예시(`bf3209a`) → 문서(이 절·README·VIEW-API, DESIGN) → 최종 확인 고침(11절) |
 | 엔진 | Godot 4.4.1-stable, Compatibility(GL) 렌더러 |
 | 실행 환경 | 클라우드 리눅스 컨테이너 4코어(GPU 없음). 화면은 xvfb + llvmpipe(CPU 소프트웨어 GL), 웹은 헤드리스 Chromium(SwiftShader WebGL2). 오디오 장치 없음(xvfb 실행 로그의 ALSA `ERR_CANT_OPEN` 한 줄은 그 몫 — 스크립트 오류 아님). 여러 에이전트가 CPU 를 나눠 써 시간 수치는 같은 날 같은 조건끼리만 견줌. Windows 내보내기 재현용 wine64 를 설치해 둠 |
 | 범위 | 저장소 전체(시뮬레이션·설정·실행기·분석 도구·3D 지도·실험실·패널·검사·빌드·CI·문서). 포트폴리오 저장소(kyusang4657.github.io)의 10개는 이 저장소 밖 |
@@ -27,15 +27,15 @@
 
 ## 3. 결과 요약
 
-- **최종 판정: 저장소 안의 111개를 고침(코드·검사 95개 + 문서 16개), 그중 I52 는 일부를 까닭과 함께 남김. 포트폴리오 10개는 포트폴리오 저장소 몫(이 기록 때 남음). 자동 검사는 이 컨테이너와 Actions 에서 모두 통과, Pages 배포·1,000세대 5분·`fast_civ` 세대 목표는 실패, Windows·실제 GPU 는 미검증**
+- **최종 판정: 저장소 안의 111개를 고침(코드·검사 95개 + 문서 16개), 그중 I52 는 일부를 까닭과 함께 남김. 최종 독립 확인(11절)에서 일부만 고쳐진 것·새로 찾은 것을 마저 고침. 포트폴리오 10개는 포트폴리오 저장소 몫(이 기록 때 남음). 자동 검사는 이 컨테이너와 Actions 에서 모두 통과, Pages 배포·1,000세대 5분·`fast_civ` 세대 목표는 실패, Windows·실제 GPU 는 미검증**
 - 통과 / 실패 / 미검증: 확인 항목 K01~K14 **9 / 3 / 2**(K09 Pages 배포, K10 1,000세대 5분, K11 `fast_civ` 세대 목표 / K13 Windows·플랫폼 간, K14 실제 GPU). 미검증 전체는 9절
 - 다음 확인 순서: 저장소 소유자가 Pages 를 켜고 체험판 주소가 열리는지(K09) → Windows 실기에서 zip 실행·역사 해시·사용자 폴더·명령줄 안내(K13) → 실제 GPU 에서 실험실 60FPS·웹 속도(K14) → 1,000세대 5분 방안 결정(K10)
 
 | ID | 확인 내용 | 판정 | 근거 |
 | --- | --- | --- | --- |
-| K01 | 규칙 검사 전체(느린 검사 포함) | 통과 | 8절 `RESULT: 351 checks passed, 0 failed` |
-| K02 | 화면 구성 요소 검사(헤드리스) | 통과 | 8절 `RESULT: 1287 passed, 0 failed (view)`, 로그에 `SCRIPT ERROR`·`^ERROR:` 없음 |
-| K03 | 파이썬 검사(분석 도구·실행기 명령줄·빌드·설정 이름표·저장소 규칙) | 통과 | 8절 `Ran 97 tests … OK` |
+| K01 | 규칙 검사 전체(느린 검사 포함) | 통과 | 8절 `RESULT: 360 checks passed, 0 failed` |
+| K02 | 화면 구성 요소 검사(헤드리스) | 통과 | 8절 `RESULT: 1301 passed, 0 failed (view)`(두 번), 로그에 `SCRIPT ERROR`·`^ERROR:` 없음 |
+| K03 | 파이썬 검사(분석 도구·실행기 명령줄·빌드·설정 이름표·저장소 규칙·설계 형식 표) | 통과 | 8절 `Ran 101 tests … OK` |
 | K04 | 실제 화면(xvfb 1600×900·1280×720) 동작·캡처 | 통과 | ui_driver 53·52 passed, 캡처 다시 찍음(7절) |
 | K05 | 고친 것마다 고침을 되돌리면 새 검사가 실패 | 통과(묶음마다 수동 확인) | 4절 "고치기 전" 열(코드 고침 95개 모두) |
 | K06 | 같은 씨앗 → 같은 역사·저장 복원 뒤 이어 돌려도 같음, 이제 밭 단계까지 | 통과 | `test_determinism`·`test_snapshot_roundtrip`(I09·I10), 실행기 `--resume`(test_runner_cli) |
@@ -79,7 +79,7 @@
 | I01 | **높음** | 설정 검사 | sim-labels 의 모든 범위를 `SimConfig.validate` 규칙(`RULES`)으로 — 나눗수 키는 '0 초과', 지도 잡음 칸 1~1024, 감지 반경 0.5~64. 패널은 SimConfig 오류를 그 줄 아래에 | run_tests `test_config_rules`(나눗수 키 0 거부·최솟값에서 NaN 없음·실행기 2), test_sim_labels `test_every_range_is_checked`, param_checks `_advanced_zero`·`_checked_ranges` | 실패: 0 나눗수 키에 0 을 거부(통과한 키: carry.max, plants.max_food … 12개) |
 | I02 | **중간** | 설정 검사 | 절 키에 사전을 넣으면 거부, `validate` 첫 단계 `_check_shape`(빠진·모르는 키·값 종류·배열 길이). 실행기는 세계를 만들다 멈추면 설정 오류 2 | run_tests `test_config_rules`, test_runner_cli `test_section_override_is_config_error` | 실패: 절(body)에 사전을 넣으면 거부 / 실행기 `0 != 2` |
 | I03 | **중간** | 설정 검사 | 정수 키(기본값 파일에 소수점 없이 적힌 키)는 정수만, 모든 키에 하한(부호), 황혼 ≤ 낮 × 낮 비율 ÷ 2·나이 흔들림 < 최대 나이. 설정 오류는 결과 폴더를 보기 전에 | `test_config_rules`, test_runner_cli `test_bad_values_are_config_errors`·`test_config_error_keeps_previous_results` | 실패: 정수 키 population.initial = 150.7 거부 / metab.base = -1.0 거부 |
-| I04 | **중간** | 스냅숏 | `SimSnapshot.validate` 가 하위 키·종류·길이·칸 번호·16진 16자·유한값까지 보고, 깨지면 `.bak` 으로·`.broken` 보관. 실험실은 끊긴 읽기 결과를 실패로(실험 0개 실험실이 되지 않음) | run_tests `test_snapshot_corrupt`(손상 17종), experiment_checks `_load_results`, lab_checks `_args`·`_toast_rules` | 실패: 구조가 틀린 스냅숏 17종을 오류 문장으로 거부(샌 것: civ.discovery_tick 없음 …) / SCRIPT ERROR |
+| I04 | **중간** | 스냅숏 | `SimSnapshot.validate` 가 하위 키·종류·길이·칸 번호·16진 16자·유한값까지 보고, 깨지면 `.bak` 으로·`.broken` 보관. 실험실은 끊긴 읽기 결과를 실패로(실험 0개 실험실이 되지 않음) | run_tests `test_snapshot_corrupt`(손상 17종 → 최종 확인에서 형식·난수 상태 종류 5종 더해 22종), experiment_checks `_load_results`, lab_checks `_args`·`_toast_rules` | 실패: 구조가 틀린 스냅숏 17종을 오류 문장으로 거부(샌 것: civ.discovery_tick 없음 …) / SCRIPT ERROR |
 | I05 | **중간** | 실행기·분석 도구 | `--resume` 과 `--seed`·`--preset`·`--set` 을 함께 주면 인자 오류 2. 이어 돌린 summary.json 은 preset ""·overrides {}·`resumed_from`·`resume_status`, analyze 묶음 이름 snapshot | test_runner_cli `TestResume`(같은 해시·인자 조합), test_analyze `test_snapshot_cell_name` | `AssertionError: 0 != 2 : --seed=9` |
 | I06 | **중간** | 실행기·분석 도구 | 이어 돌릴 스냅숏이 깨져 `.bak` 에서 읽으면 경고 줄, summary.json 에 실제로 읽은 파일·`resume_status = backup` | test_runner_cli `test_resume_from_backup_is_reported` | `AssertionError: '경고' not found …` |
 | I07 | **중간** | 실행기·분석 도구 | summary.json 은 CSV 를 모두 쓴 뒤 마지막에(임시 이름 → 바꾸기), CSV 하나라도 실패면 쓰지 않음. analyze 이어 돌리기는 실패·덜 쓴 결과를 다시 돌림. 실험실 내보내기도 같은 순서 | run_tests `test_recorder_files`, test_analyze `test_failed_or_incomplete_is_rerun`·`test_incomplete_reason`, test_runner_cli(실제 실행기), experiment_checks `_export_order` | 실패: chronicle.csv 를 못 쓰면 summary.json 이 없음 / `Lists differ: [] != ['--seed=1', …]` |
@@ -90,13 +90,13 @@
 | I12 | **중간** | 자동 검사 | 기억 뉴런 0·2 세계 모두에서 세계 안 순전파 = 기준 함수, 기억 입력·되먹임(softsign), 교차 덩어리, 손 계산 순전파 | run_tests `test_world_think_matches`·`test_brain_genetics`·`test_brain_layout_forward` | 실패: 기억 2: 판단 뒤 기억 값 = softsign(기억 출력)(틀린 값 120) |
 | I13 | **중간** | 실험실 화면 | 멸종한 세계는 더 진행하지 않음(실행기의 끝 조건과 같게) — 다시 재생·비교 모드 한쪽 멸종에도 그 틱 그대로, 위쪽 막대 "멸종 · 진행 끝" | experiment_checks `_extinct`·`_extinct_fast`·`_compare_extinct`, lab_checks `_extinction`·`_compare_extinction` | 실패: 멸종 뒤 100틱·10프레임 더 진행시켜도 세계는 멸종한 틱 221 그대로(틱 321, …) |
 | I14 | **중간** | 패널 | 씨앗 칸을 실수 SpinBox 에서 글 칸(십진 정수·64비트)으로 — 식·소수·글자 섞임은 줄 아래 오류, Enter·초점 빠짐·단추·실제 클릭이 같은 규칙 | param_checks `_seed_enter`·`_seed_click`·`_bad_text` | 실패: 씨앗 칸 + Enter: "42 f" → 씨앗 42, "2+3" → 씨앗 5 … |
-| I15 | **중간** | 패널 | 시점 표시가 마지막 기록 줄 뒤면 가로축을 그 틱까지 넓힘(그 세계가 지난 틱만), 배치 열쇠에 시점 틱 | graph_checks `_cursor_tail_checks`, integration4 ③(세 그래프 `last_cursor`) | 실패: 마지막 기록 줄(틱 120) 뒤 사건(틱 126) 줄을 누르면 세 그래프 모두 시점 세로선(0개) |
+| I15 | **중간** | 패널 | 시점 표시가 마지막 기록 줄 뒤면 가로축을 그 틱까지 넓힘(그 세계가 지난 틱만), 배치 열쇠에 시점 틱 | graph_checks `_cursor_tail_checks`(integration4 ③ 의 세 그래프 `last_cursor` 는 그 장면의 첫 밭 틱이 이미 가로축 안이라 I15 를 잡지 못함 — 최종 확인에서 고침을 되돌려 봐도 통과) | 실패: 마지막 기록 줄(틱 120) 뒤 사건(틱 126) 줄을 누르면 세 그래프 모두 시점 세로선(0개) |
 | I16 | **중간** | 빌드·CI·라이선스 | 엔진이 알려 주는 라이선스로 `GODOT-LICENSE.txt`(엔진 MIT·제3자 88개·라이선스 15종)를 만들어 zip·웹 묶음에 고지 파일 넷 | test_build_ci `test_bundles_carry_notices`·`test_license_file_from_engine` | `AssertionError: … 웹 묶음에 고지 파일: ['index.html', …]` |
 | I17 | **중간** | 빌드·CI·라이선스 | 워크플로 모든 단계 bash pipefail, RESULT 줄을 `reason=generations$` 까지 맞춤, 올림 파일이 없으면 실패. 실행기 쓰기 실패 = 종료 코드 3 | test_build_ci `test_every_run_step_uses_pipefail`·`TestWorkflowSteps`, test_runner_cli `TestWriteFailures` | 옛 단계: write_failed + 종료 코드 3 인 실행도 단계 종료 코드 0 |
-| I18 | **중간** | 문서 | DESIGN 8.3 스냅숏 형식을 실제 `to_dict` 의 절·키로(문서 단계 — DESIGN 담당) | — | 문서 |
+| I18 | **중간** | 문서 | DESIGN 8.3 스냅숏 형식을 실제 `to_dict` 의 절·키로(문서 단계 — DESIGN 담당) | test_design_format `test_snapshot_keys_listed`(문서 마무리 `6a8cead` 에서 더함) | 문서 |
 | I19 | 낮음 | 스냅숏 | CSV·JSON 을 쓴 뒤 다시 열어 길이 확인(디스크 가득 = 실패), 검증 실패 `.tmp` 지움, 실패 문장에 파일 이름 | run_tests `test_recorder_files`(16k tmpfs 디스크 가득 재현은 수동) | 실패: 검증 실패 → 임시 파일을 지우고 파일 이름을 담은 실패 문장(`.tmp` 가 남음) |
 | I20 | 낮음 | 실행기·분석 도구 | `--max-ticks`·`--snapshot-every`·`--seed`·`--generations` 를 글자 그대로 검사(1e5·10k·abc 거부), 틱 상한 1e9 | test_runner_cli `test_bad_numbers_rejected`·`test_limits_accepted` | `Lists differ: ['--max-ticks=1e5 → 종료 코드 0', …] != []` |
-| I21 | 낮음 | 실행기·분석 도구 | 같은 `--out` 을 다시 쓰면 실행기 파일만 지우고 새로, 모르는 파일·하위 폴더면 아무것도 지우지 않고 2, 이어 돌릴 스냅숏이 그 폴더 안이면 2 | test_runner_cli `TestOutDir`·`test_resume_inside_out_dir_refused` | `Lists differ: [… 'final.snapshot.json.bak', 'lineage.csv' …] != [… 'run.log', 'summary.json', 'timeseries.csv']` |
+| I21 | 낮음 | 실행기·분석 도구 | 같은 `--out` 을 다시 쓰면 실행기 파일만 지우고 새로, 모르는 파일·하위 폴더면 아무것도 지우지 않고 2, 이어 돌릴 스냅숏이 그 폴더 안이면 2 | test_runner_cli `TestOutDir`·`test_resume_inside_out_dir_refused`·`test_resume_inside_out_dir_by_other_path_refused`(최종 확인) | `Lists differ: [… 'final.snapshot.json.bak', 'lineage.csv' …] != [… 'run.log', 'summary.json', 'timeseries.csv']` |
 | I22 | 낮음 | 실행기·분석 도구 | analyze `--generations` 는 실행기가 읽는 꼴만(1_0·inf 거부), `--godot` 상대 경로는 지금 셸 위치 기준 | test_analyze `test_generations_like_runner`·`test_relative_godot_path` | `SystemExit not raised : 1_0` |
 | I23 | 낮음 | 실행기·분석 도구 | 이어 돌리자마자 끝나도 같은 틱 줄을 두 번 쓰지 않음(실험실과 같은 한 줄) | test_runner_cli `test_resume_that_ends_at_once_writes_one_row` | `Lists differ: ['70', '70'] != ['70']` |
 | I24 | 낮음 | 시뮬레이션 규칙 | 한 틱에 한 번만 짝지음(쿨다운 0 이어도) | run_tests `test_mate_once_per_tick` | 실패: 기본·쿨다운 0·600틱: 한 틱에 두 번 짝지은 부모 76번 |
@@ -112,7 +112,7 @@
 | I34 | 낮음 | 자동 검사 | 합격 기준을 기계 속도에서 뗌: 성능 = 기준 일의 배수(< 1,750), 연결 요소 = BFS 한 번의 10배 안, 화면 예산 = 가짜 시계, 그래프 = 묶음에 넣은 줄 수. µs 는 출력만 | run_tests `test_performance`·`test_components_fast`, lab_checks `_budget_rule`, graph_checks `_long_checks` | 느린 기계 흉내(틱마다 11ms)에서 옛 lab_checks 5개 실패 — 새 검사 0개. 예산 규칙을 깨면 새 검사만 실패 |
 | I35 | 낮음 | 자동 검사 | 자원 0 멸종의 원인까지: 대부분 굶주림, 마지막 틱도 굶주림, 모든 죽음에 원인(제안한 '모두 굶주림' 은 지금 코드에서도 틀려 약한 조건) | run_tests `test_extinction_no_resources` | 굶주림 규칙을 끄면: 실패: 자원 0 의 죽음은 대부분 굶주림(굶주림 0 · 노화 250) — 옛 검사는 통과 |
 | I36 | 낮음 | 자동 검사 | 정적 검사를 허용 목록으로: 숫자는 0·1·2·0.5(1_000·.25·0b·1e6 도 잡음), 전역 함수·메서드 허용 목록, `**`·RandomNumberGenerator 금지 | run_tests `test_static_rules`, test_repo_rules `test_scanner_catches_known_forms` | 실패: 시뮬레이션 코드에 매직 넘버 없음: sim_world.gd:731 1_000, .25, 0b1011 |
-| I37 | 낮음 | 자동 검사 | 화면 검사의 임시 파일·내려받기를 프로세스별 폴더(`…-<PID>`)로 두고 끝에 지움, 패널 스냅숏 시작 폴더를 바꿔 낄 수 있게 | lab_checks·web_checks(임시 폴더), param_checks `_snapshot`, chronicle_checks | 실패: 내려받기는 이 검사의 임시 폴더에(… 실제 user://downloads 아님) |
+| I37 | 낮음 | 자동 검사 | 화면 검사의 임시 파일·내려받기를 프로세스별 폴더(`…-<PID>`)로 두고 끝에 지움, 패널 스냅숏 시작 폴더를 바꿔 낄 수 있게 | lab_checks·web_checks(임시 폴더), param_checks `_snapshot`, chronicle_checks, lab_checks `_command_keys` 의 대화 상자 시작 폴더(최종 확인) | 실패: 내려받기는 이 검사의 임시 폴더에(… 실제 user://downloads 아님) |
 | I38 | 낮음 | 자동 검사 | `series_points(graph, …)` = 그 그래프가 그린 점 수(`GraphView.series_point_count`), 종단 검사는 그래프마다 그린 선(`last_lines`)의 계열 | integration4 `_drawn_series`, graph_checks `_gen_compare_checks`·`_long_checks` | 변이(B 계열을 개체 수 그래프에만): 실패: 그래프 세 개가 저마다 계열 둘을 그림 [[0, 1], [0], [0]] — 옛 검사는 통과 |
 | I39 | 낮음 | 실험실 화면 | 웹 임시 폴더 이름에 프로세스 번호를 쓰지 않음(웹 엔진에는 `get_process_id` 가 없음). 고친 웹판을 Chromium 에서 눌러 엔진 오류 없음 확인 | web_checks | 실패: 웹 임시 폴더 이름에 프로세스 번호 없음(user://web_export/20727-…) |
 | I40 | 낮음 | 실험실 화면 | 웹 묶기 실패 = 알림 하나 + 실패한 파일 이름(비교면 B/…) | web_checks, param_checks `_fake_lab` | 실패: 웹 결과 내려받기 실패 → 오류 알림 하나(2개) |
@@ -120,16 +120,16 @@
 | I42 | 낮음 | 실험실 화면 | 실험실 명령줄 `--seed 5`(띄어 씀)·int64 를 넘는 씨앗은 오류 알림, 알림에 실제로 쓸 값 | lab_checks `_args` | 실패: "--seed 5" → 오류 알림, 기본 씨앗(1) |
 | I43 | 낮음 | 실험실 화면 | 설정 오류·첫 밭 문장의 숫자 뒤 조사를 없애고 정수 키는 정수로("설정 time.day_ticks = 1: 범위 2~100000 밖입니다", "첫 밭 — #N, (x, y) 에 심음") | `test_config_rules`, run_tests `test_farm_rules` | 실패: 범위 오류 문장: 설정 time.day_ticks = 1.0 가 범위 [2, 100000] 밖입니다 |
 | I44 | 낮음 | 패널 | 두뇌 범례 끝 글을 반올림하지 않음(2.5 → "-2.5"·"+2.5") | param_checks `_brain_legend` | 실패: 두뇌 범례 끝(weight_clamp 2.5) = ["-2.5", "+2.5"] (그린 것 ["-2", "+2"]) |
-| I45 | 낮음 | 패널 | 틱 축 비교 값 읽기에서 멸종한 실험은 "멸종 (틱 N)" | graph_checks `_gen_compare_checks` | 실패: 틱 축 비교: 멸종한 뒤 틱의 A 줄 = "A 멸종 (틱 221)" (A — (이 틱 기록 없음)) |
+| I45 | 낮음 | 패널 | 틱 축 비교 값 읽기에서 멸종한 실험은 "멸종 (틱 N)" | graph_checks `_gen_compare_checks`(최종 확인: 기록 간격이 다른 비교의 값 읽기는 `_interval_compare_checks`) | 실패: 틱 축 비교: 멸종한 뒤 틱의 A 줄 = "A 멸종 (틱 221)" (A — (이 틱 기록 없음)) |
 | I46 | 낮음 | 패널 | 시점 이름 상자·멸종 이름을 계열 선 뒤(위)에 그림 | graph_checks(그린 순서 `seq`) | 실패: 시점 이름 상자를 계열 선보다 뒤에 그림 — 선 [2, 3, 4] · 이름 [1] |
 | I47 | 낮음 | 패널 | 행동 이름 "왼쪽 돌기"·"오른쪽 돌기", 정보 창 운반 값에 단위("먹이 0.6") | run_tests `test_action_names`, info_checks `_labels` | 실패: 왼쪽·오른쪽 행동은 제자리 돌기, 이름도 "왼쪽으로"·"오른쪽으로" / 실패: 운반 값에 단위: "0.6" |
 | I48 | 낮음 | 패널 | 멸종 안내가 보이면 클릭 도움말을 숨김 | info_checks `_labels`, lab_checks `_extinction`·`_compare_extinction` | 실패: 멸종 안내 아래에 클릭 도움말이 없음 |
 | I49 | 낮음 | 패널 | 정보 창·실험 조건 패널의 자동 줄바꿈 글을 `UiTheme.keep_words` 로 낱말 단위 | info_checks `_wrap_split`, param_checks(`_split_words`) | 실패: 두뇌 없음 안내가 … 낱말 가운데서 끊기지 않음 ["…두뇌를 그", "릴 수 없습니다."] |
-| I50 | 낮음 | 패널 | 확인·덮어쓰기·스냅숏 대화 상자를 실험실 모양으로(`style_dialog`), 높이를 글에 맞춤, 틱에 쉼표 | param_checks `_confirm` | 실패: 확인 대화 상자 = 실험실 색(바탕 (0.25, 0.25, 0.25, 1.0) …) |
+| I50 | 낮음 | 패널 | 확인·덮어쓰기·스냅숏 대화 상자를 실험실 모양으로(`style_dialog`), 높이를 글에 맞춤, 틱에 쉼표. 최종 확인에서 엔진 파일 대화 상자 안쪽 창(같은 이름 확인)도 | param_checks `_confirm`·`_engine_overwrite` | 실패: 확인 대화 상자 = 실험실 색(바탕 (0.25, 0.25, 0.25, 1.0) …) |
 | I51 | 낮음 | 패널 | 그래프 평균 특성 이름 "감각" → "감지"(정보 창·README 와 같게) | graph_checks `_lab_checks` | 실패: 평균 특성 이름 "감지"(… "틱 600 / 감각 3.00 칸") |
-| I52 | 낮음 | 3D 지도 | 땅·풀포기를 64² 칸 덩어리로 나눠 한 프레임에 덩어리 하나씩·바뀐 것만 갱신(256² 식물 약 23 → 1.7ms), 지도 크기 말풍선에 256×256 이하 권장. **일부 남김**(아래 "남긴 것") | map_checks `_check_big_map_cost` | 실패: 256×256: 한 프레임에 다시 보는 풀포기 55458·칸 65536 ≤ 덩어리 4096칸 |
+| I52 | 낮음 | 3D 지도 | 땅·풀포기를 64² 칸 덩어리로 나눠 한 프레임에 덩어리 하나씩·바뀐 것만 갱신(256² 식물 약 23 → 1.7ms), 지도 크기 말풍선에 256×256 이하 권장, 최종 확인에서 넘는 실험을 열면 경고 알림. **일부 남김**(아래 "남긴 것") | map_checks `_check_big_map_cost`, lab_checks `_big_map` | 실패: 256×256: 한 프레임에 다시 보는 풀포기 55458·칸 65536 ≤ 덩어리 4096칸 |
 | I53 | 낮음 | 3D 지도 | `pick_slime` 이 그린 메시 삼각형과 광선을 교차해 가장 앞 개체(맞지 않으면 예전 반경 고르기) | map_checks `_check_pick_depth` | 실패: 겹친 칸: 앞 개체 몸 위쪽을 누르면 앞 개체(#0 → 1, #1 → 0) |
-| I54 | 낮음 | 3D 지도 | 저장고 문(과 문 앞 자리) 방향 = 남·동·서·북 가운데 지나갈 수 있는 첫 이웃, 저장고 메시도 그쪽으로 | map_checks `_check_store_blocked`·`_check_store_doorstep` | 실패: 남쪽이 막힌 저장고: 문 앞 개체가 지도 안 지나갈 수 있는 칸 위(#2 칸(1,47) → 몸 가운데 (1.50, 48.10) …) |
+| I54 | 낮음 | 3D 지도 | 저장고 문(과 문 앞 자리) 방향 = 남·동·서·북 가운데 지나갈 수 있는 첫 이웃, 저장고 메시도 그쪽으로. 최종 확인에서 붐빌 때 호를 막힌 이웃 쪽으로는 펼치지 않음 | map_checks `_check_store_blocked`·`_check_store_doorstep`·`_check_store_crowded` | 실패: 남쪽이 막힌 저장고: 문 앞 개체가 지도 안 지나갈 수 있는 칸 위(#2 칸(1,47) → 몸 가운데 (1.50, 48.10) …) |
 | I55 | 낮음 | 3D 지도 | 지도 보기 조정 상수 9개를 ui.json 으로(겹침 둘레 상한 = stack_offset × stack_max_k), 소품 메시 수치를 이름 붙은 상수로 | map_checks `_check_ui_tuning`, geo_checks `_named_numbers` | 실패: map_view.gd 에 보기 조정 상수 없음 ["SIDE_WATER_DARK", …] |
 | I56 | 낮음 | 빌드·CI·라이선스 | pages 잡이 main 푸시·"Run workflow" 에서 돎, `enablement` 제거(소유자가 한 번 켬), Pages 묶음 14일 보관 | test_build_ci `test_pages_condition`·`test_pages_steps` | `AssertionError: … Actions 탭 'Run workflow' 도 배포` |
 | I57 | 낮음 | 빌드·CI·라이선스 | Windows 실행 파일에 아이콘·판 정보(rcedit v2.0.0 + wine, `LC_ALL=C.UTF-8`), build_dist 가 내보낸 파일의 판 정보를 확인 | test_build_ci `test_windows_preset_writes_version_info`·`test_export_problems_fail`·`test_export_job_order` | PE 정보가 CompanyName 'Godot Engine'·FileVersion '4.4.1' — 이제 build_dist 가 실패로 봄 |
@@ -167,7 +167,7 @@
 | J02 | **중간** | 시뮬레이션 규칙 | 식물 갱신이 덮는 모든 틱의 (빛 × 계절) 합만큼 자람 — `plants.update_every` 는 성능용(성장량 같음). **기본 역사가 바뀜** | run_tests `test_growth_interval` | 실패: 갱신 간격 1·2·4·7·12·20·60 의 420틱 성장 합이 같음(간격 1: 24995.8 … 60: 0.0) |
 | J03 | **중간** | 시뮬레이션 규칙 | 밭 버려짐을 성장과 떼어 매 틱 ①에서(성장 배수 0 이어도) — **농사 단계 뒤 역사가 바뀜** | run_tests `test_farm_abandon_any_growth` | 실패: farm.growth_mult 0: 밭이 틱 301 까지 남고 … (버려짐 사건 틱 -1) |
 | J04 | **중간** | 실험실 화면 | `_process` 가 엔진이 자른 delta 대신 벽시계 간격을 넘김 — 7.5FPS 아래에서도 "실제 M배" 가 정직 | lab_checks `_slow_process` | 실패: 느린 프레임(400ms): 표시 실제 1.00배 ≈ 틱 ÷ 벽시계 0.33배 |
-| J05 | **중간** | 패널 | 비교 중 스냅숏 저장은 실제로 쓸 -A/-B 파일을 보고 덮어쓰기를 물음 | param_checks `_compare_save` | 실패: 같은 이름으로 다시 저장 → -A/-B 를 적은 덮어쓰기 물음(물음 없이 덮어씀) |
+| J05 | **중간** | 패널 | 비교 중 스냅숏 저장은 실제로 쓸 -A/-B 파일을 보고 덮어쓰기를 물음. 최종 확인에서 엔진 대화 상자는 쓰지 않을 `<이름>.json` 을 묻지 않음(OS 대화 상자는 남김) | param_checks `_compare_save`·`_engine_overwrite` | 실패: 같은 이름으로 다시 저장 → -A/-B 를 적은 덮어쓰기 물음(물음 없이 덮어씀) |
 | J06 | **중간** | 패널 | 저장 대화 상자가 떠 있는 동안 멈춤(이름의 틱 = 파일 안 틱) | param_checks `_save_hold` | 실패: 기본 이름의 틱 = 파일 안 틱(…tick12.json / 파일 틱 36) |
 | J07 | **중간** | 데이터 형식 | 실행기·실험실·analyze 의 CSV 를 BOM 붙은 UTF-8 로(JSON 은 그대로), analyze 는 BOM 이 있어도 읽음 | run_tests `test_recorder_files`·`test_runner`, test_analyze `test_csv_has_bom`·`test_reads_bom_runner_csv` | 실패: timeseries.csv 는 BOM(EF BB BF) 붙은 UTF-8 |
 | J08 | **중간** | 플랫폼·화면 크기 | 배치는 논리 픽셀, 창 `content_scale_factor` 로 화면 배율만큼 UI 를 키움(Windows DPI·macOS·웹 devicePixelRatio, 설정 `ui.lab.ui_scale`) | lab_checks `_screen_fit` | 실패: 배율 2 최소 창: 창 (2560, 1280) · 배율 1.000 → 논리 (2560.0, 1280.0) |
@@ -181,14 +181,14 @@
 | J16 | 낮음 | 실험실 화면 | Ctrl(Cmd)+N·S·O·E 단축키, 초점이 없을 때 Tab, 단추·고르기 상자 키보드 초점(Tab·Enter) | lab_checks `_command_keys`, param_checks `_keyboard`, graph_checks `_keyboard_checks`, chronicle_checks `_keyboard`, info_checks | 실패: 초점이 없을 때 Tab → 파라미터 패널 첫 칸(없음) / 단추·고르기 상자가 키보드 초점을 받음(못 받음: …) |
 | J17 | 낮음 | 패널 | 두뇌 범례·말풍선의 "−"(U+2212) → "-", 글자 범위 검사(화면 글이 나눔고딕 두 굵기에 모두 있음) | param_checks `_font_coverage`·`_brain_legend` | 실패: 화면 글 28파일의 모든 글자가 글꼴 둘에 있음(없음: brain_view.gd U+2212) |
 | J18 | 낮음 | 패널 | 씨앗을 실수로 바꾸지 않음 — 칸 글자 = str(씨앗), 64비트 전체 그대로 | param_checks `_big_seeds`·`_seed`·`_seed_range` | 실패: 칸 글자 = 씨앗 9223372036854775807(칸 "9007199254740992") |
-| J19 | 낮음 | 패널 | 스냅숏을 열면 알림과 그래프 머리에 "기록은 틱 N 부터" | lab_checks `_args`, graph_checks `_snapshot_note_checks` | 실패: 스냅숏에서 연 실험: 머리에 "기록은 틱 466 부터" (보임 "") |
+| J19 | 낮음 | 패널 | 스냅숏을 열면 알림과 그래프 머리에 "기록은 틱 N 부터" | lab_checks `_args`, graph_checks `_snapshot_note_checks`(README 연대기 줄의 예외는 최종 확인에서 문서로) | 실패: 스냅숏에서 연 실험: 머리에 "기록은 틱 466 부터" (보임 "") |
 | J20 | 낮음 | 패널 | 열기 대화 상자가 가장 최근 스냅숏을 골라 둔 채 열리고, 이름을 치면 열기 단추가 켜짐 | param_checks `_open_button` | 실패: 하위 폴더가 있어도 최근 스냅숏()이 골라진 채 열림 |
 | J21 | 낮음 | 문서 | README "상태와 한계" 절(확인한 것·미검증·못 맞춘 목표) | — | 문서 |
 | J22 | 낮음 | 문서 | harsh_winter 를 "혹독한 겨울(멸종 조건)" 으로, 측정 결과를 예설정 주석·CONFIG 예설정 표·README 에 | test_sim_labels `test_stress_preset_is_marked`, run_tests `test_harsh_winter` | `AssertionError: '멸종' not found in '혹독한 겨울'` |
 | J23 | 낮음 | 문서 | README·ANALYSIS 에 Windows(cmd·PowerShell) 안내, analyze 는 따옴표가 붙은 키를 거부·runs.csv command 를 그 OS 셸 따옴표로 | test_analyze `test_quoted_key_rejected`·`test_command_text` | `ValueError not raised : 'mutation.rate=0.08'` |
 | J24 | 낮음 | 원칙 | 이 보고서: 단계마다 결과 요약(최종 판정·통과/실패/미검증 수·다음 확인), B07 "기록" → 미검증, 1,000세대 목표를 S20 실패로 | — | 문서 |
-| J25 | 낮음 | 데이터 형식 | 결과 CSV 열의 코드북(death_cause·구간/누적 값)(문서 단계 — DESIGN 담당) | — | 문서 |
-| J26 | 낮음 | 데이터 형식 | 결과 파일마다 틱 기준(진행 중/진행 뒤)(문서 단계 — DESIGN 담당) | — | 문서 |
+| J25 | 낮음 | 데이터 형식 | 결과 CSV 열의 코드북(death_cause·구간/누적 값)(문서 단계 — DESIGN 담당) | test_design_format `test_result_columns_listed`(`6a8cead`) | 문서 |
+| J26 | 낮음 | 데이터 형식 | 결과 파일마다 틱 기준(진행 중/진행 뒤)(문서 단계 — DESIGN 담당). 최종 확인에서 이정표 `mean_gen`·실험실 알림 "틱 N" 문장을 실제와 같게 | run_tests `test_tick_basis`(최종 확인에서 더함 — 계통으로 다시 센 시계열·사건 `mean_gen` 기준) | 문서 |
 | J27 | 낮음 | 데이터 형식 | lineage·timeseries 값의 뜻(분열 자식 parent_b −1, 유전자 대 반올림 반경, 개체 0 줄)(문서 단계 — DESIGN 담당) | — | 문서 |
 | J28 | 낮음 | 플랫폼·화면 크기 | 웹 창이 폭 1280 보다 좁으면 배율을 줄여 잘리지 않음(0.5 까지) | lab_checks `_screen_fit` | 실패: 웹 1024×700: 창 (1024, 700) · 배율 1.000 → 논리 (1024.0, 700.0) |
 | J29 | 낮음 | 플랫폼·화면 크기 | 첫 창을 작업 영역에 맞춰 줄이고 가운데(제목 표시줄 화면 안), 최소 창 1280×720 → 1280×640 | lab_checks `_screen_fit`·`_fits_height`·`_compare_layout` | 실패: 768 높이 노트북 창: 창 (1350, 688) · 배율 0.956 → 논리 (1412.0, 720.0) |
@@ -204,7 +204,10 @@
 
 | ID | 남은 것 | 까닭 |
 | --- | --- | --- |
-| I52 일부 | 큰 지도에서 지도를 붙이는 시간(512² 약 2.5초, 1024² 약 14초 — 검토 탐침 값)·그리는 삼각형(숨긴 풀포기 포함 512² 약 2,600만)·시뮬레이션 한 틱(256² 약 23ms)은 여전히 칸 수에 비례 | 보이는 풀포기만 앞에 모아 자르기·거리별 줄이기(LOD)는 풀포기 번호가 칸에 고정돼야 하는 점유 줄이기·바뀐 것만 쓰기와 맞지 않음. 화면 밖 덩어리는 엔진이 잘라 냄. 지도 크기 말풍선·CONFIG.md·VIEW-API 에 256×256 이하 권장을 적음 |
+| I52 일부 | 큰 지도에서 지도를 붙이는 시간(512² 약 2.5초, 1024² 약 14초 — 검토 탐침 값)·그리는 삼각형(숨긴 풀포기 포함 512² 약 2,600만)·시뮬레이션 한 틱(256² 약 23ms)은 여전히 칸 수에 비례 | 보이는 풀포기만 앞에 모아 자르기·거리별 줄이기(LOD)는 풀포기 번호가 칸에 고정돼야 하는 점유 줄이기·바뀐 것만 쓰기와 맞지 않음. 화면 밖 덩어리는 엔진이 잘라 냄. 지도 크기 말풍선·CONFIG.md·VIEW-API 에 256×256 이하 권장을 적고, 최종 확인에서 칸 수가 `ui.lab.view_map_side_max`²(256×256)를 넘는 실험을 열면 "화면이 느릴 수 있음 — 큰 지도는 헤드리스 실행기로" 경고 알림 |
+| 저장고 칸의 풀(최종 확인에서 찾음) | 저장고 칸에도 풀이 자라지만 그 칸의 입력·먹기는 저장분만 봐 줍기로만 꺼냄(칸당 몇 개) | 바꾸면 저장고가 생긴 뒤의 모든 역사가 바뀜(사본에서 잼: 기본 씨앗 1·100세대 `171a3a4f1a5f` → `f500ac4b0527`, `fast_civ` 씨앗 5·1,800틱 끝 개체 51 → 250) — CI·웹 결정성 기록·타임랩스·`fast_civ` 표를 모두 다시 재야 해 DESIGN 1.4 의 규칙으로 두고 `test_store_tile_plants` 로 고정 |
+| J05 의 OS 대화 상자 | 비교 중 저장에서 혼자 저장한 `<이름>.json` 이 있으면 운영 체제 파일 대화 상자가 그 파일을 먼저 물음 | OS 동작이라 앱이 막을 수 없음(그 파일은 쓰지 않음). 엔진 대화 상자는 묻지 않고 넘기게 고침 |
+| I54 몸 가장자리 | 붐비는 저장고에서도 몸 가운데는 지나갈 수 있는 칸 위지만, 큰 개체(크기 유전자 × 메시 반지름)의 가장자리는 이웃 바위 칸에 조금 걸칠 수 있음(검증 탐침: 실제 저장고 87곳 × 1~6마리에서 몸 가운데 0, 가장자리 3~28) | 호의 한계는 `slime.radius` 기준 — 개체마다 다른 크기까지 보면 붐비는 저장고의 호가 너무 좁아짐 |
 | I69~I76·I83·I84 | 포트폴리오 저장소의 그림·캡션·검증 표·글꼴 줄바꿈·색 대비·조사 띄어쓰기 | 이 저장소 밖 — 포트폴리오 고침 단계에서 |
 
 **병합 정리에서 반영하지 않은 넘김 메모(선택 항목·확인만 한 것)**
@@ -314,14 +317,14 @@ RESULT: seed=1 generations=1000.0 ticks=112234 pop=250 civ=3(농사) hash=58e2ef
 
 ## 8. 검사 결과
 
-다 찍은 뒤 차례로 혼자 돌린 값:
+다 찍은 뒤 차례로 혼자 돌린 값(규칙·화면·파이썬·ui_driver 는 최종 확인 고침(11절) 뒤 다시 돌린 마지막 값, graph_capture·perf_capture 는 다시 찍을 때의 값):
 
 ```
-godot --headless --path . --script res://tests/run_tests.gd -- --skip-slow   RESULT: 348 checks passed, 0 failed   (94초)
-godot --headless --path . --script res://tests/run_tests.gd                  RESULT: 351 checks passed, 0 failed   (113초, 농사 도달 검사 15.1초 포함)
-godot --headless --path . --script res://tests/run_view_tests.gd             RESULT: 1287 passed, 0 failed (view)   (197초)
-    chronicle 90 · experiment 88 · geo 77 · graph 148 · info 65 · integration4 61 · lab 287 · map 99 · param 256 · smoke 23 · sound 61 · web 32
-python3 -m unittest discover -s tools -p 'test_*.py'                         Ran 97 tests … OK   (57초)
+godot --headless --path . --script res://tests/run_tests.gd -- --skip-slow   RESULT: 357 checks passed, 0 failed   (95초)
+godot --headless --path . --script res://tests/run_tests.gd                  RESULT: 360 checks passed, 0 failed   (검사 합 113초, 농사 도달 검사 15.1초 포함)
+godot --headless --path . --script res://tests/run_view_tests.gd             RESULT: 1301 passed, 0 failed (view)   (197초, 다시 204초 — 같은 결과)
+    chronicle 90 · experiment 88 · geo 77 · graph 149 · info 65 · integration4 61 · lab 293 · map 100 · param 262 · smoke 23 · sound 61 · web 32
+python3 -m unittest discover -s tools -p 'test_*.py'                         Ran 101 tests … OK   (60초)
 xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd
                                                                              RESULT: 53 passed, 0 failed (ui)
 xvfb-run … --resolution 1280x720 --script res://tests/ui_driver.gd           RESULT: 52 passed, 0 failed (ui)
@@ -330,7 +333,7 @@ godot --headless --path . --script res://tests/perf_capture.gd -- --bench      R
 xvfb-run … --resolution 1600x900 --script res://tests/perf_capture.gd         RESULT: live ok
 ```
 
-검사 수는 5단계(171 · 1,064 · 41)에서 규칙 351(`--skip-slow` 348), 화면 1,287, 파이썬 97 로 늘었다. 새 규칙 검사(예): `test_config_rules`·`test_presets_file`·`test_night_threshold`·`test_components_fast`·`test_snapshot_corrupt`·`test_recorder_files`·`test_empty_start`·`test_mate_once_per_tick`·`test_store_max_count`·`test_first_farm_once`·`test_store_takes_pile`·`test_child_energy_cap`·`test_store_built_in_act`·`test_spoil_lifetime`·`test_growth_interval`·`test_farm_abandon_any_growth`·`test_light_curve`·`test_store_not_on_farm`·`test_action_names`·`test_harsh_winter`·`test_farm_rule_values`·`test_civ_rule_values`·`test_runner_guards`. 새 파이썬 검사 파일: `test_runner_cli.py`(실행기 명령줄 — godot 이 없으면 건너뛰지 않고 실패)·`test_build_ci.py`(워크플로·배포판). 화면 검사 실행기는 `--only` 에 모르는 이름이면 실패(종료 코드 1, `RESULT: 0 passed, 1 failed (view)`). 고치기 전 기준선(병합만 한 `219fac0`)의 화면 검사는 `1256 passed, 15 failed` 였고, 병합 정리에서 모두 풀었다(6절의 고정값·검사 쪽 가정). 화면 전체를 두 번 돌려 같은 결과(64배 예산 평균 5.98ms·95% 9.89ms, 빨리 감기 평균 11.35ms·95% 14.53ms — 예산 14ms).
+검사 수는 5단계(171 · 1,064 · 41)에서 규칙 351(`--skip-slow` 348), 화면 1,287, 파이썬 97 로 늘었고, 문서 마무리(`6a8cead`, 파이썬 99)와 최종 확인 고침(11절) 뒤 규칙 360(`--skip-slow` 357), 화면 1,301, 파이썬 101 이다. 새 규칙 검사(예): `test_config_rules`·`test_presets_file`·`test_night_threshold`·`test_components_fast`·`test_snapshot_corrupt`·`test_recorder_files`·`test_empty_start`·`test_mate_once_per_tick`·`test_store_max_count`·`test_first_farm_once`·`test_store_takes_pile`·`test_child_energy_cap`·`test_store_built_in_act`·`test_spoil_lifetime`·`test_growth_interval`·`test_farm_abandon_any_growth`·`test_light_curve`·`test_store_not_on_farm`·`test_action_names`·`test_harsh_winter`·`test_farm_rule_values`·`test_civ_rule_values`·`test_runner_guards`. 새 파이썬 검사 파일: `test_runner_cli.py`(실행기 명령줄 — godot 이 없으면 건너뛰지 않고 실패)·`test_build_ci.py`(워크플로·배포판). 화면 검사 실행기는 `--only` 에 모르는 이름이면 실패(종료 코드 1, `RESULT: 0 passed, 1 failed (view)`). 고치기 전 기준선(병합만 한 `219fac0`)의 화면 검사는 `1256 passed, 15 failed` 였고, 병합 정리에서 모두 풀었다(6절의 고정값·검사 쪽 가정). 화면 전체를 두 번 돌려 같은 결과(64배 예산 평균 5.98ms·95% 9.89ms, 빨리 감기 평균 11.35ms·95% 14.53ms — 예산 14ms).
 
 ## 9. 미검증
 
@@ -340,7 +343,7 @@ xvfb-run … --resolution 1600x900 --script res://tests/perf_capture.gd         
 | U04·J23 | Windows 의 `analyze.py`(코드 페이지 cp949·cp1252 출력, cmd·PowerShell 따옴표)와 README·ANALYSIS 의 Windows 명령 | 리눅스에서 코드 페이지·따옴표 규칙을 흉내 내 검사만 함 |
 | U02′·U02″·B07 | 실제 GPU 에서 200마리 60FPS(혼자·비교)·웹 체험판의 실제 브라우저 속도 | GPU 없음, llvmpipe·SwiftShader 로만 잼 |
 | J08·J29 | 실제 Windows 150%·200%·macOS 레티나의 배율·창 맞춤, Windows 최대화, GNOME/KDE 창 관리자의 첫 창 위치 | 검사는 순수 함수 + xvfb/openbox·Chromium 으로만. 지도 3D 는 논리 해상도로 그려 배율 2 에서 약간 흐림(성능은 배율 1 과 같음) |
-| U07·J05·J06·J20 | 운영 체제(네이티브) 파일 대화 상자: 비교 중 저장에서 혼자 모드 이름 `<이름>.json` 이 이미 있으면 OS 대화 상자가 먼저 덮어쓸지 물음(그 파일은 쓰지 않음, 패널이 실제 -A/-B 를 따로 물음), 저장 중 멈춤이 풀리는 것(`canceled`·`file_selected` 신호)·열기 단추 켜기 | 헤드리스·xvfb 에서는 엔진 대화 상자로만 열림 |
+| U07·J05·J06·J20 | 운영 체제(네이티브) 파일 대화 상자: 비교 중 저장에서 혼자 모드 이름 `<이름>.json` 이 이미 있으면 OS 대화 상자가 먼저 덮어쓸지 물음(OS 동작이라 막을 수 없음 — 그 파일은 쓰지 않고, 패널이 실제 -A/-B 를 따로 물음. 엔진 대화 상자는 최종 확인에서 묻지 않고 넘기게 고침), 저장 중 멈춤이 풀리는 것(`canceled`·`file_selected` 신호)·열기 단추 켜기 | 헤드리스·xvfb 에서는 엔진 대화 상자로만 열림 |
 | B08 | 실제 브라우저에서 사람이 누르는 내려받기 창(zip·JSON) | 묶는 바이트·이름·임시 폴더는 web_checks, 고친 웹판의 "결과 내려받기" 는 Chromium 에서 눌러 엔진 오류 없음(I39)까지만 |
 | U06 | 효과음을 실제 스피커로 | 오디오 장치 없음, 합성 바이트만 검사 |
 | K09·B13 | GitHub Pages 체험판 주소가 열리는지, Release(`v*` 태그) | Pages 꺼짐(소유자 설정), 태그 없음 |
@@ -348,7 +351,7 @@ xvfb-run … --resolution 1600x900 --script res://tests/perf_capture.gd         
 | U10 | 같은 지도 크기에서 패널만 숨긴 프레임 시간 대조 | `perf_capture` 에 그 장면이 없음 |
 | I19 | 실제 디스크 가득(쓰다 잘린 파일) | 16k tmpfs 에서 손으로 재현해 확인, 자동 검사는 실패를 흉내 낸 경로로 |
 
-**알려진 한계:** 큰 지도는 지도 붙이기·그리는 삼각형·시뮬레이션 한 틱이 칸 수에 비례하고, 화면 갱신은 덩어리 수만큼의 프레임에 걸쳐 퍼진다(256² 약 0.5초 — 5절 I52). 저장고에 개체가 많아 호가 넓어지면(`store_slime_arc_max_deg` 260°) 호 끝이 막힌 옆 이웃 쪽으로 갈 수 있다(문 방향만 이웃을 보고 고름). 전경에서 덩어리마다 그리기 순서가 달라 풀포기 잎 뿌리 몇 픽셀이 다르게 그려질 수 있다(1280×720 전경에서 10픽셀). 연대기 줄 고르기·그래프 값 읽기는 마우스 전용이다(키보드 초점은 단추·고르기 상자만).
+**알려진 한계:** 큰 지도는 지도 붙이기·그리는 삼각형·시뮬레이션 한 틱이 칸 수에 비례하고, 화면 갱신은 덩어리 수만큼의 프레임에 걸쳐 퍼진다(256² 약 0.5초 — 5절 I52). 저장고에 개체가 많아 호가 넓어져도 막힌 이웃(바위·물·지도 밖) 쪽으로는 펼치지 않지만(최종 확인), 큰 개체의 몸 가장자리는 이웃 칸에 조금 걸칠 수 있다. 전경에서 덩어리마다 그리기 순서가 달라 풀포기 잎 뿌리 몇 픽셀이 다르게 그려질 수 있다(1280×720 전경에서 10픽셀). 연대기 줄 고르기·그래프 값 읽기는 마우스 전용이다(키보드 초점은 단추·고르기 상자만).
 
 ## 10. Actions
 
@@ -359,6 +362,35 @@ xvfb-run … --resolution 1600x900 --script res://tests/perf_capture.gd         
 | #13 | `bf3209a` 다시 찍기(캡처·타임랩스·분석 예시) | 통과 — 규칙 351, 화면 1,287, `171a3a4f1a5f`, 파이썬 97, `test_performance` 27.1µs·721번 | 통과 | **실패** | 건너뜀(태그 없음) |
 
 pages 실패의 까닭은 그대로다: `actions/configure-pages@v6` 가 "Get Pages site failed … Not Found"(저장소 `has_pages = false`). 워크플로에서 `enablement: true` 를 뺐으므로(I56 — 워크플로 토큰은 Pages 를 켤 수 없음) **저장소 소유자가 Settings → Pages → Build and deployment → Source 를 "GitHub Actions" 로 한 번 바꿔야** 한다. 그 뒤 새 main 푸시, main 에서 Actions 탭 "Run workflow", 또는 "Re-run all jobs" 가 배포한다("Re-run failed jobs" 는 Pages 묶음을 14일 보관하므로 그 안에서만). 배포 뒤 주소가 실제로 열리는지는 미검증(K09).
+
+## 11. 최종 확인(독립 검증 뒤 남은 것)
+
+고침을 마친 뒤 독립 검증자 31명이 문제 120개를 처음부터 다시 재현했다: **111개 고쳐짐 · 8개 일부 · 1개 보류**(I62 — 포트폴리오 쪽 다시 찍기와 함께). 검증하며 새 문제도 찾았다. 이 저장소 쪽의 남은 것과 새 문제를 아래처럼 고쳤다(시뮬레이션 역사는 바뀌지 않음 — 기본·씨앗 1·100세대 `171a3a4f1a5f` 그대로). 코드 고침은 고침을 잠시 되돌려 새 검사가 실패함을 확인했다(마지막 열). 포트폴리오 저장소 쪽(1,000세대 시간 줄·웹 속도 단서·카드 "체험판 공개" 이름표·사이트 바닥 링크 대비 등)은 포트폴리오 단계 몫이다.
+
+| 항목 | 검증에서 남은 것 | 고친 것 | 지키는 검사 | 고치기 전(되돌렸을 때) |
+| --- | --- | --- | --- | --- |
+| I04 일부 | `format`·`rng.world`/`rng.life` 의 종류가 틀리면 SCRIPT ERROR 로 검증을 건너뜀(`format = 1` 이면 통과해 열림) | `validate` 가 종류를 먼저 봄 | run_tests `test_snapshot_corrupt`(22종) | 실패: 구조가 틀린 스냅숏 22종을 오류 문장으로 거부(샌 것: format 숫자, format 사전, rng.world 숫자, rng.life 배열, rng.world null) |
+| J05 일부 | 비교 중 저장에서 엔진 대화 상자가 쓰지도 않을 `<이름>.json` 을 먼저 물음(-A/-B 도 있으면 두 번) | 엔진 대화 상자는 비교 중이면 그 물음을 넘김(OS 대화 상자는 OS 동작이라 남김 — 5절) | param_checks `_engine_overwrite` | 실패: 비교 중 같은 이름(same.json 있음) → 쓰지 않을 same.json 을 묻지 않고 -A/-B |
+| J19 일부 | README 연대기 줄이 예외 없이 "그 시점 세로선" 을 약속 | 스냅숏에서 연 실험의 앞선 줄은 세로선 없이 머리 알림만(문서) | — | 문서 |
+| J26 일부 | DESIGN 8.4 가 이정표 `mean_gen` 을 T+1 상태라 적음(실제는 적힌 틱 T — 9개 중 5개가 한 틱 어긋나게 읽힘), 알림 "틱 N" 을 진행 중 틱에만 둠 | 이정표 = 틱 T 상태, 알림은 사건의 `tick` 그대로(문서) | run_tests `test_tick_basis`(새 — 계통으로 다시 센 시계열·사건 `mean_gen` 기준) | 검사 이빨: 옛 문서대로 읽게 바꾸면 "이정표(틱 197) 1.00 ≠ 줄 198 의 1.05 …", birth ≤ t < death 로 읽으면 "어긋난 줄 399" |
+| I37 일부 | lab_checks 가 Ctrl+S·Ctrl+O 로 실제 `user://experiments` 를 만듦 | 검사가 `snapshot_dir` 도 임시 폴더로(새 사용자 폴더에서 돌린 뒤 `logs` 만 남음) | lab_checks `_command_keys` | 실패: Ctrl+S 대화 상자 시작 폴더 = 이 검사의 임시 폴더(…/slime-lab/experiments — 실제 user://experiments 아님) |
+| I52 일부 | 큰 지도를 열어도 앱 안에 경고가 없음 | 칸 수가 `ui.lab.view_map_side_max`²(256×256)를 넘는 실험을 열면 경고 알림(붙이는 시간·삼각형은 남김 — 5절) | lab_checks `_big_map` | 실패: 지도 257×256 → 경고 알림 하나: [] |
+| I54 일부 | 4마리 이상이면 문 앞 호가 막힌 옆·뒤 이웃(바위·물·지도 밖)으로 다시 돎(원 탐침 4마리 14/348, 6마리 26/522) | 막힌 이웃 쪽으로는 몸이 걸리기 전까지만 펼치고 간격을 줄여 열린 쪽으로(`_arc_limits`) — 검증 탐침(실제 저장고 87곳 × 1~6마리)에서 몸 가운데가 막힌 칸 위 0 | map_checks `_check_store_crowded` | 실패: 붐비는 저장고(막힌 이웃 꼴 11가지 × 4~6마리, 165번 그림) … "4마리 #0 칸(0,0) → 몸 가운데 (-0.02, 0.80)" … |
+| I62 보류 | 포트폴리오 캡션·영상이 예전 씨앗 5 | — | — | 포트폴리오 단계 |
+| 새 (I43 퇴행) | 설정 오류 문장이 64비트를 넘는 수를 INT64_MIN 으로 적음(`--set=time.day_ticks=1e20`) | 그 크기면 정수로 바꾸지 않고 그대로(`SimConfig.INT_TEXT_MAX`) | run_tests `test_config_rules` | 실패: 큰 수 오류 문장: 설정 time.day_ticks = -9223372036854775808: 범위 2~100000 밖입니다 |
+| 새 | 패널 정수 칸의 64비트 넘는 글 → 엔진 `ERROR:` 줄과 INT64_MIN | 씨앗 칸처럼 글자 자릿수를 먼저 보고 그 값 그대로 범위 오류 | param_checks `_seed` | `ERROR: Cannot represent 100000000000000000000 as a 64-bit signed integer` / 실패: 정수 칸의 64비트 밖 글 → … -9223372036854775808.0 … |
+| 새 (I27 형제) | 저장고 칸에서 자라는 풀이 그 칸의 입력·먹기에 안 잡힘 | 규칙으로 문서화(DESIGN 1.4 — 바꾸면 역사가 바뀜, 5절) | run_tests `test_store_tile_plants`(규칙 고정) | 문서 |
+| 새 (I20 의 분석 도구 쪽) | `analyze.py --max-ticks` 0·음수가 조용히 "상한 없음", 상한 위는 모든 실행이 실패 | 실행기와 같은 1~`TICK_MAX` 정수(`sim_config.gd` 에서 읽음) | test_analyze `test_max_ticks_like_runner` | `AssertionError: SystemExit not raised : 0` |
+| 새 (I45 곁) | 기록 간격이 다른 틱 축 비교에서 같은 기준 틱인데 마우스 자리에 따라 B 가 "이 틱 기록 없음" | 다른 실험은 기준 가로 값에 가장 가까운 줄 | graph_checks `_interval_compare_checks` | 실패: … ["552: 기준 0·540, B 줄 틱 600(보임 0)"] |
+| 새 | integration4 ③ 이 I15 를 잡지 못함(그 장면의 첫 밭이 이미 가로축 안) | 4절 I15 지키는 검사 칸을 graph_checks `_cursor_tail_checks` 로 바로잡고 검사 주석도 | — | 문서 |
+| 새 (I50 곁) | 엔진 파일 대화 상자 안쪽의 같은 이름 확인 창이 기본 회색에 영어 | 안쪽 창 모두 `style_dialog`, 같은 이름 확인은 한국어·기본 초점 취소 | param_checks `_engine_overwrite` | 실패: … (Please Confirm... / File "…/same.json" already exists. … / 바탕 (0.25, 0.25, 0.25, 1.0)) |
+| 새 (I21 곁) | `--resume` 스냅숏을 링크(또는 대소문자만 다른 경로)로 결과 폴더 안에서 주면 그 스냅숏을 지움 | 지울 파일 가운데 크기·내용이 같은 것이 있으면 거부(2) | test_runner_cli `test_resume_inside_out_dir_by_other_path_refused` | `AssertionError: 0 != 2 : --resume=…/orig_link/snapshot-35.json --out=…/orig` |
+| 새 (I13 곁) | `lab.pause_on_extinction` 을 끄면 멸종한 프레임의 빈 반복을 틱으로 셈(빨리 감기에서 221틱을 3,413틱으로) | 모두 멸종하면 그 프레임의 반복을 멈춤 | lab_checks `_extinction` | 실패: 끈 경우에도 advance_frame 이 센 틱 223 = 실제로 나아간 틱 221 / 센 3413 = 틱 221 |
+| 새 (문서) | 파이썬 검사 수 97(실제 99)·`test_design_format` 이 목록에 없음, I18·J25 지키는 검사 "—" | README·ANALYSIS·DESIGN 12절·4절·8절(이제 101) | — | 문서 |
+| 새 (문서) | README 첫 줄 "121개 고침" 이 3절(저장소 111개, 포트폴리오 10개 남음)과 어긋남 | README 첫 줄 | — | 문서 |
+| I44 곁 | `brain.weight_clamp` 1e-6 아래면 범례 "-0/+0" | 그대로 — 그런 값은 실험 뜻이 없고 고치기 전과 같음 | — | — |
+
+"곁효과 주의" 로 남은 I05·I07·I20·I26·I27·I45·I50·I13·I21·I44 는 위 행으로 고쳤거나(I13·I20·I21·I27·I45·I50) 실제 문제가 아니었다(I05 — 이어 돌린 결과를 다른 예설정 요청과 견주면 mismatch 로 보는 것은 의도한 보수적 동작, I07·I26 — 퇴행 없음, I44 — 위).
 
 # 1단계 5/5: 빌드·배포·마무리 (v0.1.0)
 
@@ -415,7 +447,7 @@ pages 실패의 까닭: `actions/configure-pages`(enablement: true)가 "Get Page
 | R5 | 규칙 검사(`run_tests.gd`)가 실제 사용자 폴더에 `test_snap`·`test_runner`(숨은 `.gdignore` 포함)를 남김 | 프로세스마다 따로인 임시 폴더(`tmp_dir`)를 쓰고 끝에 통째로 지움(`remove_tree`, 숨은 파일까지) | run_tests 2개 · 검사 뒤 사용자 폴더에 `downloads`·`experiments`·`logs`·`shader_cache` 만 남음(확인) |
 | R6 | 문서: VIEW-API 범례 문단이 옛 꼬리("· 바꾼 값 K개"), DESIGN §19 의 Experiment 가 멸종 줄·끝 줄 없이 적힘 | VIEW-API(범례·지도 표지·Experiment·멸종)·DESIGN §19·README·W04 를 지금 동작으로 | — |
 
-검사 결과(이 고침 뒤, 같은 기계에서 차례로 — 검토 고침 뒤 다시 잼: 규칙 351·`--skip-slow` 348, 화면 1,287, 파이썬 97, 맨 앞 절 8):
+검사 결과(이 고침 뒤, 같은 기계에서 차례로 — 검토 고침 뒤 다시 잼: 규칙 360·`--skip-slow` 357, 화면 1,301, 파이썬 101, 맨 앞 절 8):
 
 ```
 godot --headless --path . --script res://tests/run_tests.gd                  RESULT: 171 checks passed, 0 failed   (88초, 농사 도달 검사 24.4초 포함)
