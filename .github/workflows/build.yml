@@ -1,9 +1,14 @@
 # main 푸시·PR·수동 실행·v* 태그마다:
 #   test    — 헤드리스 검사(규칙 run_tests · 화면 run_view_tests · 100세대 짧은 실험 · 분석 도구 unittest)
-#   export  — 검사를 통과하면 Linux·Windows·웹(체험판) 내보내기, Linux 실행 파일을 헤드리스로 잠깐 띄워 확인, 산출물 올림
-#   pages   — main 푸시면 웹 체험판을 GitHub Pages(https://kyusang4657.github.io/slime-lab/)에 배포
-#   release — v* 태그면 Linux·Windows zip 을 GitHub Release 에 붙임
+#   export  — 검사를 통과하면 Linux·Windows·웹(체험판) 내보내기와 고지 파일 넣기·zip 묶기(tools/build_dist.sh),
+#             Linux 실행 파일을 빈 폴더에서 헤드리스로 잠깐 띄워 확인(tools/smoke_run.sh), 산출물 올림
+#   pages   — main 의 푸시·수동 실행(Run workflow)이면 웹 체험판을 GitHub Pages(https://kyusang4657.github.io/slime-lab/)에 배포
+#   release — v* 태그면 Linux·Windows zip 을 GitHub Release 에 붙임(태그는 project.godot 의 v<config/version> 이어야 함)
+# 모든 run 단계는 bash -eo pipefail(아래 defaults): 파이프 앞 명령(godot·실행 파일)의 종료 코드도 단계 실패가 된다.
 # 검사 로그에 SCRIPT ERROR 가 있으면 실패(Godot 은 오류 난 함수만 멈추고 계속 돌아 RESULT 가 0 failed 로 남을 수 있음).
+# 내려받는 Godot·템플릿은 공식 SHA512-SUMS.txt(그 파일의 SHA-512 는 아래 env 에 박아 둠)로, rcedit 는 박아 둔 SHA-512 로 확인한다.
+# 이 파일의 단계·도구는 tools/test_build_ci.py 가 가짜 godot·실행 파일로 흉내 내어 검사한다.
+# 바탕: 같은 저작권자의 little-monster-village 의 같은 파일(CREDITS.md).
 name: build
 
 on:
@@ -16,54 +21,63 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 env:
   GODOT_VERSION: 4.4.1
+  # https://github.com/godotengine/godot/releases/download/4.4.1-stable/SHA512-SUMS.txt 의 SHA-512
+  GODOT_SHA512_SUMS: "ec6cbdc9257a8f2545ca978d2ba52ae383bf6bd3b94365531553a19d3a2833fc1567dedadbc14d220075b5eefeb1352b03e288a8f046e6c0bdd1b25e12b2bd79"
+  # Windows 실행 파일의 제품 이름·저작권·아이콘을 바꾸는 도구(export_presets.cfg 의 application/modify_resources)
+  RCEDIT_VERSION: v2.0.0
+  RCEDIT_SHA512: "c13e7ffd60169c348e16a3ea59a171c1777acdb241f950c11a6e9b69c955a3a4eb3432182aee7f489a87a555d0bd51fde3b597826f7c1e6488f1f5097359ab4d"
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Ubuntu 26 으로 옮기는 ubuntu-latest 대신 검증한 판에 고정
+    runs-on: ubuntu-24.04
+    # 평소 5분 남짓. 화면 검사가 await 에서 멈춰도 6시간(기본값) 동안 러너를 붙잡지 않게
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Godot 내려받기
-        run: |
-          set -e
-          B="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
-          curl -sSL -o godot.zip "$B/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
-          unzip -q godot.zip && mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 godot && chmod +x godot
-          rm godot.zip
+      - name: Godot 내려받기(SHA-512 확인)
+        run: bash tools/fetch_godot.sh editor .
 
       - name: 가져오기
         run: ./godot --headless --path . --import 2>&1 | tail -3
 
       - name: 규칙 검사(run_tests)
         run: |
-          ./godot --headless --path . --script res://tests/run_tests.gd 2>&1 | tee /tmp/t1.log | grep -E "^(PASS|FAIL|RESULT)|실패|성능|농사 도달|SCRIPT ERROR"
-          grep -q "^RESULT: .* 0 failed" /tmp/t1.log
+          ./godot --headless --path . --script res://tests/run_tests.gd 2>&1 | tee "$RUNNER_TEMP/t1.log" | grep -E "^(PASS|FAIL|RESULT)|실패|성능|농사 도달|SCRIPT ERROR"
+          grep -q "^RESULT: .* 0 failed" "$RUNNER_TEMP/t1.log"
           # 설정·스냅숏 검사는 일부러 깨진 JSON 을 읽어 엔진 "ERROR: Parse JSON failed" 를 내므로 여기서는 SCRIPT ERROR 만 본다
-          if grep -n "SCRIPT ERROR" /tmp/t1.log; then exit 1; fi
+          if grep -n "SCRIPT ERROR" "$RUNNER_TEMP/t1.log"; then exit 1; fi
 
       - name: 화면 검사(run_view_tests, 헤드리스)
         run: |
-          ./godot --headless --path . --script res://tests/run_view_tests.gd 2>&1 | tee /tmp/t3.log | grep -E "^(PASS|FAIL|RESULT)|실패|MapView 시간|예산\(|SCRIPT ERROR|^ERROR:"
-          grep -q "^RESULT: .* 0 failed (view)" /tmp/t3.log
+          ./godot --headless --path . --script res://tests/run_view_tests.gd 2>&1 | tee "$RUNNER_TEMP/t3.log" | grep -E "^(PASS|FAIL|RESULT)|실패|MapView 시간|예산\(|SCRIPT ERROR|^ERROR:"
+          grep -q "^RESULT: .* 0 failed (view)" "$RUNNER_TEMP/t3.log"
           # 화면 검사 로그에는 엔진 오류가 하나도 없어야 한다(검사 모듈이 중간에 끊겨도 PASS 로 보이지 않게)
-          if grep -nE "SCRIPT ERROR|^ERROR:" /tmp/t3.log; then exit 1; fi
+          if grep -nE "SCRIPT ERROR|^ERROR:" "$RUNNER_TEMP/t3.log"; then exit 1; fi
 
       - name: 헤드리스 실험 짧게(100세대)
         run: |
-          ./godot --headless --path . --script res://tests/run_experiment.gd -- --seed=1 --generations=100 --out=results/ci --quiet 2>&1 | tee /tmp/t2.log | tail -1
-          grep -q "^RESULT: .*reason=generations" /tmp/t2.log
-          if grep -n "SCRIPT ERROR" /tmp/t2.log; then exit 1; fi
+          ./godot --headless --path . --script res://tests/run_experiment.gd -- --seed=1 --generations=100 --out=results/ci --quiet 2>&1 | tee "$RUNNER_TEMP/t2.log" | tail -1
+          # 줄 끝까지 맞춘다: 결과 파일 쓰기 실패면 RESULT 끝에 " write_failed=…" 가 붙고 종료 코드 3
+          grep -q "^RESULT: .*reason=generations$" "$RUNNER_TEMP/t2.log"
+          if grep -nE "SCRIPT ERROR|^ERROR:" "$RUNNER_TEMP/t2.log"; then exit 1; fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: experiment-seed1-100gen
           path: results/ci
           retention-days: 14
+          if-no-files-found: error
 
       # 오프라인 분석 도구(파이썬). GODOT 를 주면 실제 실행기로 아주 짧은 묶음도 한 번 돌린다.
-      - name: 분석 도구 검사(tools/test_analyze.py)
+      - name: 분석 도구 검사(tools/test_*.py)
         env:
           GODOT: ${{ github.workspace }}/godot
         run: |
@@ -74,70 +88,72 @@ jobs:
 
   export:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # 예전 실행은 1분 안쪽(wine 설치가 더해짐). 멈춰도 6시간 동안 러너를 붙잡지 않게
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Godot 와 내보내기 템플릿(Linux·Windows·웹 스레드 없음) 내려받기
+      - name: Godot 와 내보내기 템플릿(Linux·Windows·웹 스레드 없음) 내려받기(SHA-512 확인)
         run: |
-          set -e
-          B="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
-          curl -sSL -o godot.zip "$B/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
-          unzip -q godot.zip && mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 godot && chmod +x godot
-          curl -sSL -o templates.tpz "$B/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
-          T="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
-          mkdir -p "$T"
-          unzip -q -j templates.tpz templates/linux_release.x86_64 templates/windows_release_x86_64.exe \
-            templates/web_nothreads_release.zip templates/version.txt -d "$T"
-          rm godot.zip templates.tpz
+          bash tools/fetch_godot.sh editor .
+          bash tools/fetch_godot.sh templates "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable" \
+            linux_release.x86_64 windows_release_x86_64.exe web_nothreads_release.zip version.txt
 
       - name: 가져오기
         run: ./godot --headless --path . --import 2>&1 | tail -3
 
-      - name: 내보내기(Linux·Windows·웹)
+      # 편집기 설정의 rcedit·wine 경로가 있어야 Windows 실행 파일 정보(회사·제품·설명·저작권·판)와 아이콘이 바뀐다.
+      # 없으면 엔진이 "Could not start rcedit" 경고만 내고 'Godot Engine' 그대로 내보낸다(build_dist.sh 가 그 경고로 실패).
+      # rcedit 가 wine 안에서 죽으면 엔진은 경고도 없이 넘어가므로 build_dist.sh 가 내보낸 파일의 정보를 직접 확인한다.
+      - name: Windows 실행 파일 정보 도구(wine·rcedit) 준비
         run: |
-          set -e
-          mkdir -p build/linux build/windows build/web
-          ./godot --headless --path . --export-release "Linux" build/linux/slime-lab.x86_64 2>&1 | grep -iv alsa | tail -2
-          ./godot --headless --path . --export-release "Windows Desktop" build/windows/slime-lab.exe 2>&1 | grep -iv alsa | tail -2
-          ./godot --headless --path . --export-release "Web" build/web/index.html 2>&1 | grep -iv alsa | tail -2
-          test -s build/linux/slime-lab.x86_64 && test -s build/windows/slime-lab.exe
-          test -s build/web/index.html && test -s build/web/index.wasm && test -s build/web/index.pck
-          touch build/web/.nojekyll
-          ls -la build/*
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends wine64
+          test -x /usr/lib/wine/wine64
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/rcedit.exe" \
+            "https://github.com/electron/rcedit/releases/download/${RCEDIT_VERSION}/rcedit-x64.exe"
+          echo "${RCEDIT_SHA512}  $RUNNER_TEMP/rcedit.exe" | sha512sum -c -
+          C="$HOME/.config/godot"
+          mkdir -p "$C"
+          printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/windows/rcedit = "%s"\nexport/windows/wine = "%s"\n' \
+            "$RUNNER_TEMP/rcedit.exe" /usr/lib/wine/wine64 > "$C/editor_settings-$(echo "$GODOT_VERSION" | cut -d. -f1,2).tres"
 
-      - name: Linux 실행 파일 잠깐 띄워 보기(헤드리스, 오류 없이 200프레임)
-        run: |
-          ./build/linux/slime-lab.x86_64 --headless --quit-after 200 2>&1 | tee /tmp/run.log | grep -v ALSA | tail -5
-          if grep -nE "SCRIPT ERROR" /tmp/run.log; then exit 1; fi
+      # 판 확인(태그 = v<config/version>) → 세 판 내보내기(기록에 WARNING·ERROR 가 있으면 실패) → GODOT-LICENSE.txt 만들기 →
+      # LICENSE·CREDITS.md·OFL·GODOT-LICENSE.txt 를 zip 과 웹 묶음에 넣기
+      - name: 내보내기·고지 넣기·묶기(Linux·Windows·웹)
+        env:
+          GODOT: ${{ github.workspace }}/godot
+          # wine 이 rcedit 에 한글 제품 이름을 넘길 때 깨지지 않게
+          LC_ALL: C.UTF-8
+        run: bash tools/build_dist.sh build
 
-      - name: 묶기(zip, 라이선스·출처·글꼴 라이선스 포함)
-        run: |
-          set -e
-          for p in linux windows; do
-            cp LICENSE CREDITS.md assets/fonts/OFL-NanumGothic.txt build/$p/
-            (cd build/$p && zip -q -r ../slime-lab-0.1.0-$p.zip .)
-          done
-          ls -la build/*.zip
+      - name: Linux 실행 파일 잠깐 띄워 보기(빈 폴더에서 헤드리스, 메인 장면을 읽고 오류 없이 200프레임)
+        run: bash tools/smoke_run.sh build/linux/slime-lab.x86_64 200
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: slime-lab-linux
-          path: build/slime-lab-0.1.0-linux.zip
+          path: build/slime-lab-${{ env.SLIME_LAB_VERSION }}-linux.zip
           retention-days: 30
-      - uses: actions/upload-artifact@v4
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
         with:
           name: slime-lab-windows
-          path: build/slime-lab-0.1.0-windows.zip
+          path: build/slime-lab-${{ env.SLIME_LAB_VERSION }}-windows.zip
           retention-days: 30
-      - uses: actions/upload-pages-artifact@v3
+          if-no-files-found: error
+      # 기본 보존 1일이면 다음 날 'Re-run failed jobs' 로 pages 만 다시 돌릴 때 묶음이 없어 배포가 실패한다
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: build/web
+          retention-days: 14
 
   pages:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: export
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       pages: write
       id-token: write
@@ -148,20 +164,21 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
+      # Pages 켜기(Settings → Pages → Source: GitHub Actions)는 소유자가 한 번 한다. GITHUB_TOKEN 으로는 켤 수 없다
+      # (enablement: true 는 'Resource not accessible by integration' 으로 실패).
+      - uses: actions/configure-pages@v6
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: export
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: slime-lab-*
           merge-multiple: true
