@@ -33,6 +33,8 @@ const MEM_LABEL_DARKEN := 0.15
 var weight_clamp := 4.0
 ## 열지도 전체가 들어가야 하는 너비(픽셀, INF = 제한 없음). set_genome 전에 넣는다(InfoPanel 이 창 폭에서 계산).
 var max_width := INF
+## 마지막으로 그린 범례 양 끝 글(검사용, legend_texts)
+var last_legend := PackedStringArray()
 
 var _L: Dictionary = {}
 var _genome := PackedFloat32Array()
@@ -213,6 +215,7 @@ func _get_tooltip(at_position: Vector2) -> String:
 
 func _draw() -> void:
 	_font = get_theme_default_font()
+	last_legend = PackedStringArray()
 	if not has_genome():
 		var msg := "두뇌 기록 없음"
 		var sz := _font.get_string_size(msg, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs)
@@ -283,7 +286,7 @@ func _draw() -> void:
 	if n_out > SimBrain.BASE_OUTPUTS:
 		var my := y2 + float(SimBrain.BASE_OUTPUTS) * _cell - _gap * 0.5
 		draw_line(Vector2(x0 - _gap, my), Vector2(x0 + float(n_hid) * cw, my), _c_accent, 1.0)
-	# ⑤ 범례: −상한 [음수 … 0 … 양수] +상한
+	# ⑤ 범례: -상한 [음수 … 0 … 양수] +상한
 	var yl := _y_legend() + (_legend_h - LEGEND_BAR) * 0.5
 	var bw := float(n_hid) * cw - _gap
 	for k in LEGEND_STEPS:
@@ -292,8 +295,18 @@ func _draw() -> void:
 		draw_rect(Rect2(x0 + f0 * bw, yl, bw / float(LEGEND_STEPS) + 0.5, LEGEND_BAR), _wcolor(wv))
 	draw_line(Vector2(x0 + bw * 0.5, yl - 2.0), Vector2(x0 + bw * 0.5, yl + LEGEND_BAR + 2.0), _c_dim, 1.0)
 	var tb := yl + (LEGEND_BAR + asc - desc) * 0.5
-	_label_right("%s%.0f" % ["−", weight_clamp], tb, _c_dim)
-	draw_string(_font, Vector2(x0 + bw + LABEL_PAD, tb), "+%.0f" % weight_clamp, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, _c_dim)
+	var ends := legend_texts(weight_clamp)
+	last_legend = ends
+	_label_right(ends[0], tb, _c_dim)
+	draw_string(_font, Vector2(x0 + bw + LABEL_PAD, tb), ends[1], HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, _c_dim)
+
+
+## 범례 양 끝 글 [음수 끝, 양수 끝]: 상한 그대로(정수면 정수, 아니면 필요한 소수 자릿수 — 2.5 → "-2.5"·"+2.5").
+## 검토 I44: "%.0f" 라 2.5 가 "±2", 0.5 가 "±0" 으로 색 눈금과 어긋났음. 빼기는 '-'(U+002D) — 수학 빼기 '−'(U+2212)는
+## 나눔고딕에 없어 시스템 글꼴이 없는 웹에서 네모로 보였음(검토 J17).
+static func legend_texts(clamp_w: float) -> PackedStringArray:
+	var v := GraphView.fmt_num(clamp_w, GraphView.decimals_for(clamp_w))
+	return PackedStringArray(["-" + v, "+" + v])
 
 
 ## 줄 이름 칸에 오른쪽 맞춤으로 쓴다(baseline = 글자 기준선 y).

@@ -158,9 +158,9 @@ var draw_count := 0
 var last_lines: Array[Dictionary] = []
 ## 마지막으로 그린 발견 표시(검사용): {series, stage, x, labeled}
 var last_markers: Array[Dictionary] = []
-## 마지막으로 그린 멸종 표시(검사용): {series, x, text, dashed, rect}
+## 마지막으로 그린 멸종 표시(검사용): {series, x, text, dashed, rect, seq}
 var last_extinct: Array[Dictionary] = []
-## 마지막으로 그린 시점 표시(검사용, 없으면 빈 배열): {series(틱 축 = -1), x(픽셀), data_x, tick, text, rect}
+## 마지막으로 그린 시점 표시(검사용, 없으면 빈 배열): {series(틱 축 = -1), x(픽셀), data_x, tick, text, rect, seq}
 var last_cursor: Array[Dictionary] = []
 ## 마지막으로 그린 저장고·밭 띠 눈금 범위 글(검사용): {lane, text, rect}
 var last_lane_labels: Array[Dictionary] = []
@@ -174,6 +174,8 @@ var last_hover_px := NAN
 var dash_skipped := 0
 ## 묶음을 처음부터 다시 만든 횟수(검사용: 새 줄만 오면 늘지 않음)
 var rebuild_count := 0
+## 마지막 _draw 가 묶음에 새로 넣은 줄 수(선마다 합, 검사용 — 그리기 일이 새 줄 수에 비례하는지 시계 없이 봄, I34)
+var last_fed_rows := 0
 
 # 지금 배치(_layout 결과)
 var _x0 := 0.0
@@ -198,6 +200,11 @@ var _runs_key := []
 var _hover_layer: HoverLayer
 ## 점선 조각을 모으는 버퍼(_xdash_seg 가 더함)
 var _dash_buf := PackedVector2Array()
+## 계열 선 위에 그릴 이름(시점 이름 상자·멸종 이름): {text, pos, color, box(Rect2, 상자 없으면 크기 0), record(그린 순서 seq 를 적을 검사용 사전)}.
+## 세로선은 선 아래, 이름은 계열을 다 그린 뒤(검토 I46: 85% 바탕 상자를 데이터 선이 덮어 "틱 N" 이 읽히지 않았음)
+var _label_jobs: Array[Dictionary] = []
+## 이번 _draw 에서 그린 순서(검사용: last_lines·last_cursor·last_extinct 의 seq — 이름이 선보다 뒤인지)
+var _seq := 0
 
 # ── 설정 값 ──
 var _font: Font
@@ -476,12 +483,13 @@ func point_px(index: int, row: int, col: int) -> Vector2:
 	return Vector2(x, _value_y(index, col, s.cols[col][row]))
 
 
-## 지금 크기·데이터로 배치를 계산(그리기 없이). 검사·마우스·그리기가 부른다. 크기·데이터·가로축·고르기가
-## 앞 계산 때와 같으면 그대로 둔다(마우스가 움직일 때마다 눈금 글 폭을 다시 재지 않게).
+## 지금 크기·데이터로 배치를 계산(그리기 없이). 검사·마우스·그리기가 부른다. 크기·데이터·가로축·고르기·시점 표시가
+## 앞 계산 때와 같으면 그대로 둔다(마우스가 움직일 때마다 눈금 글 폭을 다시 재지 않게). 시점 표시가 마지막 기록 줄
+## 뒤면 가로축이 그 자리까지 넓어지므로 시점도 열쇠에 든다(I15).
 func layout_now() -> void:
 	if panel == null:
 		return
-	var key: Array = [size, panel.epoch, panel.data_rev, panel.x_mode, panel.trait_index, panel.show_flows, panel.series.size()]
+	var key: Array = [size, panel.epoch, panel.data_rev, panel.x_mode, panel.trait_index, panel.show_flows, panel.series.size(), panel.cursor_tick]
 	if key == _layout_key:
 		return
 	_layout_key = key
@@ -708,17 +716,15 @@ func _draw() -> void:
 	last_lane_labels.clear()
 	last_x_labels.clear()
 	last_flow_key = ""
+	_label_jobs.clear()
+	_seq = 0
+	last_fed_rows = 0
 	# 마우스 겹은 선·범위가 바뀌면 함께 다시(점 높이가 세로 범위를 따름)
 	_hover_layer.queue_redraw()
 	if panel == null:
 		return
 	layout_now()
-	var key := [_x0, _x1, int(plot.size.x), panel.x_mode, panel.epoch]
-	if key != _runs_key:
-		_runs_key = key
-		_runs.clear()
-		_cols.clear()
-		rebuild_count += 1
+	_sync_runs()
 	var total := 0
 	for s in panel.series:
 		total += s.size()
@@ -736,7 +742,19 @@ func _draw() -> void:
 	# B 를 먼저(아래), A 를 위에
 	for si in range(panel.series.size() - 1, -1, -1):
 		_draw_series(si)
+	_draw_label_jobs()
 	last_draw_us = Time.get_ticks_usec() - t0
+
+
+## 모아 둔 이름(시점 이름 상자·멸종 이름)을 선 위에 그린다
+func _draw_label_jobs() -> void:
+	for j in _label_jobs:
+		var box: Rect2 = j.box
+		if box.size.x > 0.0:
+			draw_style_box(_cursor_style, box)
+		draw_string(_font, j.pos, str(j.text), HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, j.color)
+		_seq += 1
+		(j.record as Dictionary).seq = _seq
 
 
 ## 가로 눈금선과 세로축 글. labels = false(기록 없음)면 선만(뜻 없는 눈금 값을 보이지 않게).
@@ -900,6 +918,7 @@ func _draw_flow_key() -> void:
 
 ## 발견 표시: 기술 단계 그래프는 위 띠에 단계 이름까지, 다른 그래프는 흐린 세로선만(ui.graph.markers_on_all).
 ## 개체 수 그래프에는 멸종 표시(위험 색) — 비교 모드면 "A 멸종"·"B 멸종"(B 는 점선), 이름이 겹치면 한 줄씩 아래로.
+## 멸종 이름은 그림 영역 안이라 시점 이름처럼 계열 선 위에 그린다(_label_jobs, I46).
 func _draw_markers() -> void:
 	var y_top := plot.position.y
 	var y_bot := plot.end.y
@@ -958,13 +977,14 @@ func _draw_markers() -> void:
 					rect.position.y += _lh
 					guard += 1
 				ext_rects.append(rect)
-				draw_string(_font, Vector2(lx, rect.position.y + _ascent), t, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, _c_danger)
-				last_extinct.append({series = si, x = px, text = t, dashed = dashed, rect = rect})
+				var rec := {series = si, x = px, text = t, dashed = dashed, rect = rect, seq = -1}
+				_label_jobs.append({text = t, pos = Vector2(lx, rect.position.y + _ascent), color = _c_danger, box = Rect2(), record = rec})
+				last_extinct.append(rec)
 
 
 ## 연대기 등이 요청한 시점. 틱 축 = 세로선 하나. 세대 축 = 실험마다 그 틱에 그 실험이 있던 평균 세대에(같은 시점도
 ## 실험마다 세대가 다름 — 첫 실험의 세대에 B 의 사건을 놓지 않게. 발견 표시·연대기 줄과 같은 값), 비교면 B 는 점선,
-## 이름 "A · 틱 N". 이름이 겹치면 한 줄씩 위로.
+## 이름 "A · 틱 N". 이름이 겹치면 한 줄씩 위로. 세로선은 계열 선 아래, 이름 상자는 _label_jobs 로 모아 선 위에(I46).
 func _draw_cursor() -> void:
 	if panel.cursor_tick < 0 or panel.series.is_empty():
 		return
@@ -1000,9 +1020,9 @@ func _draw_cursor_line(si: int, x: float, rects: Array[Rect2]) -> void:
 		rect.position.y -= rect.size.y
 		guard += 1
 	rects.append(rect)
-	draw_style_box(_cursor_style, rect)
-	draw_string(_font, Vector2(lx, rect.position.y + pad_v + _ascent), t, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs, _c_cursor)
-	last_cursor.append({series = si, x = px, data_x = x, tick = panel.cursor_tick, text = t, rect = rect})
+	var rec := {series = si, x = px, data_x = x, tick = panel.cursor_tick, text = t, rect = rect, seq = -1}
+	_label_jobs.append({text = t, pos = Vector2(lx, rect.position.y + pad_v + _ascent), color = _c_cursor, box = rect, record = rec})
+	last_cursor.append(rec)
 
 
 func _draw_series(si: int) -> void:
@@ -1025,9 +1045,53 @@ func _draw_series(si: int) -> void:
 			_draw_line(si, GraphPanel.C_FARMS, c, _lane_w, dashed)
 
 
+## 가로 범위·그림 폭·가로축·데이터 세대가 바뀌었으면 묶음·픽셀 열을 버린다(다음에 처음부터 묶음)
+func _sync_runs() -> void:
+	var key := [_x0, _x1, int(plot.size.x), panel.x_mode, panel.epoch]
+	if key != _runs_key:
+		_runs_key = key
+		_runs.clear()
+		_cols.clear()
+		rebuild_count += 1
+
+
 ## index 번째 실험 col 열 선의 묶음(검사용: 마지막으로 그린 상태)
 func line_runs(index: int, col: int) -> Runs:
 	return _runs_for(index, col)
+
+
+## 이 그래프가 줄여서 잇는 열(계열마다): 개체 수 = 개체 수(+ 출생·사망), 평균 특성 = 고른 열, 기술 단계 = 저장고·밭
+## (계단선은 단계가 오른 곳만 꺾임).
+func _line_cols() -> Array[int]:
+	match kind:
+		KIND_POP:
+			if panel.show_flows:
+				return [GraphPanel.C_POP, GraphPanel.C_BIRTHS, GraphPanel.C_DEATHS]
+			return [GraphPanel.C_POP]
+		KIND_TRAIT:
+			return [panel.trait_col()]
+	return [GraphPanel.C_STORES, GraphPanel.C_FARMS]
+
+
+## index 번째 실험을 이 그래프가 잇는 점 수(GraphPanel.series_points — 검사용): 지금 데이터·배치로 그리기와 같은 묶음
+## (그리기가 쓰는 것을 그대로 — 새 줄만 더함)을 만들어 이 그래프의 선마다 줄인 점 수를 세고 가장 큰 것. 줄이 그림 폭보다
+## 적으면 기록 줄 수와 같고(빈 값(NaN) 줄은 빠짐 — 멸종 뒤 평균 특성), 많으면 줄인 수(≤ 그림 폭 × 4). 이 그래프가 그
+## 실험을 그리지 않으면 0(검토 I38: 예전엔 그래프와 상관없이 기록 줄 수).
+func series_point_count(si: int) -> int:
+	if panel == null or si < 0 or si >= panel.series.size() or panel.series[si].size() == 0:
+		return 0
+	layout_now()
+	_sync_runs()
+	var s := panel.series[si]
+	var best := 0
+	for col in _line_cols():
+		var r := _runs_for(si, col)
+		r.feed_cols(_cols_for(si), s.cols[col], GraphPanel.MEAN_COLS.has(col))
+		var n := 0
+		for seg in run_indices(r):
+			n += seg.size()
+		best = maxi(best, n)
+	return best
 
 
 func _runs_for(si: int, col: int) -> Runs:
@@ -1056,7 +1120,9 @@ func _draw_line(si: int, col: int, c: Color, width: float, dashed: bool, end_dot
 	var xs := s.xs(panel.x_mode)
 	var ys: PackedFloat64Array = s.cols[col]
 	var r := _runs_for(si, col)
+	var used0 := r.used
 	r.feed_cols(_cols_for(si), ys, GraphPanel.MEAN_COLS.has(col))
+	last_fed_rows += r.used - used0
 	var px0 := plot.position.x
 	var x0 := _x0
 	var sx := _sx
@@ -1102,7 +1168,8 @@ func _draw_line(si: int, col: int, c: Color, width: float, dashed: bool, end_dot
 			draw_polyline(pts, c, width, true)
 	if dashed:
 		_draw_dash_buf(c, width)
-	last_lines.append({series = si, col = col, points = pts_total, dashed = dashed, segments = segs.size(), runs = r.count(), width = width})
+	_seq += 1
+	last_lines.append({series = si, col = col, points = pts_total, dashed = dashed, segments = segs.size(), runs = r.count(), width = width, seq = _seq})
 	if end_dot and r.count() > 0 and idx[(r.count() - 1) * 4 + 3] == s.size() - 1:
 		var i := s.size() - 1
 		var p := Vector2(px0 + (xs[i] - x0) * sx, by - (ys[i] - y0) * ky)
@@ -1140,7 +1207,8 @@ func _draw_steps(si: int, c: Color, dashed: bool) -> void:
 		_draw_dash_buf(c, _line_w)
 	else:
 		draw_polyline(pts, c, _line_w, true)
-	last_lines.append({series = si, col = GraphPanel.C_STAGE, points = pts.size(), dashed = dashed, segments = 1, runs = s.stage_rows.size(), width = _line_w})
+	_seq += 1
+	last_lines.append({series = si, col = GraphPanel.C_STAGE, points = pts.size(), dashed = dashed, segments = 1, runs = s.stage_rows.size(), width = _line_w, seq = _seq})
 	var e := pts[pts.size() - 1]
 	draw_circle(e, _point_r + _ring, _c_bg)
 	draw_circle(e, _point_r, c)
@@ -1308,9 +1376,12 @@ func readout_lines() -> Array[Dictionary]:
 	return out
 
 
-## 기준 가로 값 x 근처에 그 실험의 기록이 없을 때의 글
+## 기준 가로 값 x 근처에 그 실험의 기록이 없을 때의 글. 멸종한 뒤면 틱 축도 "멸종 (틱 N)"(멸종 뒤로는 기록하지 않아
+## 줄이 없을 뿐 개체 수 0 은 아는 값 — 검토 I45: 틱 축만 "이 틱 기록 없음" 이었음).
 func _no_record_text(s: GraphPanel.Series, x: float) -> String:
 	if panel.x_mode != GraphPanel.X_GEN:
+		if s.extinct_row >= 0 and x > s.extinct_tick:
+			return "%s (틱 %s)" % [EXTINCT_TEXT, fmt_num(s.extinct_tick, 0)]
 		return NO_RECORD_TICK
 	if s.extinct_row >= 0 and x > s.gen_hi:
 		return "%s (틱 %s · %s세대)" % [EXTINCT_TEXT, fmt_num(s.extinct_tick, 0), fmt_num(s.extinct_gen, 1)]

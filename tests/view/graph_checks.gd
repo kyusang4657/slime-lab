@@ -4,12 +4,10 @@ extends RefCounted
 ## 비교 모드는 패널 단위로(LabMain.start_compare 를 거친 종단은 integration4_checks), 실험 둘을 직접 만들어 LabMain 이 내는 것과 같은 호출로 몬다:
 ##   x.tag = "A"/"B" → panel.load_experiments([a, b])(= experiments_changed) → 진행할 때마다 append_row(k, rows().back())(= recorded).
 
-const MIN_CHECKS := 119
+const MIN_CHECKS := 148
 ## 합성 줄 수(긴 실행 흉내: 실험 둘 × 이만큼)와 그 줄 간격(틱)
 const LONG_ROWS := 6000
 const LONG_EVERY := 20
-## 그리기 시간의 넉넉한 상한(µs) — 느린 CI 에서도 넘지 않을 값. 실제 시간은 출력한다.
-const DRAW_BOUND_US := 20000
 const DEMO_TICKS := 1700
 
 
@@ -24,6 +22,7 @@ func run(t) -> void:
 	await _narrow_checks(t)
 	await _x_label_checks(t)
 	await _synthetic_checks(t)
+	await _snapshot_note_checks(t)
 	await _long_checks(t)
 
 
@@ -327,6 +326,11 @@ func _lab_checks(t) -> void:
 		cur_ok = cur_ok and vg.last_cursor.size() == 1 and int(vg.last_cursor[0].tick) == 200 and int(vg.last_cursor[0].series) == -1 \
 				and is_equal_approx(float(vg.last_cursor[0].x), roundf(vg.data_to_px(200.0)))
 	t.check(cur_ok, "시점 표시선이 세 그래프 모두 틱 200 자리에 그려짐 (%s)" % str(panel.view(0).last_cursor))
+	# 이름 상자("틱 200")는 계열 선을 다 그린 뒤(선이 상자를 덮지 않게 — I46)
+	var on_top := true
+	for g in 3:
+		on_top = on_top and _labels_on_top(panel.view(g), panel.view(g).last_cursor)
+	t.check(on_top, "시점 이름 상자를 계열 선보다 뒤에 그림(선 위) — 세 그래프 %s" % _seq_text(panel.view(GraphPanel.GRAPH_CIV), panel.view(GraphPanel.GRAPH_CIV).last_cursor))
 	lab.request_cursor(99999)
 	await t.frames(2)
 	var off_ok := panel.view(0).last_cursor.is_empty()
@@ -458,11 +462,18 @@ func _lab_checks(t) -> void:
 			"출생·사망 단위: 견본 \"%s\" · 값 읽기 \"%s\"" % [v0.last_flow_key, v0.readout_text()])
 	panel.clear_hover()
 	t.check(v0.y_range().y >= s0.hi[GraphPanel.C_BIRTHS] and v0.y_range().x == 0.0, "개체 수 세로축은 0 부터, 출생 최댓값 포함")
-	t.check(v1.last_lines.size() == 1 and int(v1.last_lines[0].col) == GraphPanel.C_SENSE, "평균 특성 = 고른 열(감각)")
+	t.check(v1.last_lines.size() == 1 and int(v1.last_lines[0].col) == GraphPanel.C_SENSE, "평균 특성 = 고른 열(감지)")
+	# 같은 특성의 이름 = 정보 창·README 의 "감지"(I51: 그래프만 "감각") — 고르기 항목과 값 읽기 글
+	var trait_opt := _find_named(panel, "Trait") as OptionButton
+	v1.hover_at(Vector2(v1.data_to_px(s0.tick[row]), v1.plot.get_center().y))
+	var sense_txt := v1.readout_text()
+	panel.clear_hover()
+	t.check(trait_opt != null and trait_opt.get_item_text(trait_opt.selected) == "감지" and sense_txt.contains("감지 ") and not sense_txt.contains("감각"),
+			"평균 특성 이름 \"감지\"(고르기 · 값 읽기 \"%s\")" % sense_txt)
 	var sense := s0.cols[GraphPanel.C_SENSE][0]
 	var yr := v1.y_range()
 	t.check(s0.lo[GraphPanel.C_SENSE] == s0.hi[GraphPanel.C_SENSE] and yr.x < sense and yr.y > sense
-			and yr.y - yr.x >= sense * UiConfig.num("graph.y_min_span_frac") - 1e-9, "평평한 값(감각 %.1f)도 범위가 생김 %s" % [sense, str(yr)])
+			and yr.y - yr.x >= sense * UiConfig.num("graph.y_min_span_frac") - 1e-9, "평평한 값(감지 %.1f)도 범위가 생김 %s" % [sense, str(yr)])
 	panel.set_show_flows(false)
 	panel.set_trait(0)
 
@@ -475,8 +486,152 @@ func _lab_checks(t) -> void:
 	t.check(lab.new_experiment("default", {}, 2) == "", "새 실험")
 	t.check(panel.series.size() == 1 and panel.series_points(0, 0) == 1 and panel.series[0].markers.is_empty(), "새 실험 → 지우고 새 기록 1줄")
 	t.check(panel.legend_texts() == PackedStringArray([lab.experiments[0].display_name()]), "범례 = 실험 이름")
+	await _keyboard_checks(t, lab, panel)
+	await _cursor_tail_checks(t, lab, panel)
 	lab.queue_free()
 	await t.frames(1)
+
+
+## 마지막 기록 줄 뒤에 난 사건(I15): 사건은 기록 간격(20틱) 사이에도 난다. 멈춘 채 연대기의 최신 줄을 누르면(실제 경로 —
+## ChroniclePanel.activate_item → lab.request_cursor) 가로축이 그 틱까지 넓어져 세 그래프 모두 세로선이 그려져야 한다
+## (예전: 가로축 끝 = 마지막 기록 줄이라 cursor_tick 만 바뀌고 선이 없었음 — 시연용 씨앗 2 의 틱 126 저장고 등).
+func _cursor_tail_checks(t, lab: LabMain, panel: GraphPanel) -> void:
+	t.check(lab.new_experiment("demo_fast", {}, 2) == "", "시연용 씨앗 2 새 실험")
+	lab.set_paused(true)
+	var w := lab.experiments[0].world
+	var s := panel.series[0]
+	var ev := {}
+	var guard := 0
+	while ev.is_empty() and guard < 3000:
+		lab.step_ticks(1)
+		guard += 1
+		if w.chronicle.is_empty():
+			continue
+		var e: Dictionary = w.chronicle.back()
+		if float(e.tick) > s.tick[s.size() - 1] and float(e.tick) > panel.x_bounds().y:
+			ev = e
+	t.check(not ev.is_empty(), "준비: 가로축 끝(%s)을 넘는 최신 사건 %s (세계 틱 %d)" % [str(panel.x_bounds()), str(ev.get("kind")), w.tick])
+	if ev.is_empty():
+		return
+	# 멈춘 채 한 프레임: 쌓인 사건을 연대기로(LabMain 은 프레임마다 drain_events → events_tagged)
+	lab.set_paused(true)
+	var tick0 := w.tick
+	lab.advance_frame(1.0 / 60.0)
+	t.check(w.tick == tick0 and s.tick[s.size() - 1] < float(ev.tick), "멈춘 프레임은 틱을 진행하지 않음(틱 %d, 마지막 기록 줄 %d)" % [w.tick, int(s.tick[s.size() - 1])])
+	# 그래프가 지금 기록 줄로 한 번 그려진 뒤에 누름(배치가 그대로인 채 시점만 바뀌어도 가로축을 다시 정해야 함)
+	panel.redraw_now()
+	await t.frames(2)
+	var cp := lab.chronicle_panel
+	var idx := -1
+	if cp != null:
+		cp.set_filter(ChroniclePanel.FILTER_ALL)
+		for i in cp.item_count():
+			if int(cp.item(i).tick) == int(ev.tick):
+				idx = i
+				break
+	t.check(idx >= 0, "연대기에 그 사건 줄(틱 %d)" % int(ev.tick))
+	if idx < 0:
+		return
+	cp.activate_item(idx)
+	await t.frames(2)
+	var drawn := 0
+	for g in 3:
+		var vg := panel.view(g)
+		if vg.last_cursor.size() == 1 and int(vg.last_cursor[0].tick) == int(ev.tick) and float(vg.last_cursor[0].x) <= vg.plot.end.x + 0.5 \
+				and is_equal_approx(float(vg.last_cursor[0].x), roundf(vg.data_to_px(float(ev.tick)))):
+			drawn += 1
+	t.check(panel.cursor_tick == int(ev.tick) and drawn == 3 and panel.x_bounds().y >= float(ev.tick),
+			"마지막 기록 줄(틱 %d) 뒤 사건(틱 %d) 줄을 누르면 세 그래프 모두 시점 세로선(%d개, 가로축 %s)" % [int(s.tick[s.size() - 1]), int(ev.tick), drawn, str(panel.x_bounds())])
+	# 세대 축: 그 사건의 평균 세대(연대기 줄 값)가 마지막 기록 줄의 세대보다 커도 세로선이 그려짐
+	panel.set_x_axis(GraphPanel.X_GEN)
+	await t.frames(2)
+	var gdrawn := 0
+	for g in 3:
+		var vg := panel.view(g)
+		if vg.last_cursor.size() == 1 and is_equal_approx(float(vg.last_cursor[0].data_x), float(ev.mean_gen)):
+			gdrawn += 1
+	t.check(gdrawn == 3, "세대 축에서도 세 그래프 모두 그 사건의 세대(%s)에 세로선(%d개, 가로축 %s · 마지막 줄 %.2f세대)"
+			% [str(ev.mean_gen), gdrawn, str(panel.x_bounds()), s.gen_x[s.size() - 1]])
+	panel.set_x_axis(GraphPanel.X_TICK)
+	# 시점을 지우면 가로축이 다시 기록 줄 범위로
+	lab.request_cursor(-1)
+	await t.frames(1)
+	t.check(panel.x_bounds().y < float(ev.tick), "시점을 지우면 가로축 끝이 다시 기록 줄 범위(%s)" % str(panel.x_bounds()))
+
+
+## 이름(시점·멸종)이 이 그래프의 모든 계열 선보다 뒤에 그려졌는지(seq — I46)
+func _labels_on_top(v: GraphView, labels: Array[Dictionary]) -> bool:
+	if labels.is_empty() or v.last_lines.is_empty():
+		return false
+	var last_line := 0
+	for l in v.last_lines:
+		last_line = maxi(last_line, int(l.seq))
+	for d in labels:
+		if int(d.seq) <= last_line:
+			return false
+	return true
+
+
+func _seq_text(v: GraphView, labels: Array[Dictionary]) -> String:
+	return "선 %s · 이름 %s" % [str(v.last_lines.map(func(l: Dictionary) -> int: return int(l.seq))), str(labels.map(func(d: Dictionary) -> int: return int(d.seq)))]
+
+
+## 키보드(J16): 가로축 틱/세대·출생·사망·평균 특성 고르기는 키보드 초점을 받는다(Tab 으로 닿음). 초점이 있어도 스페이스는
+## 실험실 멈춤(LabMain._input 이 GUI 보다 먼저 받음 — 단추가 눌리지 않음), Enter 는 누름. 마우스로 누르면 초점을 남기지 않음.
+func _keyboard_checks(t, lab: LabMain, panel: GraphPanel) -> void:
+	var bad: Array[String] = []
+	for n in ["XTick", "XGen", "Flows", "Trait"]:
+		var c := _find_named(panel, n) as Control
+		if c == null or c.focus_mode != Control.FOCUS_ALL:
+			bad.append(n)
+	t.check(bad.is_empty(), "그래프 조작(가로축·출생·사망·평균 특성)이 키보드 초점을 받음(못 받음: %s)" % ", ".join(bad))
+	var flows := _find_named(panel, "Flows") as Button
+	if flows == null:
+		return
+	lab.set_paused(true)
+	flows.grab_focus()
+	await t.frames(1)
+	var on0 := flows.button_pressed
+	_key(t, KEY_SPACE)
+	t.check(flows.has_focus() and not lab.is_paused() and flows.button_pressed == on0, "출생·사망 단추 초점에서 스페이스 = 재생/멈춤(단추 안 눌림)")
+	_key(t, KEY_ENTER)
+	t.check(flows.button_pressed != on0 and panel.show_flows == flows.button_pressed and flows.has_focus(), "Enter → 출생·사망 켜고 끔·초점 그대로")
+	_key(t, KEY_ENTER)
+	# 마우스로 누르려면 단추가 창 안에 있어야 함(헤드리스 기본 창은 작음)
+	var root0: Vector2i = t.root.size
+	t.root.size = Vector2i(UiConfig.integer("lab.min_width"), UiConfig.integer("lab.min_height"))
+	await t.frames(3)
+	flows.grab_focus()
+	_click(t, flows.get_global_rect().get_center())
+	await t.frames(1)
+	t.check(flows.button_pressed != on0 and not flows.has_focus(), "마우스로 누르면 출생·사망 켜짐·초점을 남기지 않음")
+	t.root.size = root0
+	panel.set_show_flows(on0)
+	lab.set_paused(true)
+
+
+func _find_named(n: Node, node_name: String) -> Node:
+	return n.find_child(node_name, true, false)
+
+
+func _key(t, code: Key) -> void:
+	for pressed in [true, false]:
+		var e := InputEventKey.new()
+		e.keycode = code
+		e.physical_keycode = code
+		e.unicode = 32 if code == KEY_SPACE and pressed else 0
+		e.pressed = pressed
+		t.root.push_input(e)
+
+
+func _click(t, pos: Vector2) -> void:
+	for pressed in [true, false]:
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_LEFT
+		mb.pressed = pressed
+		mb.position = pos
+		mb.global_position = pos
+		t.root.push_input(mb)
 
 
 ## 마우스가 움직일 때: 선·눈금 그래프(GraphView)는 다시 그리지 않고 마우스 겹만(G23), 마우스 값 계산은 한 번(G07 —
@@ -538,6 +693,8 @@ func _compare_checks(t) -> void:
 	host.add_child(panel)
 	panel.size = host.size
 	panel.load_experiments([a, b])
+	# 점 수는 그 그래프가 그리는 것(그림 폭에 따름 — I38)이라 자리를 잡은 뒤에 센다
+	await t.frames(1)
 	t.check(panel.series_points(0, 0) == a.rows().size() and panel.series_points(2, 1) == b.rows().size(), "비교: 두 실험의 점 수")
 	t.check(panel.legend_texts() == PackedStringArray([a.display_name(), b.display_name()]) and a.display_name().begins_with("A · "), "범례 = display_name() 둘")
 	var items := panel.legend_items()
@@ -653,6 +810,28 @@ func _gen_compare_checks(t) -> void:
 			"세대 축 비교 시점 표시: B 의 농사 발견 틱 → B 세로선이 B 의 발견 세로선 자리 %s / %s" % [str(cb), str(mb)])
 	t.check(ca.size() == 1 and is_equal_approx(float(ca[0].data_x), sa.extinct_gen) and str(ca[0].text).begins_with("A · "),
 			"A 세로선은 A 가 그 틱에 있던 세대(멸종한 세대 %.2f)" % sa.extinct_gen)
+	t.check(_labels_on_top(civ, civ.last_cursor), "세대 축 비교 시점 이름 상자 둘 모두 계열 선 위(I46) %s" % _seq_text(civ, civ.last_cursor))
+	# 세대 축: A 의 줄은 거의 같은 세대(0.0)라 한 픽셀 열에 모여 줄여 그림 — 점 수는 그 그래프가 그리는 것(I38)
+	t.check(panel.series_points(GraphPanel.GRAPH_POP, 0) < sa.size(), "세대 축: A %d줄이 한 열에 모여 점 %d개로 줄어 그림"
+			% [sa.size(), panel.series_points(GraphPanel.GRAPH_POP, 0)])
+	# 틱 축 비교 값 읽기(I45): A 가 멸종한 뒤의 틱이면 "A  멸종 (틱 N)" — 세대 축과 같게(예전: "이 틱 기록 없음")
+	panel.set_x_axis(GraphPanel.X_TICK)
+	v.layout_now()
+	# 그래프마다 점 수(I38): 멸종 줄(개체 0)은 평균 특성이 빈 값이라 평균 특성 그래프의 A 점이 개체 수 그래프보다 하나 적다
+	# (예전 series_points 는 그래프와 상관없이 기록 줄 수 — 세 그래프가 늘 같아 "그래프마다" 검사가 공허했음)
+	var n_a := sa.size()
+	var pts := [panel.series_points(GraphPanel.GRAPH_POP, 0), panel.series_points(GraphPanel.GRAPH_TRAIT, 0), panel.series_points(GraphPanel.GRAPH_CIV, 0)]
+	t.check(pts[0] == n_a and pts[1] == n_a - 1 and pts[2] == n_a and panel.series_points(GraphPanel.GRAPH_TRAIT, 1) == sb.size(),
+			"그래프마다 그리는 점 수(틱 축): A 개체 수·기술 단계 %d, 평균 특성 %d(멸종 줄 빠짐) — 기록 %d줄 %s" % [pts[0], pts[1], n_a, str(pts)])
+	var tx := sb.tick[sb.size() - 1] * 0.7
+	v.hover_at(Vector2(v.data_to_px(tx), v.plot.get_center().y))
+	var tl := v.readout_lines()
+	var want_a := "A  %s (틱 %s)" % [GraphView.EXTINCT_TEXT, GraphView.fmt_num(sa.extinct_tick, 0)]
+	t.check(tx > sa.extinct_tick and tl.size() == 3 and str(tl[1].text) == want_a and not bool(tl[1].valid),
+			"틱 축 비교: 멸종한 뒤 틱의 A 줄 = \"%s\" (%s)" % [want_a, v.readout_text()])
+	v.hover_at(Vector2(v.data_to_px(0.0) + 1.0, v.plot.get_center().y))
+	t.check(not v.readout_text().contains(GraphView.EXTINCT_TEXT), "멸종 전 틱에는 멸종 글 없음: %s" % v.readout_text())
+	panel.clear_hover()
 	host.queue_free()
 	await t.frames(1)
 
@@ -685,6 +864,7 @@ func _extinct_compare_checks(t) -> void:
 		var r1: Rect2 = le[1].rect
 		apart = absf(float(le[0].x) - float(le[1].x)) < 0.01 and not r0.intersects(r1)
 	t.check(apart, "같은 자리의 두 멸종 이름이 겹치지 않음(한 줄 아래로)")
+	t.check(_labels_on_top(v, le), "멸종 이름을 계열 선보다 뒤에 그림(선 위, I46) %s" % _seq_text(v, le))
 	host.queue_free()
 	await t.frames(1)
 
@@ -888,6 +1068,65 @@ func _synthetic_checks(t) -> void:
 	await t.frames(1)
 
 
+# ── 스냅숏에서 연 실험(J19): 기록은 연 틱부터라 그 앞의 발견 세로선·시점 표시는 그리지 않음 → 머리에 "기록은 틱 N 부터" ──
+func _snapshot_note_checks(t) -> void:
+	var dir := "user://graph_checks-%d" % OS.get_process_id()
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var path := dir.path_join("snap.json")
+	var x: Experiment = Experiment.create("demo_fast", {}, 1).experiment
+	var guard := 0
+	while x.world.discovery_tick[SimWorld.STAGE_FORAGE] < 0 and guard < 3000:
+		x.step()
+		guard += 1
+	x.step_n(int(x.world.cfg.record.every) * 2 + 3)
+	var host := _host(t, Vector2(1200, 240))
+	var panel := GraphPanel.new()
+	host.add_child(panel)
+	panel.size = host.size
+	panel.load_experiments([x])
+	await t.frames(2)
+	t.check(panel.record_note() == "" and panel.record_note_shown() == "" and not (_find_named(panel, "RecordNote") as Control).visible,
+			"틱 0 부터 기록한 실험: 머리 알림 없음")
+	t.check(SimSnapshot.save_file(x.world, path) == "", "스냅숏 저장(틱 %d)" % x.world.tick)
+	var r := Experiment.from_snapshot(path)
+	var y: Experiment = r.experiment
+	t.check(y != null and y.rows().size() == 1, "연 실험의 기록은 연 틱 한 줄")
+	if y == null:
+		host.queue_free()
+		return
+	panel.load_experiments([y])
+	await t.frames(2)
+	var want := GraphPanel.RECORD_NOTE % GraphView.fmt_num(float(y.world.tick), 0)
+	var note := _find_named(panel, "RecordNote") as Label
+	var civ := panel.view(GraphPanel.GRAPH_CIV)
+	t.check(panel.record_note_shown() == want and note != null and note.visible and note.text == want and note.tooltip_text != "",
+			"스냅숏에서 연 실험: 머리에 \"%s\" (보임 \"%s\")" % [want, panel.record_note_shown()])
+	t.check(panel.series[0].markers.size() >= 1 and civ.last_markers.is_empty(), "그 앞의 발견 세로선은 가로축 밖이라 그리지 않음(그래서 알림)")
+	# 앞선 사건(채집 발견) 시점을 눌러도 기록 앞이라 세로선 없음 — 알림은 그대로
+	panel.set_cursor_tick(int(x.world.discovery_tick[SimWorld.STAGE_FORAGE]))
+	await t.frames(2)
+	t.check(civ.last_cursor.is_empty() and panel.record_note_shown() == want, "기록 앞 시점: 세로선 없이 알림 유지")
+	# 연 뒤 진행해도(새 줄 덧붙임) 알림 그대로, 새 실험이면 사라짐
+	for i in int(y.world.cfg.record.every):
+		if y.step():
+			panel.append_row(0, y.rows().back())
+	t.check(panel.series[0].size() == 2 and panel.record_note_shown() == want, "연 뒤 진행해도 알림 그대로")
+	panel.load_experiments([x])
+	await t.frames(1)
+	t.check(panel.record_note_shown() == "", "다시 틱 0 부터인 실험 → 알림 사라짐")
+	# 비교(이름표): 스냅숏에서 연 쪽에만
+	x.tag = "A"
+	y.tag = "B"
+	panel.load_experiments([x, y])
+	await t.frames(1)
+	t.check(panel.record_note_shown() == "B " + want, "비교: 연 실험(B)에만 \"B %s\" (보임 \"%s\")" % [want, panel.record_note_shown()])
+	host.queue_free()
+	await t.frames(1)
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir.path_join(f)))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+
+
 # ── 긴 실행: 6,000줄 × 2 — 줄이기와 그리기 시간 ──
 func _long_checks(t) -> void:
 	var a: Experiment = Experiment.create("default", {}, 1).experiment
@@ -906,19 +1145,35 @@ func _long_checks(t) -> void:
 	for k in 2:
 		for i in range(1, LONG_ROWS):
 			panel.append_row(k, _row(i, k, spike_row))
-	t.check(panel.series_points(0, 0) == LONG_ROWS and panel.series_points(1, 1) == LONG_ROWS, "합성 %d줄 × 2" % LONG_ROWS)
+	t.check(panel.series[0].size() == LONG_ROWS and panel.series[1].size() == LONG_ROWS, "합성 %d줄 × 2" % LONG_ROWS)
 	panel.redraw_now()
 	await t.frames(2)
 	var full_us := 0
+	var full_fed := 0
 	var pts_ok := true
 	for g in 3:
 		var v := panel.view(g)
 		full_us += v.last_draw_us
+		full_fed += v.last_fed_rows
 		for l in v.last_lines:
 			if int(l.points) > 4 * int(v.plot.size.x) + 4:
 				pts_ok = false
 	var v0 := panel.view(GraphPanel.GRAPH_POP)
 	t.check(pts_ok, "줄여 그린 점 ≤ 그림 폭 × 4 (개체 수 A %d점, 폭 %d)" % [int(v0.last_lines[v0.last_lines.size() - 1].points), int(v0.plot.size.x)])
+	# series_points(그래프, 실험) = 그 그래프가 실제로 그린 줄인 점 수(I38 — 예전엔 그래프와 상관없이 기록 줄 수 6,000)
+	var sp_ok := true
+	var sp_txt := PackedStringArray()
+	for g in 3:
+		var vg := panel.view(g)
+		for k in 2:
+			var drawn := 0
+			for l in vg.last_lines:
+				if int(l.series) == k and int(l.col) != GraphPanel.C_STAGE:
+					drawn = maxi(drawn, int(l.points))
+			var sp := panel.series_points(g, k)
+			sp_txt.append("%d/%d:%d" % [g, k, sp])
+			sp_ok = sp_ok and sp == drawn and sp > 0 and sp <= 4 * int(vg.plot.size.x) + 4 and sp < LONG_ROWS
+	t.check(sp_ok, "series_points = 그 그래프가 그린 점 수(줄인 것, < %d줄) %s" % [LONG_ROWS, ", ".join(sp_txt)])
 	var flat: Array[int] = []
 	for seg in GraphView.run_indices(v0.line_runs(0, GraphPanel.C_POP)):
 		for i in seg:
@@ -937,11 +1192,18 @@ func _long_checks(t) -> void:
 	panel.redraw_now()
 	await t.frames(2)
 	var inc_us := 0
+	var inc_fed := 0
+	var n_lines := 0
 	for g in 3:
 		inc_us += panel.view(g).last_draw_us
+		inc_fed += panel.view(g).last_fed_rows
+		n_lines += panel.view(g).last_lines.filter(func(l: Dictionary) -> bool: return int(l.col) != GraphPanel.C_STAGE).size()
 	t.check(extra > 0 and v0.rebuild_count == rebuilt and v0.line_runs(0, GraphPanel.C_POP).used == LONG_ROWS + extra, "범위 안 새 줄 %d개: 다시 묶지 않고 더함" % extra)
-	print("    그래프 그리기(%d줄 × 2, 세 그래프 합): 처음 %d µs · 새 줄만 %d µs" % [LONG_ROWS, full_us, inc_us])
-	t.check(inc_us < DRAW_BOUND_US, "새 줄 뒤 그리기 %d µs < %d µs" % [inc_us, DRAW_BOUND_US])
+	# 그리기 일의 크기는 시계가 아니라 센 수로 본다(I34: 예전 "새 줄 뒤 그리기 < 20 ms" 는 기계 속도·부하에 묶인 단언 —
+	# 느린 CI 에서 코드가 맞아도 실패할 수 있었음). 실제 시간은 참고로 출력만.
+	t.check(full_fed >= LONG_ROWS * 2 and inc_fed == extra * n_lines,
+			"새 줄 뒤 그리기는 새 줄만 묶음에 넣음: 처음 %d줄 · 새 줄만 %d줄 = 새 줄 %d × 선 %d" % [full_fed, inc_fed, extra, n_lines])
+	print("    (참고) 그래프 그리기(%d줄 × 2, 세 그래프 합): 처음 %d µs · 새 줄만 %d µs" % [LONG_ROWS, full_us, inc_us])
 	# 세대 축 6,000줄 × 2: 가장 가까운 줄 = 모두 훑기와 같은 답(이분 탐색), 마우스는 겹만·계산 한 번(G07·G23)
 	panel.set_x_axis(GraphPanel.X_GEN)
 	var s1 := panel.series[1]
