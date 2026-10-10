@@ -12,6 +12,8 @@
 3. 절 이름(_sections)이 모든 절에 있고 ParamPanel.SECTION_NAMES(고급 설정 절 머리)와 같다.
 4. docs/CONFIG.md 가 이름표에서 만든 글과 글자까지 같다(어긋나면 --write 로 다시 만듦).
 5. config/*.json 의 _comment 가 가리키는 docs/*.md 는 실제로 있다(죽은 안내 없음).
+6. 멸종 쪽으로 맞춘 스트레스 예설정(harsh_winter)은 화면 이름과 _comment 가 그렇다고 적는다(잰 씨앗 결과 — 검토 J22).
+   예설정 표(CONFIG.md)의 "결과·메모" 열은 예설정의 _comment 다.
 """
 from __future__ import annotations
 
@@ -151,14 +153,14 @@ def render_doc() -> str:
         lines.append("")
     lines.append("## 예설정 · `config/presets.json`")
     lines.append("")
-    lines.append("| 예설정 | 화면 이름 | 바꾸는 키 |")
-    lines.append("|---|---|---|")
+    lines.append("| 예설정 | 화면 이름 | 바꾸는 키 | 결과·메모 |")
+    lines.append("|---|---|---|---|")
     for name, p in presets.items():
         if name.startswith("_") or not isinstance(p, dict):
             continue
         sets = p.get("set", {})
         changed = ", ".join(f"`{k}` = `{json.dumps(v, ensure_ascii=False)}`" for k, v in sets.items()) or "(없음 — 기본값 그대로)"
-        lines.append(f"| `{name}` | {cell(p.get('label', name))} | {changed} |")
+        lines.append(f"| `{name}` | {cell(p.get('label', name))} | {changed} | {cell(p.get('_comment', '—'))} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -263,6 +265,14 @@ class TestSimLabels(unittest.TestCase):
                          "docs/CONFIG.md 가 config/sim-labels.json 과 다름 — python3 tools/test_sim_labels.py --write")
         doc = CONFIG_DOC.read_text(encoding="utf-8")
         self.assertEqual([k for k in self.keys if f"`{k}`" not in doc], [], "CONFIG.md 에 없는 키")
+
+    def test_stress_preset_is_marked(self) -> None:
+        """harsh_winter 는 잰 씨앗 모두 멸종하는 조건 — 실험실 목록 이름과 _comment 가 그렇게 적는다(예전엔 '혹독한 겨울' 뿐)."""
+        hw = load(PRESETS).get("harsh_winter", {})
+        self.assertIn("멸종", str(hw.get("label", "")), "harsh_winter 화면 이름에 멸종 조건 표시")
+        comment = str(hw.get("_comment", ""))
+        self.assertIn("멸종", comment)
+        self.assertRegex(comment, r"씨앗 1~\d+", "잰 씨앗 범위와 결과")
 
     def test_comment_doc_pointers_exist(self) -> None:
         dead = []

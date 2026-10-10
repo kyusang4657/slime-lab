@@ -41,7 +41,7 @@ const RULES := [
 	["brain.weight_clamp", 0.0, 1e6, ABOVE], ["brain.init_range", 0.0, 1e6], ["brain.sharpness", 0, 64],
 	["mutation.rate", 0.0, 1.0], ["mutation.sigma", 0.0, 100.0],
 	["carry.max", 0.0, 1e6, ABOVE],
-	["store.capacity", 0.0, 1e9, ABOVE], ["store.max_count", 0, 100000], ["store.min_spacing", 0, 100000],
+	["store.capacity", 0.0, 1e9, ABOVE], ["store.max_count", 1, 100000], ["store.min_spacing", 0, 100000],
 	["farm.radius", 0, 100000], ["farm.seed_cost", 0.0, 1e6], ["farm.growth_mult", 0.0, 100.0],
 	["farm.max_mult", 0.0, 100.0], ["farm.winter_floor", 0.0, 100.0], ["farm.abandon_ticks", 1, TICK_MAX],
 	["discovery.region_size", 1, 1024], ["discovery.forage_min_energy_frac", 0.0, 1.0],

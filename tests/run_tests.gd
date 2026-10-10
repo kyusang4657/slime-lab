@@ -11,7 +11,8 @@ const MAGIC_EXEMPT: Array[String] = ["sim_config.gd"]
 const MAGIC_ALLOWED: Array[String] = ["0", "1", "2", "0.0", "1.0", "0.5", "2.0"]
 const FORBIDDEN_MATH: Array[String] = ["sin", "cos", "tan", "exp", "log", "pow", "tanh", "atan", "atan2", "randfn", "randf_range", "randi_range"]
 ## 농사 도달 검사(S15): 이 예설정·씨앗 조합 중 하나라도 평균 100세대 안에 농사(3단계)에 도달해야 한다.
-## 연구용 fast_civ 를 먼저 본다(씨앗 1: 3,321틱·평균 49.0세대에 농사 — docs/TUNING-fast_civ.md).
+## 연구용 fast_civ 를 먼저 본다(씨앗 1: 2,040틱·평균 28.5세대에 농사 — docs/TUNING-fast_civ.md, 검토 고침 g1b 의 규칙 고침 뒤 다시 잼).
+## 규칙 고침 전에는 3,321틱·49.0세대 — 식물 갱신 간격 사이의 빛을 더하도록 바꾼 J02 가 기본 역사를 바꿈(나머지는 채집 발견 뒤 — 바닥 먹이·저장고·밭이 생긴 뒤의 역사만).
 ## 검사 전체는 4코어 컨테이너에서 약 20초(씨앗 1 농사까지 + 씨앗 2·3 채집까지).
 const FARM_PRESETS: Array[String] = ["fast_civ", "demo_fast", "default"]
 const FARM_SEEDS: Array[int] = [1, 2, 3]
@@ -19,11 +20,11 @@ const FARM_GENERATIONS := 100.0
 ## fast_civ 다시 맞춤의 목표는 S15 와 따로 검사한다(S15 는 demo_fast 로도 통과하므로): FARM_SEEDS 의 첫 씨앗이
 ## fast_civ 그대로 평균 FARM_GENERATIONS 세대 안에 농사. 결정적이므로 문서에 적은 시각도 고정한다 —
 ## 시뮬레이션·설정을 일부러 바꿨다면 다시 재서 이 두 값과 TUNING-fast_civ.md·TEST-REPORT(W11·6절)를 함께 고칠 것.
-const FAST_CIV_SEED1_FARM_TICK := 3321
-const FAST_CIV_SEED1_FARM_GEN := 49.0
+const FAST_CIV_SEED1_FARM_TICK := 2040
+const FAST_CIV_SEED1_FARM_GEN := 28.5
 ## fast_civ 의 채집은 FARM_SEEDS 모두에서 진화 도중(이 평균 세대 이상)에 열려야 한다.
-## 이전 값은 씨앗 1~3 이 4.35·0.22·0.49세대(첫 무작위 두뇌의 행동), 지금은 33.9·4.2·23.3세대.
-## 씨앗 1~3 만 본다: 씨앗 7 은 지금 값에서도 알려진 예외(채집·저장·농사 0.24·0.32·1.98세대 — 첫 세대 폭발,
+## 이전 값은 씨앗 1~3 이 4.35·0.22·0.49세대(첫 무작위 두뇌의 행동), 지금은 21.7·3.3·25.9세대(규칙 고침 전 33.9·4.2·23.3).
+## 씨앗 1~3 만 본다: 씨앗 7 은 지금 값에서도 알려진 예외(채집·저장·농사 0.23·0.34·1.89세대 — 첫 세대 폭발,
 ## TUNING-fast_civ.md "목표와 다른 점").
 const FAST_CIV_MIN_FORAGE_GEN := 2.0
 ## 성능 기록: 개체·틱당 마이크로초가 이 값의 두 배를 넘으면 실패(CI 기계 차이를 감안한 느슨한 상한).
@@ -52,6 +53,9 @@ func _init() -> void:
 		"test_time_after_step", "test_event_copies", "test_extinction_mean_gen",
 		"test_config_rules", "test_presets_file", "test_night_threshold", "test_components_fast", "test_snapshot_corrupt",
 		"test_recorder_files",
+		"test_empty_start", "test_mate_once_per_tick", "test_store_max_count", "test_first_farm_once", "test_store_takes_pile",
+		"test_child_energy_cap", "test_store_built_in_act", "test_spoil_lifetime", "test_growth_interval",
+		"test_farm_abandon_any_growth", "test_light_curve", "test_store_not_on_farm", "test_action_names", "test_harsh_winter",
 	]
 	for t in tests:
 		if not _only.is_empty() and not _only.has(t):
@@ -113,11 +117,25 @@ static func remove_tree(abs_dir: String) -> void:
 	DirAccess.remove_absolute(abs_dir)
 
 
-## 슬라임 없는 작은 세계(규칙 단위 검사용).
+## 슬라임 없는 작은 세계(규칙 단위 검사용 — 슬라임은 add_slime 으로 손으로 놓는다). setup 은 개체 0 인 세계를 틱 0 멸종으로
+## 기록하므로(I08) 그 기록을 지운다(손으로 놓은 개체가 사라질 때의 멸종을 보는 검사가 있음).
 func empty_world(sets: Dictionary = {}) -> SimWorld:
 	var s := {"population.initial": 0}
 	s.merge(sets, true)
-	return world(s)
+	var wd := world(s)
+	wd.extinct_tick = -1
+	wd.chronicle.clear()
+	wd._pending_events.clear()
+	return wd
+
+
+## p 와 다른 발견 구역(discovery.region_size)에 있는 풀밭 칸 번호.
+func other_region_grass(wd: SimWorld, p: Vector2i) -> int:
+	var rs := int(wd.cfg.discovery.region_size)
+	for c in wd.w * wd.h:
+		if wd.tiles[c] == SimGrid.TILE_GRASS and ((c % wd.w) / rs != p.x / rs or (c / wd.w) / rs != p.y / rs):
+			return c
+	return -1
 
 
 ## 통과 가능한 풀밭 칸 하나(오른쪽·아래 이웃도 풀밭).
@@ -451,8 +469,9 @@ func test_world_think_matches() -> void:
 
 func test_plants_light_resources() -> void:
 	var wd := empty_world()
-	wd.light = 0.0
-	var before := wd.food.duplicate()
+	# 성장은 그 갱신이 덮는 틱들(tick ~ tick + update_every − 1)의 빛으로 셈(J02) — 밤 구간 첫 틱에서 갱신(덮는 틱 모두 밤)
+	var lit_ticks := int(float(wd.cfg.time.day_ticks) * float(wd.cfg.time.daylight_fraction))
+	wd.tick = lit_ticks
 	for c in wd.w * wd.h:
 		wd.food[c] = 0.0
 	wd._grow_plants()
@@ -461,7 +480,7 @@ func test_plants_light_resources() -> void:
 		if wd.food[c] > 0.0:
 			grew = true
 	check(not grew, "밤(빛 0, night_growth 0)에는 식물이 자라지 않음")
-	wd.light = 1.0
+	wd.tick = int(wd.cfg.time.twilight_ticks)
 	wd._grow_plants()
 	var grew2 := false
 	for c in wd.w * wd.h:
@@ -667,9 +686,9 @@ func test_storehouse_rules() -> void:
 		wd._spoil_dropped()
 		wd._act_all()
 	check(wd.store_food[0] == stored, "저장분은 시간이 지나도 줄지 않음")
-	# 바닥 먹이는 썩음
+	# 바닥 먹이는 썩음(내려놓은 틱의 ⑥ 포함 spoil_ticks + 1 번째 ⑥ 에서 — 실제 틱 흐름의 수명은 test_spoil_lifetime)
 	wd._put_dropped(c + 1, 3.0)
-	for k in int(wd.cfg.dropped.spoil_ticks):
+	for k in int(wd.cfg.dropped.spoil_ticks) + 1:
 		wd._spoil_dropped()
 	check(wd.dropped[c + 1] == 0.0 and wd.drop_listed[c + 1] == 0, "바닥 먹이는 spoil_ticks 뒤 사라짐")
 
@@ -705,7 +724,7 @@ func test_farm_rules() -> void:
 	check(wd.food_cap[tc] > float(wd.cfg.plants.max_food) * float(wd.base_fert[tc]) and wd.fert[tc] == 1.0, "밭은 비옥도 1·상한 증가")
 	# 버려진 밭은 풀밭으로
 	wd.tick = wd.farm_visit[tc] + int(wd.cfg.farm.abandon_ticks) + 1
-	wd._grow_plants()
+	wd._abandon_farms()
 	check(wd.tiles[tc] == SimGrid.TILE_GRASS and wd.farms.is_empty(), "abandon_ticks 동안 안 밟은 밭은 풀밭으로")
 	# 싹 규칙: 저장고 근처 풀밭에서 썩은 먹이가 싹틀 수 있음(확률 1 로)
 	var w2 := empty_world({"dropped.sprout_chance": 1.0})
@@ -717,7 +736,7 @@ func test_farm_rules() -> void:
 	w2.stage = SimWorld.STAGE_STORE
 	var f0 := w2.base_fert[qc + 1]
 	w2._put_dropped(qc + 1, 2.0)
-	for k in int(w2.cfg.dropped.spoil_ticks):
+	for k in int(w2.cfg.dropped.spoil_ticks) + 1:
 		w2._spoil_dropped()
 	check(w2.farm_sprouts == 1 and w2.base_fert[qc + 1] > f0, "저장고 근처 싹 1번, 비옥도 증가")
 
@@ -1356,3 +1375,419 @@ func test_recorder_files() -> void:
 	var e2 := SimSnapshot.save_file(wd, path)
 	check(e2 != "" and e2.contains("snapshot-20.json.tmp"), "임시 파일을 열 수 없음 → 파일 이름을 담은 실패 문장: " + e2)
 	remove_tree(sdir)
+
+
+# ───────────────────────── 규칙 고침(검토 고침 g1b) ─────────────────────────
+
+## 처음부터 개체가 없는 세계(I08): setup 이 틱 0 멸종·멸종 사건을 남겨, 실행기(틱 0 에서 끝남)와 실험실(Experiment)의
+## timeseries·chronicle 이 글자까지 같다. 예전: 실행기는 extinct_tick −1·빈 연대기, 실험실은 한 틱 더 돌아 틱 1 멸종·2줄.
+func test_empty_start() -> void:
+	for sets in [{"population.initial": 0}, {"map.water_level": 1.0}]:
+		var wd := world(sets)
+		var ev: Dictionary = wd.chronicle.back() if not wd.chronicle.is_empty() else {}
+		check(wd.is_extinct() and wd.extinct_tick == 0 and wd.chronicle.size() == 1 and str(ev.get("kind", "")) == "extinction"
+				and int(ev.get("tick", -1)) == 0, "처음부터 개체 0(%s) → 틱 0 멸종·멸종 사건 하나(extinct_tick %d, 사건 %d개)" % [
+				str(sets), wd.extinct_tick, wd.chronicle.size()])
+		wd.step_n(3)
+		check(wd.extinct_tick == 0 and wd.chronicle.size() == 1, "빈 세계를 더 돌려도 멸종 틱 0·사건 하나 그대로")
+	var runner = load("res://tests/run_experiment.gd")
+	var dir := tmp_dir("test_empty_start")
+	var a: Dictionary = runner.parse_args(PackedStringArray(["--out=" + dir.path_join("runner"), "--quiet", "--seed=1", "--set=population.initial=0"]))
+	a.silent = true
+	check(not a.has("error") and runner.run(a) == 0, "실행기: 개체 0 실험도 결과를 씀")
+	var sm = JSON.parse_string(FileAccess.get_file_as_string(dir.path_join("runner/summary.json")))
+	check(typeof(sm) == TYPE_DICTIONARY and sm.end_reason == "extinction" and int(sm.extinct_tick) == 0 and int(sm.tick) == 0,
+			"실행기 요약: 끝난 이유 extinction 과 멸종 틱 0 이 맞음(예전 extinct_tick −1): %s" % str(sm.get("extinct_tick") if typeof(sm) == TYPE_DICTIONARY else sm))
+	var r := Experiment.create("default", {"population.initial": 0}, 1)
+	var x: Experiment = r.experiment
+	check(x != null, "실험실 실험 만들기: " + str(r.error))
+	if x == null:
+		return
+	x.step_n(5)
+	check(x.export_dir(dir.path_join("lab")).is_empty(), "실험실 결과 내보내기")
+	for fn in ["timeseries.csv", "chronicle.csv"]:
+		var lab_b := FileAccess.get_file_as_bytes(dir.path_join("lab").path_join(fn))
+		var run_b := FileAccess.get_file_as_bytes(dir.path_join("runner").path_join(fn))
+		check(lab_b.size() > 3 and lab_b == run_b, "개체 0 실험의 %s: 실험실 = 실행기(글자까지, %d줄 / %d줄)" % [fn,
+				lab_b.get_string_from_utf8().split("\n", false).size(), run_b.get_string_from_utf8().split("\n", false).size()])
+	remove_tree(dir)
+
+
+## 쿨다운 0 이어도 한 틱에 한 번만 짝지음(I24). 예전: 같은 칸 세 마리에서 한 번의 _reproduce 로 자식 3(개체 a 가 세 번).
+func test_mate_once_per_tick() -> void:
+	var wd := empty_world({"repro.cooldown": 0, "mutation.rate": 0.0})
+	var p := grass_spot(wd)
+	for k in 3:
+		add_slime(wd, p, 0.9, 100)
+	wd.s_dead.fill(0)
+	wd._reproduce()
+	check(wd.population() == 4 and wd.lin_children[0] == 1 and wd.lin_children[1] == 1 and wd.lin_children[2] == 0,
+			"쿨다운 0 · 같은 칸 세 마리 → 자식 하나(부모마다 자식 %d·%d·%d)" % [wd.lin_children[0], wd.lin_children[1], wd.lin_children[2]])
+	# 일반 흐름: 기본·씨앗 1·쿨다운 0 으로 600틱 — 같은 틱에 두 번 짝지은 부모가 없음(예전 61번)
+	var w2 := world({"repro.cooldown": 0}, 1)
+	w2.step_n(600)
+	var seen := {}
+	var twice := 0
+	for id in w2.lin_pa.size():
+		for par in [w2.lin_pa[id], w2.lin_pb[id]]:
+			if par == SimWorld.NO_PARENT:
+				continue
+			var key := "%d@%d" % [par, w2.lin_birth[id]]
+			if seen.has(key):
+				twice += 1
+			seen[key] = true
+	check(w2.total_births > 0 and twice == 0, "기본·쿨다운 0·600틱: 한 틱에 두 번 짝지은 부모 %d번(출생 %d)" % [twice, w2.total_births])
+
+
+## 저장고 최대 수에는 저장 발견 때 짓는 첫 저장고도 든다(I25): 0 은 거부(예전엔 0 이어도 1개 — 1 과 같은 역사), 1 이면 그 하나뿐.
+func test_store_max_count() -> void:
+	check(SimConfig.build("default", {"store.max_count": 0}).error.contains("store.max_count"), "저장고 최대 수 0 거부: " + str(SimConfig.build("default", {"store.max_count": 0}).error))
+	check(SimConfig.build("default", {"store.max_count": 1}).error == "", "저장고 최대 수 1 은 받음")
+	var wd := empty_world({"store.max_count": 1, "store.min_spacing": 0})
+	var p := grass_spot(wd)
+	var id := add_slime(wd, p)
+	var i := wd.index_of_id(id)
+	wd.stage = SimWorld.STAGE_FORAGE
+	var thr := float(wd.cfg.discovery.store_threshold)
+	wd.s_carry[i] = thr
+	wd._drop(i, p.y * wd.w + p.x)
+	var far := other_region_grass(wd, p)
+	for k in 3:
+		wd.s_carry[i] = thr
+		wd._drop(i, far)
+	check(wd.stage == SimWorld.STAGE_STORE and wd.store_tiles.size() == 1, "최대 수 1: 저장 발견 때의 저장고 하나뿐(지금 %d개)" % wd.store_tiles.size())
+
+
+## '첫 밭' 사건은 세계에서 한 번(I26): 밭을 모두 잃고 다시 심어도 다시 나오지 않음. 첫 밭 틱은 스냅숏에 담기고, 그 키가 없는
+## 옛 스냅숏은 연대기에서 다시 만든다.
+func test_first_farm_once() -> void:
+	var wd := empty_world()
+	var p := grass_spot(wd)
+	var c := p.y * wd.w + p.x
+	wd.store_tiles.append(c)
+	wd.store_food.append(0.0)
+	wd._rebuild_stores()
+	wd.stage = SimWorld.STAGE_FARM
+	var id := add_slime(wd, p + Vector2i(0, 1), 0.9, 100, 1)
+	var i := wd.index_of_id(id)
+	wd.s_carry[i] = 3.0
+	wd.s_last_action[i] = SimBrain.ACT_PLANT
+	wd._think_every = 1000000
+	wd.tick = 1
+	wd._act_all()
+	var tc := (p.y + 1) * wd.w + p.x + 1
+	check(wd.tiles[tc] == SimGrid.TILE_FARM and wd.first_farm_tick == 1, "심기 → 첫 밭 틱 %d" % wd.first_farm_tick)
+	var count_ff := func(w: SimWorld) -> int:
+		var n := 0
+		for e in w.chronicle:
+			if str(e.kind) == "first_farm":
+				n += 1
+		return n
+	# 스냅숏 왕복·옛 스냅숏(키 없음 → 연대기에서)
+	var text := SimSnapshot.to_text(wd)
+	var r1 := SimSnapshot.from_text(text)
+	var od = JSON.parse_string(text)
+	od.civ.erase("first_farm_tick")
+	var r2 := SimSnapshot.from_dict(od)
+	check(r1.world != null and r1.world.first_farm_tick == 1 and r2.world != null and r2.world.first_farm_tick == 1,
+			"첫 밭 틱이 스냅숏 왕복(키가 없는 옛 스냅숏은 연대기에서 %s)" % str(r2.world.first_farm_tick if r2.world != null else r2.error))
+	var bad = JSON.parse_string(text)
+	bad.civ.first_farm_tick = "x"
+	check(SimSnapshot.from_dict(bad).error.contains("first_farm_tick"), "첫 밭 틱이 정수가 아닌 스냅숏 거부")
+	for w: SimWorld in [wd, r1.world, r2.world]:
+		var k := w.index_of_id(id)
+		w.tick = w.farm_visit[tc] + int(w.cfg.farm.abandon_ticks) + 1
+		w._abandon_farms()
+		var lost := w.farms.is_empty() and w.tiles[tc] == SimGrid.TILE_GRASS
+		w.s_carry[k] = 3.0
+		w.s_last_action[k] = SimBrain.ACT_PLANT
+		w._think_every = 1000000
+		w._act_all()
+		check(lost and w.tiles[tc] == SimGrid.TILE_FARM and count_ff.call(w) == 1 and w.first_farm_tick == 1,
+				"밭을 모두 잃고(%s) 다시 심어도 '첫 밭' 사건은 한 번(%d번)" % [str(lost), count_ff.call(w)])
+
+
+## 저장고를 지은 칸의 바닥 먹이 더미는 저장분으로(I27) — 예전엔 dropped 에 남아 그 칸의 입력(발밑 먹이)·먹기에 안 잡힌 채 썩음.
+## 저장고 칸에서 죽은 개체의 운반분도 저장분으로(용량까지, 남는 몫만 바닥).
+func test_store_takes_pile() -> void:
+	var wd := empty_world()
+	var p := grass_spot(wd)
+	var c := p.y * wd.w + p.x
+	var id := add_slime(wd, p)
+	var i := wd.index_of_id(id)
+	wd.stage = SimWorld.STAGE_FORAGE
+	var thr := float(wd.cfg.discovery.store_threshold)
+	var cap := float(wd.cfg.store.capacity)
+	wd.s_carry[i] = thr + 10.0
+	wd._drop(i, c)
+	check(wd.store_tiles.size() == 1 and wd.store_tiles[0] == c and wd.store_food[0] == thr + 10.0 and wd.dropped[c] == 0.0,
+			"저장고를 짓는 칸의 더미 %.0f → 저장분 %.1f, 바닥 %.1f" % [thr + 10.0, wd.store_food[0] if not wd.store_food.is_empty() else -1.0, wd.dropped[c]])
+	wd._think(i, p.x, p.y, c, wd.s_head[i], wd.s_emax[i])
+	check(wd._in[SimBrain.IN_FOOD_HERE] == (thr + 10.0) / cap, "저장고 칸의 발밑 먹이 입력이 그 먹이를 봄(%.3f)" % wd._in[SimBrain.IN_FOOD_HERE])
+	wd.s_energy[i] = 1.0
+	wd._eat(i, c, wd.s_size[i], wd.s_emax[i])
+	check(wd.s_energy[i] > 1.0 and wd.store_food[0] < thr + 10.0, "저장고 칸에서 그 먹이를 먹을 수 있음")
+	# 용량을 넘는 더미: 용량까지만 저장분, 넘친 몫은 바닥
+	var w2 := empty_world()
+	var q := grass_spot(w2)
+	var qc := q.y * w2.w + q.x
+	var i2 := w2.index_of_id(add_slime(w2, q))
+	w2.stage = SimWorld.STAGE_FORAGE
+	w2.s_carry[i2] = cap + 50.0
+	w2._drop(i2, qc)
+	check(w2.store_food.size() == 1 and w2.store_food[0] == cap and w2.dropped[qc] == 50.0, "용량을 넘는 더미는 용량까지 저장분, 넘친 50 은 바닥")
+	# 저장고 칸에서 죽은 개체의 운반분
+	var w3 := empty_world()
+	var s := grass_spot(w3)
+	var sc := s.y * w3.w + s.x
+	w3.store_tiles.append(sc)
+	w3.store_food.append(cap - 2.0)
+	w3._rebuild_stores()
+	var i3 := w3.index_of_id(add_slime(w3, s))
+	w3.s_carry[i3] = 5.0
+	w3.s_dead[i3] = SimWorld.CAUSE_STARVED
+	w3._remove_dead()
+	check(w3.store_food[0] == cap and w3.dropped[sc] == 3.0, "저장고 칸에서 죽은 개체의 운반분 5 → 저장분이 용량까지(+2), 남은 3 은 바닥")
+
+
+## 자식 에너지는 자식의 최대 에너지까지(I28) — 넘친 몫은 장부 led_repro_loss 로(장부 그대로). 예전: 번식 비용 0.6·효율 1.0 에서
+## 최대의 1.2배(400틱 동안 최대를 넘은 슬라임·틱 171).
+func test_child_energy_cap() -> void:
+	var sets := {"repro.cost_frac": 0.6, "repro.transfer_efficiency": 1.0}
+	var wd := empty_world({"repro.cost_frac": 0.6, "repro.transfer_efficiency": 1.0, "mutation.rate": 0.0})
+	var p := grass_spot(wd)
+	add_slime(wd, p, 1.0, 100)
+	add_slime(wd, p, 1.0, 100)
+	wd.s_dead.fill(0)
+	wd._reproduce()
+	var k := wd.index_of_id(2)
+	check(wd.population() == 3 and wd.s_energy[k] == wd.s_emax[k], "가득 찬 두 부모 · 비용 0.6 · 효율 1 → 자식 에너지 = 자식 최대(%.2f / %.2f)" % [wd.s_energy[k], wd.s_emax[k]])
+	check(absf(wd.total_energy() - wd.ledger_expected()) < 1e-9, "넘친 몫은 번식 손실로 장부에 남음")
+	var w2 := world(sets, 1)
+	var over := 0
+	var worst := 0.0
+	for t in 400:
+		w2.step()
+		for j in w2.population():
+			if w2.s_energy[j] > w2.s_emax[j]:
+				over += 1
+		worst = maxf(worst, absf(w2.total_energy() - w2.ledger_expected()))
+	check(over == 0 and worst < 1e-6, "비용 0.6·효율 1·씨앗 1·400틱: 최대 에너지를 넘은 슬라임·틱 %d, 장부 오차 %s" % [over, String.num_scientific(worst)])
+
+
+## 저장고 짓기·저장 발견은 ③ 의 내려놓기 순간(I29): 같은 틱 뒤 차례 개체가 그 저장고를 입력으로 본다. 파일 머리의 틱 순서 주석이
+## 이것을 적는다(예전 주석·DESIGN 9절은 "⑦ 발견 판정·건물").
+func test_store_built_in_act() -> void:
+	var wd := empty_world()
+	var p := grass_spot(wd)
+	var a := wd.index_of_id(add_slime(wd, p, 0.9, 100, 1))
+	var q := p + Vector2i(int(wd.cfg.repro.mate_radius) + 2, 0)
+	if q.x >= wd.w or not SimGrid.passable(wd.tiles[q.y * wd.w + q.x]):
+		q = p + Vector2i(0, int(wd.cfg.repro.mate_radius) + 2)
+	var b := wd.index_of_id(add_slime(wd, q, 0.9, 100, 1))
+	wd.stage = SimWorld.STAGE_FORAGE
+	wd.s_carry[a] = float(wd.cfg.discovery.store_threshold)
+	wd.s_last_action[a] = SimBrain.ACT_DROP
+	# a(id 0)는 이 틱에 판단하지 않고 내려놓기를 되풀이, b(id 1)는 판단(think_every 2, 틱 1)
+	wd._think_every = 2
+	wd.tick = 1
+	wd.step()
+	var ev_tick := -1
+	for e in wd.chronicle:
+		if str(e.kind) == "store_built":
+			ev_tick = int(e.tick)
+	check(wd.discovery_tick[SimWorld.STAGE_STORE] == 1 and ev_tick == 1, "저장 발견·저장고 1호가 내려놓은 틱 1 에(발견 틱 %d, 사건 틱 %d)" % [wd.discovery_tick[SimWorld.STAGE_STORE], ev_tick])
+	check(wd.store_dist[q.y * wd.w + q.x] != SimGrid.FAR and wd._in[SimBrain.IN_STORE_NEAR] > 0.0,
+			"같은 틱 뒤 차례 개체(b)의 판단에 그 저장고가 보임(저장고 가까움 %.3f)" % wd._in[SimBrain.IN_STORE_NEAR])
+	var head := FileAccess.get_file_as_string("res://scripts/sim/sim_world.gd").split("const STAGE_NONE", true, 1)[0]
+	check(head.contains("저장고 짓기와 저장 발견은 ⑦ 이 아니라 ③") and head.contains("⑦ 채집·농사 발견 판정"), "sim_world.gd 머리의 틱 순서 주석이 실제 순서(저장고는 ③)를 적음")
+
+
+## 바닥 먹이 수명(I30·J12): 실제 틱 흐름에서 내려놓은 틱부터 꼭 spoil_ticks 틱 뒤에 썩는다(예전 spoil_ticks − 1). 타이머는 칸마다
+## 하나라 더 내려놓으면 더미 전체가 다시 센다 — 이름표(말풍선·CONFIG.md)도 그렇게 적는다.
+func test_spoil_lifetime() -> void:
+	var spoil := int(cfg_with().dropped.spoil_ticks)
+	var gone_at := func(wd: SimWorld, c: int, more_at: int) -> int:
+		var t0 := wd.tick
+		var limit := t0 + 4 * spoil
+		while wd.tick < limit:
+			if wd.tick == more_at:
+				wd._put_dropped(c, 1.0)
+			var t := wd.tick
+			wd.step()
+			if wd.dropped[c] == 0.0:
+				return t
+		return -1
+	var wd := empty_world({"dropped.sprout_chance": 0.0})
+	var p := grass_spot(wd)
+	var c := p.y * wd.w + p.x
+	wd.tick = 7
+	wd._put_dropped(c, 5.0)
+	var g1: int = gone_at.call(wd, c, -1)
+	check(g1 - 7 == spoil, "틱 7 에 내려놓은 먹이가 틱 %d 에 사라짐 = 수명 %d틱(spoil_ticks %d)" % [g1, g1 - 7, spoil])
+	var w2 := empty_world({"dropped.sprout_chance": 0.0})
+	w2.tick = 7
+	w2._put_dropped(c, 5.0)
+	var g2: int = gone_at.call(w2, c, 7 + 80)
+	check(g2 == 7 + 80 + spoil, "틱 87 에 더 놓으면 더미 전체(처음 5 포함)가 틱 %d 에 사라짐(= 87 + %d)" % [g2, spoil])
+	var help := str(SimConfig.load_json("res://config/sim-labels.json")["dropped.spoil_ticks"].help)
+	check(help.contains("마지막으로 내려놓은 틱부터") and help.contains("더 내려놓으면 더미 전체가 다시 셈"), "이름표: 썩는 시간은 칸 더미의 마지막 내려놓기부터(다시 셈): " + help)
+
+
+## 식물 갱신 간격은 성능용(J02): 간격과 상관없이 같은 양이 자란다(그 사이 틱마다의 빛·계절을 더함). 예전엔 갱신 틱의 빛을 간격 전체에
+## 곱해 12 는 −20%, 20 은 −33%, 하루 길이(60)의 배수면 늘 빛 0 인 틱에 갱신해 전혀 자라지 않았다.
+func test_growth_interval() -> void:
+	var totals := {}
+	for every in [1, 2, 4, 7, 12, 20, 60]:
+		var wd := world({"population.initial": 0, "plants.initial_fill": 0.0, "plants.max_food": 1e9, "plants.update_every": every})
+		wd.step_n(420)
+		totals[every] = wd.sum_of(wd.food)
+	var base: float = totals[1]
+	var bad := PackedStringArray()
+	for every in totals:
+		if absf(float(totals[every]) - base) > base * 1e-9:
+			bad.append("%d: %.1f" % [every, float(totals[every])])
+	check(base > 0.0 and bad.is_empty(), "갱신 간격 1·2·4·7·12·20·60 의 420틱 성장 합이 같음(간격 1: %.1f, 다른 것: %s)" % [base, ", ".join(bad)])
+
+
+## 밭 버려짐은 매 틱, 성장 속도와 상관없이(J03): 밭 성장 배수 0 이어도, 식물 갱신 간격이 7 이어도 마지막으로 밟은 틱 + abandon_ticks + 1
+## 에 풀밭으로. 예전엔 성장 속도 0 인 칸은 판정을 건너뛰어 영영 밭으로 남았고, 판정은 갱신 틱에만 돌았다.
+func test_farm_abandon_any_growth() -> void:
+	for sets in [{"farm.growth_mult": 0.0}, {"plants.update_every": 7}]:
+		var wd := empty_world(sets)
+		var p := grass_spot(wd)
+		wd.store_tiles.append(p.y * wd.w + p.x)
+		wd.store_food.append(0.0)
+		wd._rebuild_stores()
+		wd.stage = SimWorld.STAGE_FARM
+		var i := wd.index_of_id(add_slime(wd, p + Vector2i(0, 1), 0.9, 100, 1))
+		wd.s_carry[i] = 3.0
+		wd.s_last_action[i] = SimBrain.ACT_PLANT
+		wd._think_every = 1000000
+		wd.tick = 1
+		wd._act_all()
+		wd.s_last_action[i] = SimBrain.ACT_REST
+		wd.s_max_age[i] = 1000000
+		var tc := (p.y + 1) * wd.w + p.x + 1
+		var due := wd.farm_visit[tc] + int(wd.cfg.farm.abandon_ticks) + 1
+		wd.tick = due - 1
+		wd.s_energy[i] = wd.s_emax[i]
+		wd.step()
+		var kept := wd.tiles[tc] == SimGrid.TILE_FARM
+		wd.step()
+		var lost_tick := -1
+		for e in wd.chronicle:
+			if str(e.kind) == "farm_lost":
+				lost_tick = int(e.tick)
+		check(kept and wd.tiles[tc] == SimGrid.TILE_GRASS and wd.farms.is_empty() and lost_tick == due,
+				"%s: 밭이 틱 %d 까지 남고 틱 %d 에 풀밭으로(버려짐 사건 틱 %d)" % [str(sets), due - 1, due, lost_tick])
+
+
+## 빛 곡선(J11): 해 뜨고 지는 램프는 낮 구간 안쪽에 있어 하루 빛 합 = 낮 틱 − twilight, 빛 1 인 틱 = 낮 틱 − 2·twilight + 1.
+## 이름표는 낮 비율을 '빛이 0 보다 큰 몫'으로, twilight 는 하루 빛 합·성장을 줄인다고 적는다(예전 '낮(빛 1)인 몫').
+func test_light_curve() -> void:
+	var bad := PackedStringArray()
+	for tw in [0, 3, 6, 12, 18]:
+		var wd := empty_world({"time.twilight_ticks": tw})
+		var day := int(wd.cfg.time.day_ticks)
+		var lit := int(float(day) * float(wd.cfg.time.daylight_fraction))
+		var total := 0.0
+		var ones := 0
+		for t in day:
+			var l := wd._light_at(t)
+			total += l
+			if l == 1.0:
+				ones += 1
+		var want_ones: int = lit - 2 * tw + 1 if tw > 0 else lit
+		if absf(total - float(lit - tw)) > 1e-9 or ones != want_ones:
+			bad.append("tw %d: 합 %.2f 빛1 %d" % [tw, total, ones])
+	check(bad.is_empty(), "하루 빛 합 = 낮 틱 − twilight, 빛 1 인 틱 = 낮 틱 − 2·twilight + 1 (틀린 것: %s)" % ", ".join(bad))
+	var labels: Dictionary = SimConfig.load_json("res://config/sim-labels.json")
+	var hf := str(labels["time.daylight_fraction"].help)
+	var ht := str(labels["time.twilight_ticks"].help)
+	check(not hf.contains("빛 1)") and hf.contains("빛이 0 보다 큰 몫") and ht.contains("하루 빛 합 = 낮 틱 − 이 값"),
+			"이름표: 낮 비율 = 빛이 0 보다 큰 몫, twilight 는 하루 빛 합을 줄임: %s / %s" % [hf, ht])
+
+
+## 밭 칸에는 저장고를 짓지 않는다(J13): farm.radius ≥ store.min_spacing 이면 예전엔 가장 많이 놓인 밭 칸 위에 저장고가 지어져
+## 저장고이자 밭으로 두 번 셈(fast_civ·씨앗 2·max_count 40·min_spacing 3·radius 12: 1,183틱 저장고 28호가 밭 위).
+func test_store_not_on_farm() -> void:
+	var sets := {"farm.radius": 12, "store.min_spacing": 3, "store.max_count": 40}
+	var wd := empty_world(sets)
+	var p := grass_spot(wd)
+	wd.store_tiles.append(p.y * wd.w + p.x)
+	wd.store_food.append(0.0)
+	wd._rebuild_stores()
+	wd.stage = SimWorld.STAGE_FARM
+	var rs := int(wd.cfg.discovery.region_size)
+	# 저장고에서 3칸 이상 떨어진, 저장고와 다른 구역의 풀밭 칸을 밭으로 만들고 그 칸에 가장 많이 놓인 것으로
+	var f := -1
+	for y in wd.h:
+		for x in wd.w:
+			var cc := y * wd.w + x
+			if f == -1 and wd.tiles[cc] == SimGrid.TILE_GRASS and absi(x - p.x) + absi(y - p.y) >= 3 and (x / rs != p.x / rs or y / rs != p.y / rs) \
+					and wd.store_dist[cc] <= int(wd.cfg.farm.radius):
+				f = cc
+	var r := (f / wd.w / rs) * wd.regions_x + (f % wd.w) / rs
+	wd.tiles[f] = SimGrid.TILE_FARM
+	wd.farms.append(f)
+	wd.drop_total_tile[f] = 100.0
+	wd.region_drop[r] = float(wd.cfg.discovery.store_threshold)
+	wd._check_store_region(r)
+	check(f != -1 and not wd.store_tiles.has(f) and wd.store_tiles.size() == 1, "가장 많이 놓인 칸이 밭이면 그 위에 저장고를 짓지 않음(저장고 %d개)" % wd.store_tiles.size())
+	# 실제 흐름: 저장고 ∩ 밭 = ∅
+	var w2 := world(sets, 2, "fast_civ")
+	var both := 0
+	for k in 12:
+		w2.step_n(100)
+		for c in w2.farms:
+			if w2.store_at[c] != SimWorld.NO_STORE:
+				both += 1
+	check(w2.stage == SimWorld.STAGE_FARM and both == 0, "fast_civ·씨앗 2·밭 반경 12·간격 3: 1,200틱 동안 저장고이자 밭인 칸 %d(단계 %d, 저장고 %d)" % [both, w2.stage, w2.store_tiles.size()])
+
+
+## 행동 이름(I47): 왼쪽·오른쪽은 제자리에서 방향만 바꾼다 — 화면 이름도 "돌기"(예전 "왼쪽으로"·"오른쪽으로" 는 이동처럼 읽힘).
+func test_action_names() -> void:
+	var wd := empty_world()
+	var p := grass_spot(wd)
+	var moved := false
+	var turned := true
+	for act in [SimBrain.ACT_LEFT, SimBrain.ACT_RIGHT]:
+		var i := wd.index_of_id(add_slime(wd, p, 0.9, 100, 1))
+		wd.s_last_action[i] = act
+		wd._think_every = 1000000
+		wd.tick = 1
+		wd._act_all()
+		moved = moved or wd.s_x[i] != p.x or wd.s_y[i] != p.y
+		turned = turned and wd.s_head[i] == (SimGrid.left_of(1) if act == SimBrain.ACT_LEFT else SimGrid.right_of(1))
+	var nl := SimBrain.ACTION_NAMES[SimBrain.ACT_LEFT]
+	var nr := SimBrain.ACTION_NAMES[SimBrain.ACT_RIGHT]
+	check(not moved and turned and nl.ends_with("돌기") and nr.ends_with("돌기") and nl.begins_with("왼쪽") and nr.begins_with("오른쪽"),
+			"왼쪽·오른쪽 행동은 제자리 돌기, 이름도 \"%s\"·\"%s\"" % [nl, nr])
+
+
+## 예설정 harsh_winter 는 멸종 조건(J22): presets.json 의 화면 이름·_comment 가 그렇게 적고(tools/test_sim_labels.py), 적은 결과
+## (씨앗 1 은 첫 겨울 중 1,118틱에 멸종)를 여기서 고정한다(느린 검사 — --skip-slow 면 건너뜀).
+const HARSH_SEED1_EXTINCT := 1118
+
+
+func test_harsh_winter() -> void:
+	var p: Dictionary = SimConfig.presets().get("harsh_winter", {})
+	check(str(p.get("label", "")).contains("멸종") and str(p.get("_comment", "")).contains("%s틱" % _commas(HARSH_SEED1_EXTINCT)),
+			"harsh_winter 화면 이름·설명이 멸종 조건과 씨앗 1 의 멸종 틱을 적음: %s" % str(p.get("label", "")))
+	if _skip_slow:
+		check(true, "느린 검사 건너뜀")
+		return
+	var wd := world({}, 1, "harsh_winter")
+	while not wd.is_extinct() and wd.tick < 8000:
+		wd.step()
+	check(wd.extinct_tick == HARSH_SEED1_EXTINCT, "harsh_winter 씨앗 1 은 틱 %d 에 멸종(문서 %d)" % [wd.extinct_tick, HARSH_SEED1_EXTINCT])
+
+
+static func _commas(n: int) -> String:
+	var s := str(n)
+	var out := ""
+	while s.length() > 3:
+		out = "," + s.substr(s.length() - 3) + out
+		s = s.substr(0, s.length() - 3)
+	return s + out

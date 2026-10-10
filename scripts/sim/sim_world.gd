@@ -3,8 +3,10 @@ extends RefCounted
 ## 슬라임 세계 한 개. Node·렌더링·입력·파일 대화상자 없이 규칙만 담는다(화면은 읽기만 한다).
 ## 설계: docs/DESIGN-v0.1.md. 화면이 쓰는 질의 목록: docs/SIM-API.md.
 ##
-## 한 틱 순서: ① 빛·계절 ② (plants.update_every 마다) 식물 성장·누적 합 표 ③ 슬라임마다(id 오름차순)
-## 감지 → 판단 → 행동 → 대사 ④ 번식 ⑤ 사망 정리 ⑥ 바닥 먹이 썩음·싹 ⑦ 발견 판정 ⑧ 기록·해시.
+## 한 틱 순서: ① 빛·계절, 버려진 밭 → 풀밭(매 틱) ② (plants.update_every 마다) 식물 성장·누적 합 표 ③ 슬라임마다(id 오름차순)
+## 감지 → 판단 → 행동 → 대사 ④ 번식 ⑤ 사망 정리 ⑥ 바닥 먹이 썩음·싹 ⑦ 채집·농사 발견 판정 ⑧ 기록·해시.
+## 저장고 짓기와 저장 발견은 ⑦ 이 아니라 ③ 의 내려놓기 순간(_drop → _check_store_region)에 일어난다 — 같은 틱 뒤 차례 개체는
+## 그 저장고에 바로 넣고 저장고 입력(9·10)으로 본다(검사 test_store_built_in_act).
 ## 슬라임은 필드별 배열(SoA)이고 배열 순서 = id 오름차순이다(출생은 뒤에 붙이고, 사망은 순서를 지켜 뺀다).
 
 const STAGE_NONE := 0
@@ -56,6 +58,8 @@ var farms := PackedInt32Array()
 # ── 문명 ──
 var stage := STAGE_NONE
 var discovery_tick: Array[int] = [-1, -1, -1, -1]
+## 세계에서 처음 밭을 심은 틱(-1 = 아직). 밭을 모두 잃고 다시 심어도 '첫 밭' 사건은 한 번만.
+var first_farm_tick := -1
 var forage_attempts := 0
 var farm_sprouts := 0
 var store_drops_total := 0.0
@@ -128,6 +132,7 @@ var _wts := PackedFloat64Array()
 var _out := PackedFloat64Array()
 var _bucket_head := PackedInt32Array()
 var _bucket_next := PackedInt32Array()
+var _mated := PackedByteArray()
 
 # ── 자주 쓰는 설정 값(설정에서 한 번 읽음) ──
 var _G := 0
@@ -195,6 +200,10 @@ func setup(config: Dictionary, seed_in: int) -> String:
 	_build_sat()
 	_compute_time()
 	_hash_step()
+	# 처음부터 개체가 없는 세계(초기 개체 0, 지나갈 칸 없음)는 틱 0 에 멸종 — 실행기(틱 0 에서 끝남)와 실험실이 같은 기록을 남기게
+	if s_id.is_empty():
+		extinct_tick = tick
+		_event("extinction", -1, "멸종 — 시작할 때 개체가 없음")
 	return ""
 
 
@@ -329,6 +338,7 @@ func _append_derived(g: PackedFloat32Array) -> void:
 
 func step() -> void:
 	_compute_time()
+	_abandon_farms()
 	if tick % int(cfg.plants.update_every) == 0:
 		_grow_plants()
 		_build_sat()
@@ -349,29 +359,13 @@ func step_n(n: int) -> void:
 
 
 func _compute_time() -> void:
-	var t: Dictionary = cfg.time
-	var day := int(t.day_ticks)
-	var phase := float(tick % day)
-	var lit := float(day) * float(t.daylight_fraction)
-	var tw := float(t.twilight_ticks)
-	if tw <= 0.0:
-		light = 1.0 if phase < lit else 0.0
-	elif phase < tw:
-		light = phase / tw
-	elif phase < lit - tw:
-		light = 1.0
-	elif phase < lit:
-		light = (lit - phase) / tw
-	else:
-		light = 0.0
-	var sd := int(t.season_days)
+	light = _light_at(tick)
 	var gr: Array = cfg.seasons.growth
-	if sd <= 0:
-		season = -1
+	season = _season_at(tick)
+	if season < 0:
 		season_growth = 1.0
 		season_warm = 1.0
 		return
-	season = (tick / day / sd) % SEASON_COUNT
 	season_growth = float(gr[season])
 	var top := 0.0
 	for v in gr:
@@ -379,35 +373,76 @@ func _compute_time() -> void:
 	season_warm = season_growth / top if top > 0.0 else 0.0
 
 
+## 틱 t 의 빛(0~1). 낮 구간 [0, 하루 × 낮 비율) 안쪽 양 끝 twilight_ticks 동안 0 ↔ 1 로 고르게 바뀌고, 나머지(밤)는 0.
+## 그래서 하루 빛 합 = 낮 틱 − twilight_ticks(검사).
+func _light_at(t: int) -> float:
+	var tc: Dictionary = cfg.time
+	var day := int(tc.day_ticks)
+	var phase := float(t % day)
+	var lit := float(day) * float(tc.daylight_fraction)
+	var tw := float(tc.twilight_ticks)
+	if tw <= 0.0:
+		return 1.0 if phase < lit else 0.0
+	if phase < tw:
+		return phase / tw
+	if phase < lit - tw:
+		return 1.0
+	if phase < lit:
+		return (lit - phase) / tw
+	return 0.0
+
+
+## 틱 t 의 계절 0~3(-1 = 계절 없음).
+func _season_at(t: int) -> int:
+	var sd := int(cfg.time.season_days)
+	if sd <= 0:
+		return -1
+	return (t / int(cfg.time.day_ticks) / sd) % SEASON_COUNT
+
+
+## 식물 성장(plants.update_every 틱마다): 이번 갱신부터 다음 갱신 전까지 틱마다의 (빛 몫 × 계절 배수)를 더해 곱한다 —
+## 자라는 양이 갱신 간격과 상관없이 같다(간격은 성능용, 칸 상한에 닿을 때만 몰아 자른 만큼 다름). 간격 1 이면 그 틱 값 그대로.
 func _grow_plants() -> void:
 	var ng := float(cfg.plants.night_growth)
-	var light_f := ng + (1.0 - ng) * light
-	var every := float(cfg.plants.update_every)
-	var mult := light_f * season_growth * every
-	var farm_mult := light_f * maxf(season_growth, float(cfg.farm.winter_floor)) * every
-	var abandon := int(cfg.farm.abandon_ticks)
-	var lost := false
+	var gr: Array = cfg.seasons.growth
+	var floor_f := float(cfg.farm.winter_floor)
+	var mult := 0.0
+	var farm_mult := 0.0
+	for k in int(cfg.plants.update_every):
+		var light_f := ng + (1.0 - ng) * _light_at(tick + k)
+		var si := _season_at(tick + k)
+		var sg := 1.0 if si < 0 else float(gr[si])
+		mult += light_f * sg
+		farm_mult += light_f * maxf(sg, floor_f)
 	for c in w * h:
 		var r := grow_rate[c]
 		if r <= 0.0:
 			continue
 		if tiles[c] == SimGrid.TILE_FARM:
-			if tick - farm_visit[c] > abandon:
-				tiles[c] = SimGrid.TILE_GRASS
-				fert[c] = base_fert[c]
-				_update_tile_rates(c)
-				lost = true
-				continue
 			food[c] = minf(food_cap[c], food[c] + r * farm_mult)
 		else:
 			food[c] = minf(food_cap[c], food[c] + r * mult)
-	if lost:
-		var keep := PackedInt32Array()
-		for c in farms:
-			if tiles[c] == SimGrid.TILE_FARM:
-				keep.append(c)
-		_event("farm_lost", -1, "버려진 밭 %d곳이 풀밭으로 돌아감 (남은 밭 %d)" % [farms.size() - keep.size(), keep.size()])
-		farms = keep
+
+
+## 밭 버려짐(매 틱, 식물 갱신 간격·성장 속도와 상관없이): farm.abandon_ticks 동안 아무도 밟지 않은 밭은 풀밭으로.
+func _abandon_farms() -> void:
+	var abandon := int(cfg.farm.abandon_ticks)
+	var lost := 0
+	for c in farms:
+		if tick - farm_visit[c] > abandon:
+			lost += 1
+	if lost == 0:
+		return
+	var keep := PackedInt32Array()
+	for c in farms:
+		if tick - farm_visit[c] > abandon:
+			tiles[c] = SimGrid.TILE_GRASS
+			fert[c] = base_fert[c]
+			_update_tile_rates(c)
+		else:
+			keep.append(c)
+	_event("farm_lost", -1, "버려진 밭 %d곳이 풀밭으로 돌아감 (남은 밭 %d)" % [lost, keep.size()])
+	farms = keep
 
 
 ## 감지용 누적 합 표: 칸의 식물 먹이 + 바닥 먹이.
@@ -724,9 +759,22 @@ func _drop(i: int, c: int) -> void:
 	_check_store_region(r)
 
 
+## 죽은 개체의 운반분을 칸에 내려놓는다: 저장고 칸이면 용량까지 저장분으로, 남은 몫(과 저장고가 아닌 칸)은 바닥 먹이.
+func _put_down(c: int, amount: float) -> void:
+	var st := store_at[c]
+	if st != NO_STORE:
+		var put := minf(amount, _store_cap - store_food[st])
+		store_food[st] += put
+		amount -= put
+	if amount > 0.0:
+		_put_dropped(c, amount)
+
+
+## 바닥 먹이를 더한다. 칸의 더미 전체가 타이머 하나를 쓰므로 더 놓으면 더미 전체가 다시 spoil_ticks 를 받는다.
+## 내려놓은 틱의 ⑥(_spoil_dropped)에서도 타이머가 하나 줄므로 + 1 — 내려놓은 틱부터 꼭 spoil_ticks 틱 뒤(그 틱의 ⑥)에 썩는다.
 func _put_dropped(c: int, amount: float) -> void:
 	dropped[c] += amount
-	drop_timer[c] = int(cfg.dropped.spoil_ticks)
+	drop_timer[c] = int(cfg.dropped.spoil_ticks) + 1
 	if drop_listed[c] == 0:
 		drop_listed[c] = 1
 		drop_list.append(c)
@@ -749,14 +797,17 @@ func _plant(i: int, x: int, y: int, hd: int) -> void:
 	farm_visit[nc] = tick
 	_update_tile_rates(nc)
 	farms.append(nc)
-	if farms.size() == 1:
+	if first_farm_tick == -1:
+		first_farm_tick = tick
 		_event("first_farm", s_id[i], "첫 밭 — #%d, (%d, %d) 에 심음" % [s_id[i], nx, ny])
 
 
 # ── 번식 ──
 
+## 번식 자격. 이번 틱에 이미 짝지은 개체(_mated)는 쿨다운이 0 이어도 다시 뽑히지 않는다(한 틱에 한 번).
 func _eligible(i: int, maturity: int, min_frac: float, cooldown: int) -> bool:
-	return s_dead[i] == 0 and s_age[i] >= maturity and s_energy[i] >= min_frac * s_emax[i] and tick - s_last_repro[i] >= cooldown
+	return s_dead[i] == 0 and _mated[i] == 0 and s_age[i] >= maturity and s_energy[i] >= min_frac * s_emax[i] \
+			and tick - s_last_repro[i] >= cooldown
 
 
 func _reproduce() -> void:
@@ -776,6 +827,8 @@ func _reproduce() -> void:
 	# 칸별 목록(배열 순서 = id 오름차순)
 	_bucket_head.fill(-1)
 	_bucket_next.resize(n)
+	_mated.resize(n)
+	_mated.fill(0)
 	for k in n:
 		var i := n - 1 - k
 		var c := s_y[i] * w + s_x[i]
@@ -809,12 +862,16 @@ func _reproduce() -> void:
 			s_energy[b] -= cb
 		s_last_repro[i] = tick
 		s_last_repro[b] = tick
-		led_repro_loss += (ca + cb) * (1.0 - teff)
+		_mated[i] = 1
+		_mated[b] = 1
 		var ga := s_genome.slice(i * _G, (i + 1) * _G)
 		var gb := s_genome.slice(b * _G, (b + 1) * _G)
 		var g := SimBrain.crossover(L, ga, gb, rng_life)
 		SimBrain.mutate(cfg, L, g, rng_life)
-		births.append({x = s_x[i], y = s_y[i], head = rng_life.below(SimGrid.DIR_COUNT), g = g, e = (ca + cb) * teff,
+		# 자식 에너지는 자식의 최대 에너지까지(넘친 몫은 효율 손실과 함께 사라짐 — 장부 led_repro_loss)
+		var e_child := minf((ca + cb) * teff, float(cfg.body.energy_per_size) * float(g[_to + SimBrain.TRAIT_SIZE]))
+		led_repro_loss += (ca + cb) * (1.0 - teff) + ((ca + cb) * teff - e_child)
+		births.append({x = s_x[i], y = s_y[i], head = rng_life.below(SimGrid.DIR_COUNT), g = g, e = e_child,
 				gen = maxi(s_gen[i], s_gen[b]) + 1, pa = s_id[i], pb = s_id[b] if b != i else NO_PARENT})
 		lin_children[s_id[i]] += 1
 		if b != i:
@@ -848,7 +905,7 @@ func _remove_dead() -> void:
 			var c := s_y[i] * w + s_x[i]
 			count_grid[c] -= 1
 			if s_carry[i] > 0.0:
-				_put_dropped(c, s_carry[i])
+				_put_down(c, s_carry[i])
 			led_died += s_energy[i]
 			total_deaths += 1
 			period_deaths += 1
@@ -943,7 +1000,9 @@ func _check_store_region(r: int) -> void:
 	if region_drop[r] < float(cfg.discovery.store_threshold):
 		return
 	var best := _region_best_tile(r)
-	var build := best != -1
+	# 가장 많이 놓인 칸이 밭이면 짓지 않는다(밭 위 저장고는 저장고이자 밭으로 두 번 세고 밭 먹이를 먹을 수 없음 —
+	# _plant 도 저장고 칸에는 심지 않음). 기본값(farm.radius < store.min_spacing)에서는 간격 규칙이 이미 막는 경우.
+	var build := best != -1 and tiles[best] != SimGrid.TILE_FARM
 	if build and stage >= STAGE_STORE:
 		if store_tiles.size() >= int(cfg.store.max_count):
 			build = false
@@ -956,8 +1015,12 @@ func _check_store_region(r: int) -> void:
 	_reset_region(r)
 	if not build:
 		return
+	# 그 칸의 바닥 먹이 더미는 새 저장고에 넣는다(용량까지 — 저장고 칸에서는 입력·먹기가 저장분만 보므로 더미가 숨지 않게).
+	# 용량을 넘는 몫만 바닥에 남아 썩는다.
+	var moved := minf(dropped[best], _store_cap)
+	dropped[best] -= moved
 	store_tiles.append(best)
-	store_food.append(0.0)
+	store_food.append(moved)
 	_rebuild_stores()
 	if stage == STAGE_FORAGE:
 		_discover(STAGE_STORE, "구역에 모아 놓은 먹이 %.0f" % float(cfg.discovery.store_threshold))

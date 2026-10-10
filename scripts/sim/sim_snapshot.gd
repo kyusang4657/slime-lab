@@ -49,7 +49,7 @@ static func to_dict(wd: SimWorld) -> Dictionary:
 		},
 		civ = {
 			stage = wd.stage, discovery_tick = wd.discovery_tick, forage_attempts = wd.forage_attempts,
-			farm_sprouts = wd.farm_sprouts, store_drops_total = f64_hex(wd.store_drops_total),
+			farm_sprouts = wd.farm_sprouts, first_farm_tick = wd.first_farm_tick, store_drops_total = f64_hex(wd.store_drops_total),
 			drop_total_tile = b64(wd.drop_total_tile), region_drop = b64(wd.region_drop),
 			store_tiles = b64(wd.store_tiles), store_food = b64(wd.store_food),
 		},
@@ -113,6 +113,7 @@ static func from_dict(d: Variant) -> Dictionary:
 		wd.discovery_tick[k] = int(cv.discovery_tick[k])
 	wd.forage_attempts = int(cv.forage_attempts)
 	wd.farm_sprouts = int(cv.farm_sprouts)
+	wd.first_farm_tick = int(cv.first_farm_tick) if cv.has("first_farm_tick") else _first_farm_from(d.chronicle)
 	wd.store_drops_total = hex_f64(cv.store_drops_total)
 	wd.drop_total_tile = _bytes(cv, "drop_total_tile").to_float64_array()
 	wd.region_drop = _bytes(cv, "region_drop").to_float64_array()
@@ -183,6 +184,14 @@ static func from_dict(d: Variant) -> Dictionary:
 	return {world = wd, error = ""}
 
 
+## 옛 스냅숏(civ.first_farm_tick 없음)의 첫 밭 틱: 연대기의 첫 first_farm 사건 틱(없으면 -1).
+static func _first_farm_from(chronicle: Array) -> int:
+	for e in chronicle:
+		if str(e.get("kind", "")) == "first_farm":
+			return int(e.tick)
+	return -1
+
+
 static func from_text(text: String) -> Dictionary:
 	var d = JSON.parse_string(text)
 	if d == null:
@@ -197,6 +206,8 @@ const MAP_B64: Array[String] = ["tiles", "fert", "base_fert", "food", "dropped",
 const CIV_B64: Array[String] = ["drop_total_tile", "region_drop", "store_tiles", "store_food"]
 const CIV_INT: Array[String] = ["stage", "forage_attempts", "farm_sprouts"]
 const CIV_HEX: Array[String] = ["store_drops_total"]
+## 형식 1 을 만든 뒤에 더한 civ 정수 키. 있으면 정수여야 하고, 옛 스냅숏에 없으면 연대기에서 다시 만든다(첫 밭 틱).
+const CIV_INT_ADDED: Array[String] = ["first_farm_tick"]
 const SLIMES_B64: Array[String] = ["id", "x", "y", "head", "age", "gen", "max_age", "last_repro", "last_action", "energy", "carry", "mem", "genome"]
 const LINEAGE_B64: Array[String] = ["pa", "pb", "gen", "birth", "death", "cause", "children", "size", "sense", "hue"]
 const STATS_HEX: Array[String] = ["led_initial", "led_eaten", "led_spent", "led_repro_loss", "led_died"]
@@ -252,6 +263,9 @@ static func validate(d: Variant) -> String:
 		e = _check_keys(d.stats, "stats", [], STATS_INT, STATS_HEX)
 	if e != "":
 		return e
+	for k in CIV_INT_ADDED:
+		if d.civ.has(k) and (not _is_int(d.civ[k]) or int(d.civ[k]) < -1):
+			return "civ.%s 가 정수(-1 이상)가 아닙니다" % k
 	var dt = d.civ.get("discovery_tick")
 	if typeof(dt) != TYPE_ARRAY or (dt as Array).size() != SimWorld.STAGE_FARM + 1:
 		return "civ.discovery_tick 은 단계 %d개의 배열이어야 합니다" % (SimWorld.STAGE_FARM + 1)

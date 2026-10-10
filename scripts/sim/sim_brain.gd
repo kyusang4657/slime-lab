@@ -39,7 +39,8 @@ const ACT_REST := 4
 const ACT_GATHER := 5
 const ACT_DROP := 6
 const ACT_PLANT := 7
-const ACTION_NAMES: Array[String] = ["앞으로", "왼쪽으로", "오른쪽으로", "먹기", "쉬기", "줍기", "내려놓기", "심기"]
+## 행동 화면 이름. 1·2 는 제자리에서 방향만 바꾼다(칸을 옮기는 것은 0 앞으로뿐) — "왼쪽으로" 처럼 이동으로 읽히지 않게 "돌기".
+const ACTION_NAMES: Array[String] = ["앞으로", "왼쪽 돌기", "오른쪽 돌기", "먹기", "쉬기", "줍기", "내려놓기", "심기"]
 const INPUT_NAMES: Array[String] = ["편향", "에너지", "발밑 먹이", "앞 먹이", "왼 먹이", "오른 먹이", "붐빔", "빛", "운반", "저장고 방향", "저장고 가까움", "계절"]
 
 

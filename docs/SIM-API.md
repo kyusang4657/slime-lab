@@ -11,7 +11,7 @@
 | `SimWorld.new().setup(config, seed) -> String` | 새 세계. 성공이면 `""`, 아니면 오류 문장 |
 | `world.step()` / `world.step_n(n)` | 1틱 / n틱 진행 |
 | `SimSnapshot.save_file(world, path) -> String` | 저장(성공 `""`, 실패면 파일 이름을 담은 문장 — 같은 문장을 `push_error` 로도 남김). 임시 파일 → 다시 읽어 검증 → 교체. 쓰기·검증에 실패한 임시 파일은 지움 |
-| `SimSnapshot.load_file(path) -> {world, status, error}` | 불러오기(`status`: loaded·backup·failed). 하위 키·종류·길이·범위(칸 번호·16진 실수·유한한 수)가 틀린 본 파일도 스크립트 오류 없이 실패로 보고 `.bak` 으로 복구, 본 파일은 `.broken` 으로 보관. 설정에 나중에 더한 키(`SimSnapshot.CONFIG_KEYS_ADDED`)가 없는 옛 스냅숏은 그 키를 기본값으로 채움 |
+| `SimSnapshot.load_file(path) -> {world, status, error}` | 불러오기(`status`: loaded·backup·failed). 하위 키·종류·길이·범위(칸 번호·16진 실수·유한한 수)가 틀린 본 파일도 스크립트 오류 없이 실패로 보고 `.bak` 으로 복구, 본 파일은 `.broken` 으로 보관. 설정에 나중에 더한 키(`SimSnapshot.CONFIG_KEYS_ADDED`)가 없는 옛 스냅숏은 그 키를 기본값으로 채움, 첫 밭 틱(`civ.first_farm_tick`)이 없는 옛 스냅숏은 연대기의 `first_farm` 사건에서 다시 만듦 |
 | `SimSnapshot.to_text(world) -> String` · `SimSnapshot.from_text(text) -> {world, error}` | 스냅숏 글(웹 내려받기)과 그 글에서 만든 세계 **사본**(화면이 내보낼 끝 줄을 사본의 `sample()` 로 — 진행 중 세계는 그대로) |
 | `SimRecorder.new()`, `rec.record(world)`, `rec.write_all(dir, world, extra, with_lineage) -> PackedStringArray` | 시계열 기록과 결과 폴더 쓰기(헤드리스와 같은 형식, 실패한 파일 이름 목록). CSV 는 BOM 붙은 UTF-8(BOM 은 파일에만 — `timeseries_csv()` 글에는 없음). `summary.json` 은 CSV 를 다 쓴 뒤 마지막(임시 이름 → 바꾸기): 쓰기 전에 앞선 것을 지우고 CSV 하나라도 못 쓰면 쓰지 않음(목록에 `summary.json(…)`). 쓴 길이를 다시 확인해 디스크가 차서 잘린 파일도 실패로 셈 |
 
@@ -40,10 +40,10 @@
 | `chronicle` | Array[Dictionary] | 연대기 `{tick, kind, actor, text, mean_gen, …}` |
 | `drain_events() -> Array` | | 지난 호출 이후 새 사건(알림·소리용). 사건 사전은 `chronicle` 항목의 **사본**이라 받는 쪽이 고쳐 써도 연대기·기록이 바뀌지 않음 |
 | `history_hash` | String | 역사 해시(같은 씨앗·설정이면 같음) |
-| `is_extinct()`, `extinct_tick`, `peak_population` | | 멸종·최고 인구 |
+| `is_extinct()`, `extinct_tick`, `peak_population` | | 멸종(-1 = 아직)·최고 인구. 처음부터 개체가 없는 세계(초기 개체 0, 지나갈 칸 없음)는 `setup` 이 `extinct_tick = 0` 과 멸종 사건을 남김 — 실행기는 틱 0 에서 끝나고 실험실도 같은 기록 |
 | `cfg` | Dictionary | 이 세계의 실험 설정(`SimConfig.build` 결과). **읽기 전용 — 화면은 절대 쓰지 않음**(시뮬레이션이 매 틱 읽는 살아 있는 사전). 화면이 읽는 키: `cfg.time.day_ticks`(날 표시, LabMain), `cfg.time.night_light_threshold`(낮/밤 표시 — `light` 가 이 값보다 작으면 밤, 시뮬레이션의 밤 감지와 같은 문턱, LabMain), `cfg.brain.weight_clamp`(두뇌 열지도 색 상한, InfoPanel), `cfg.hash.every`(검사만), **모든 잎 키**(ParamPanel — `cfg` 를 깊은 사본으로 떠서 다음 실험 조건과 견주고 "지금 실험" 요약에만 씀). ParamPanel 은 스냅숏 저장 파일 이름에 `tick` 도 읽음 |
 
-사건 `kind`: `discovery`(+`stage`), `store_built`(+`tile`), `first_farm`, `farm_lost`, `milestone`, `extinction`. `mean_gen` = 사건 때의 평균 세대(0.01 단위) — `extinction` 은 개체가 모두 사라진 뒤라 마지막 개체군(마지막 틱에 죽은 개체)의 평균 세대.
+사건 `kind`: `discovery`(+`stage`), `store_built`(+`tile`), `first_farm`(세계에서 한 번 — 밭을 모두 잃고 다시 심어도 다시 나오지 않음), `farm_lost`, `milestone`, `extinction`(처음부터 개체가 없으면 틱 0). `mean_gen` = 사건 때의 평균 세대(0.01 단위) — `extinction` 은 개체가 모두 사라진 뒤라 마지막 개체군(마지막 틱에 죽은 개체)의 평균 세대.
 
 ## 상수·정적 도움 함수
 
@@ -69,5 +69,5 @@
 |---|---|
 | `world.L` = `SimBrain.layout(config)` | `{n_in, n_hid, n_out, n_mem, w2_offset, trait_offset, genes}` |
 | `SimBrain.forward(L, genome, base, inputs, sharpness) -> {hidden, out, probs, action}` | 정보 창의 두뇌 그림용 순전파 |
-| `SimBrain.INPUT_NAMES`, `SimBrain.ACTION_NAMES` | 화면 이름 |
+| `SimBrain.INPUT_NAMES`, `SimBrain.ACTION_NAMES` | 화면 이름(행동 1·2 "왼쪽 돌기"·"오른쪽 돌기" 는 제자리에서 방향만 바꿈 — 칸을 옮기는 것은 0 "앞으로" 뿐) |
 | `SimWorld.STAGE_NAMES`, `SimWorld.CAUSE_NAMES` | 화면 이름 |
