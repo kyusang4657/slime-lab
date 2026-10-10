@@ -7,7 +7,7 @@ const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 274
+const MIN_CHECKS := 285
 ## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
 const B_MUTATION := 0.07
 ## 최소 창(lab.min_width × lab.min_height = 1280×640)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기,
@@ -21,29 +21,48 @@ const DECO_BR := Vector2i(8, 8)
 const LAPTOP_USABLE := Rect2i(0, 0, 1366, 728)
 ## 그 칸(세로로 긴 칸)에서 지도가 차지하는 칸 높이 몫의 하한(돌려 맞춤 — 북쪽 위 그대로면 약 0.39)
 const MIN_COMPARE_HEIGHT_SHARE := 0.55
-## 예산 측정 프레임 수, 평균 시뮬레이션 시간이 예산을 넘어도 되는 몫(ms)
+## 예산 측정 프레임 수. 실제 시계로 잰 시간은 기계 속도에 묶이므로 "예산 + 이 기계의 틱 둘" 안인지만 보고(예산을 무시하고
+## 요청한 틱을 모두 돌면 넘음), 예산 규칙 자체는 가짜 시계로 결정적으로 잰다(_budget_rule — 검토 I34)
 const BUDGET_FRAMES := 60
-const BUDGET_SLACK_MS := 0.5
+const BUDGET_TICK_SLACK := 2.0
+## 한 프레임 실제 시간의 멈칫 여유(ms — OS 가 잠시 다른 일을 해도)
+const HICCUP_MS := 30.0
+## 가짜 시계의 한 틱 비용(ms): [보통 배속인가, 비용]. 예산(10ms·빨리 감기 14ms)보다 싼 틱(여러 틱)과 비싼 틱(적어도 1틱),
+## 예산을 나누어떨어뜨리지 않는 값(경계에서 소수 오차가 끼지 않게)
+const FAKE_TICK_CASES := [[true, 3.0], [true, 15.0], [false, 3.0], [false, 20.0]]
+const FAKE_FRAMES := 10
+## 예산보다 훨씬 싼 틱(ms): 64배(프레임당 6.4틱)는 예산에 걸리지 않고 빨리 감기는 예산을 다 써 더 많이 돎
+const CHEAP_TICK_MS := 1.0
 ## 16배(프레임당 1.6틱)에서 혼자 있는 개체가 한 프레임에 그려지는 거리 상한(칸): 1.6틱 × smoothstep 기울기 여유
 const MULTI_TICK_MAX_STEP := 1.9
 ## 실제 시계 예산을 끈 셈의 값(ms) — 결정적으로 재야 하는 검사 동안
 const BUDGET_OFF_MS := 1.0e9
-const SNAP_PATH := "user://lab_checks_snapshot.json"
+## 이 검사가 쓰는 파일(스냅숏·백업·비교·내려받기)은 프로세스별 임시 폴더에(검토 I37: 예전엔 PID 없는 고정 이름
+## user://lab_checks_snapshot.json 등과 실제 user://downloads 를 써, 같은 사용자 폴더를 쓰는 저장소 사본끼리 서로의 파일을
+## 지울 수 있었음). 처음과 끝에 숨은 파일까지 지운다.
+var TMP := "user://lab_checks-%d" % OS.get_process_id()
+var SNAP_PATH := TMP.path_join("snapshot.json")
 ## 실제 _process 경로의 느린 프레임: 형제 노드가 프레임마다 잡아먹는 시간(ms — 엔진이 delta 를 자르는 8/60초보다 훨씬 김)과
 ## 잴 프레임 수, 실제 배속(틱 ÷ 벽시계)과 표시가 어긋나도 되는 몫
 const SLOW_FRAME_MS := 400
 const SLOW_FRAMES := 7
 const SLOW_SPEED_TOL := 0.15
+## 죽은 개체 기록이 생길 때까지 진행하는 한도와 한 번에 진행하는 틱
+const DEAD_GUARD_TICKS := 3000
+const DEAD_STEP := 20
 
 
 func run(t) -> void:
 	# 헤드리스 뿌리 창은 64×64 — 배치를 재는 검사를 위해 최소 창 크기로(끝나면 되돌림)
 	var root_size: Vector2i = t.root.size
 	t.root.size = Vector2i(UiConfig.integer("lab.min_width"), UiConfig.integer("lab.min_height"))
+	LabMain._remove_tree(ProjectSettings.globalize_path(TMP))
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(TMP))
 	var lab: LabMain = load("res://scenes/lab.tscn").instantiate()
 	t.root.add_child(lab)
 	await t.frames(2)
 	lab.set_process(false)
+	lab.download_dir = TMP.path_join("downloads")
 	await _layout(t, lab)
 	await _screen_fit(t, lab)
 	_night_threshold(t)
@@ -73,6 +92,8 @@ func run(t) -> void:
 	lab.queue_free()
 	await t.frames(1)
 	t.root.size = root_size
+	LabMain._remove_tree(ProjectSettings.globalize_path(TMP))
+	t.check(not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(TMP)), "검사 파일을 둔 프로세스별 임시 폴더를 끝에 지움(%s)" % TMP)
 
 
 func _layout(t, lab: LabMain) -> void:
@@ -296,8 +317,14 @@ func _run_loop(t, lab: LabMain) -> void:
 	var ff := UiConfig.num("speed.fast_forward_budget_ms")
 	t.check(lab.world.extinct_tick == -1 and lab.world.population() > 0,
 			"빨리 감기 측정 내내 슬라임이 살아 있음(%d마리, 멸종 틱 %d)" % [lab.world.population(), lab.world.extinct_tick])
-	t.check(nff > n64, "빨리 감기 %d틱 > 64배 %d틱(같은 60프레임)" % [nff, n64])
-	t.check(sum_ms / 60.0 <= ff * 1.5 + 2.0 and max_ms <= ff + 30.0, "빨리 감기 예산 대략 지킴(평균 %.1fms, 최대 %.1fms, 예산 %.0fms)" % [sum_ms / 60.0, max_ms, ff])
+	# 빨리 감기가 64배보다 더 진행하는지는 기계 속도에 달려(이 세계의 한 틱이 14ms ÷ 6.4 ≈ 2.2ms 를 넘는 기계면 같아짐)
+	# 가짜 시계로 잰다(_budget_rule — 검토 I34). 여기서는 출력만
+	print("  빨리 감기 %d틱 · 64배 %d틱(같은 60프레임, 실제 시계)" % [nff, n64])
+	# 실제 시계: 평균이 "예산 + 이 기계의 틱 둘" 안(기계 속도와 상관없는 꼴 — 검토 I34: 예전엔 평균 ≤ 23ms·최대 ≤ 44ms 라는
+	# 실제 시간 단언). 최대는 OS 멈칫에 흔들리므로 출력만, 규칙 자체는 _budget_rule 이 가짜 시계로 잰다
+	var ff_tick := sum_ms / maxf(float(nff), 1.0)
+	t.check(sum_ms / 60.0 <= ff + BUDGET_TICK_SLACK * ff_tick,
+			"빨리 감기 예산 대략 지킴(평균 %.1fms ≤ 예산 %.0fms + 틱 %.0f개 × %.2fms, 최대 %.1fms)" % [sum_ms / 60.0, ff, BUDGET_TICK_SLACK, ff_tick, max_ms])
 	t.check(lab.speed_text().begins_with("빨리 감기 / 실제"), "빨리 감기 표시: " + lab.speed_text())
 	lab.set_speed(8)
 	t.check(not lab.is_fast_forward() and lab._speed_btns[3].button_pressed, "속도를 고르면 빨리 감기 꺼짐")
@@ -313,8 +340,11 @@ func _budget(t, lab: LabMain) -> void:
 	var want := int(0.25 * UiConfig.num("speed.ticks_per_second_1x") * 64.0)
 	t.check(n >= 1 and n < want and lab.last_budget_hit, "예산에 걸리면 덜 진행(%d틱 < 요청 %d)" % [n, want])
 	t.check(lab._acc < 1.0, "밀린 틱을 버려 쌓이지 않음(누적 %.2f)" % lab._acc)
-	t.check(lab.last_sim_ms <= UiConfig.num("speed.sim_budget_ms") + 30.0, "프레임 시뮬레이션 시간 %.1fms ≈ 예산" % lab.last_sim_ms)
-	# 다음 틱 비용을 미리 더해 보고 멈추므로 평균은 예산 안(+여유), 95% 는 예산 + 한 틱 안
+	var est_ms := lab._step_us_est / LabMain.USEC_PER_MS
+	t.check(lab.last_sim_ms <= UiConfig.num("speed.sim_budget_ms") + BUDGET_TICK_SLACK * est_ms + HICCUP_MS,
+			"프레임 시뮬레이션 시간 %.1fms ≈ 예산(+ 틱 %.0f개 × %.2fms + 멈칫 %.0fms)" % [lab.last_sim_ms, BUDGET_TICK_SLACK, est_ms, HICCUP_MS])
+	# 실제 시계: 다음 틱 비용을 미리 더해 보고 멈추므로 평균은 "예산 + 이 기계의 틱 둘" 안(틱 하나가 예산보다 비싼 느린 기계는
+	# 프레임당 1틱 = 평균 ≈ 틱 하나라 역시 안). 예산을 무시하고 요청한 6.4틱을 모두 돌면 넘는다. 수치는 출력(성능 기록)
 	for mode in ["64배", "빨리 감기"]:
 		var budget := UiConfig.num("speed.sim_budget_ms")
 		if mode == "64배":
@@ -334,16 +364,83 @@ func _budget(t, lab: LabMain) -> void:
 		mean /= float(times.size())
 		var p95: float = times[int(float(times.size()) * 0.95)]
 		var per_tick := mean / maxf(float(ticks) / float(BUDGET_FRAMES), 1.0)
-		print("  예산(%s, %d마리): 평균 %.2fms, 95%% %.2fms, 최대 %.2fms, 틱당 약 %.2fms (예산 %.0fms)" % [mode, lab.world.population(), mean, p95, times.back(), per_tick, budget])
-		t.check(mean <= budget + BUDGET_SLACK_MS and p95 <= budget + 2.0 * per_tick,
-				"%s 예산 지킴: 평균 %.2fms ≤ %.1f, 95%% %.2fms ≤ 예산 + 틱 둘" % [mode, mean, budget + BUDGET_SLACK_MS, p95])
+		print("  예산(%s, %d마리): 평균 %.2fms, 95%% %.2fms, 최대 %.2fms, 틱당 약 %.2fms, 프레임당 %.2f틱 (예산 %.0fms)"
+				% [mode, lab.world.population(), mean, p95, times.back(), per_tick, float(ticks) / float(BUDGET_FRAMES), budget])
+		t.check(mean <= budget + BUDGET_TICK_SLACK * per_tick,
+				"%s 예산 지킴(실제 시계): 평균 %.2fms ≤ 예산 %.0fms + 틱 %.0f개 × %.2fms" % [mode, mean, budget, BUDGET_TICK_SLACK, per_tick])
 	lab.set_speed(64)
+	_budget_rule(t, lab)
 	# 아주 큰 프레임 시간은 speed.max_frame_delta_s 로 자른다
 	lab.set_speed(1)
 	lab._acc = 0.0
 	var c1 := lab.world.tick
 	lab.advance_frame(10.0)
 	t.check(lab.world.tick - c1 <= int(UiConfig.num("speed.max_frame_delta_s") * UiConfig.num("speed.ticks_per_second_1x")) + 1, "큰 프레임 시간을 잘라 한꺼번에 몰아 돌지 않음")
+
+
+## 가짜 시계: 실험 A 의 틱 × 한 틱 비용(µs) — 틱을 돌 때만 시간이 흐른다.
+class FakeClock extends RefCounted:
+	var lab: LabMain
+	var cost_us := 0.0
+
+	func now() -> int:
+		return int(float(lab.experiment(0).world.tick) * cost_us)
+
+
+## 예산 규칙(결정적 — 검토 I34): 가짜 시계로 한 틱 비용을 정해 두고 잰다. 다음 틱까지 하면 예산을 넘을 것 같으면 멈추되 적어도
+## 1틱, 보통 배속은 밀린 몫을 버림 → 프레임당 max(1, floor(예산 ÷ 비용))틱, 시뮬레이션 시간 = 틱 × 비용, 한 틱 추정 = 비용.
+## 어느 기계에서나 같은 값(예전엔 실제 시계로 "250마리 한 틱 ≤ 10.5ms" 를 단언하는 꼴이었음).
+func _budget_rule(t, lab: LabMain) -> void:
+	lab.new_experiment("default", {}, 4)
+	lab.set_paused(false)
+	var clock := FakeClock.new()
+	clock.lab = lab
+	var keep_clock: Callable = lab._clock_us
+	lab._clock_us = clock.now
+	for c in FAKE_TICK_CASES:
+		var normal := bool(c[0])
+		var cost_ms := float(c[1])
+		var budget := UiConfig.num("speed.sim_budget_ms") if normal else UiConfig.num("speed.fast_forward_budget_ms")
+		var want := maxi(1, floori(budget / cost_ms))
+		if normal:
+			lab.set_speed(64)
+		else:
+			lab.set_fast_forward(true)
+		clock.cost_us = cost_ms * LabMain.USEC_PER_MS
+		lab._step_us_est = 0.0
+		var got := PackedInt32Array()
+		var ok := true
+		for i in FAKE_FRAMES:
+			var n := lab.advance_frame(DT)
+			got.append(n)
+			ok = ok and n == want and is_equal_approx(lab.last_sim_ms, float(want) * cost_ms) and lab.last_budget_hit
+			ok = ok and (not normal or lab._acc < 1.0)
+		ok = ok and is_equal_approx(lab._step_us_est, clock.cost_us)
+		t.check(ok, "예산 규칙(가짜 시계, %s, 틱 %.0fms, 예산 %.0fms): 프레임당 %d틱 = max(1, floor(예산 ÷ 틱)), 시간 = 틱 × 비용, 추정 = 비용 %s"
+				% ["64배" if normal else "빨리 감기", cost_ms, budget, want, str(got)])
+	# 가벼운 틱: 64배는 요청한 만큼(프레임당 6.4틱 — 예산에 걸리지 않음), 빨리 감기는 예산을 다 써서 더 많이
+	clock.cost_us = CHEAP_TICK_MS * LabMain.USEC_PER_MS
+	lab._step_us_est = clock.cost_us
+	lab.set_speed(64)
+	lab.advance_frame(DT)
+	var a := lab.world.tick
+	var hit := false
+	for i in FAKE_FRAMES:
+		lab.advance_frame(DT)
+		hit = hit or lab.last_budget_hit
+	var n64 := lab.world.tick - a
+	var want64 := roundi(float(FAKE_FRAMES) * DT * UiConfig.num("speed.ticks_per_second_1x") * 64.0)
+	lab.set_fast_forward(true)
+	var b := lab.world.tick
+	for i in FAKE_FRAMES:
+		lab.advance_frame(DT)
+	var nff := lab.world.tick - b
+	var want_ff := FAKE_FRAMES * floori(UiConfig.num("speed.fast_forward_budget_ms") / CHEAP_TICK_MS)
+	t.check(not hit and absi(n64 - want64) <= 1 and nff == want_ff and nff > n64,
+			"가벼운 틱(가짜 시계 %.0fms): 64배 %d프레임 %d틱(요청 %d, 예산에 걸리지 않음) < 빨리 감기 %d틱(= 프레임 × floor(예산 ÷ 틱))"
+			% [CHEAP_TICK_MS, FAKE_FRAMES, n64, want64, nff])
+	lab._clock_us = keep_clock
+	lab.set_speed(64)
 
 
 func _selection(t, lab: LabMain) -> void:
@@ -388,6 +485,7 @@ func _keys(t, lab: LabMain) -> void:
 	t.check(lab.info_panel._follow.button_pressed == lab.map_view.follow_selected, "F → 정보 창 따라가기 단추도 같은 상태")
 	_key(t, KEY_F)
 	t.check(lab.info_panel._follow.button_pressed == lab.map_view.follow_selected, "F 다시 → 정보 창 따라가기 단추도 되돌아감")
+	_follow_dead(t, lab)
 	lab.select_slime(lab.world.s_id[0])
 	_key(t, KEY_ESCAPE)
 	t.check(lab.selected_id() == -1 and lab.info_panel.current_id() == -1, "Esc → 선택 해제")
@@ -429,6 +527,36 @@ func _keys(t, lab: LabMain) -> void:
 	_key(t, KEY_SPACE)
 	t.check(lab.is_paused() != p0, "대화 상자를 닫으면 다시 동작")
 	lab.set_paused(false)
+
+
+## 죽은(기록만 남은) 개체를 고른 채 F: 따라가기를 켜지 않고 알림(정보 창 따라가기 단추가 꺼지는 규칙과 같게). 검토 I41: 예전엔
+## "따라가기 켬" 이라 알리고 실제로는 따라가지 않았으며, 켜진 채 남아 다음에 고른 개체를 바로 따라갔음. 켜진 따라가기는 끌 수 있음.
+func _follow_dead(t, lab: LabMain) -> void:
+	var w := lab.world
+	var dead := -1
+	var guard := 0
+	while dead < 0 and guard < DEAD_GUARD_TICKS:
+		for k in w.lin_pa.size():
+			if w.index_of_id(k) == -1:
+				dead = k
+				break
+		if dead < 0:
+			lab.step_ticks(DEAD_STEP)
+			guard += DEAD_STEP
+	lab.map_view.follow_selected = false
+	lab.select_slime(dead)
+	_key(t, KEY_F)
+	var vt := lab.visible_toasts()
+	var last := str(vt.back().text) if not vt.is_empty() else ""
+	t.check(dead >= 0 and lab.selected_id() == dead and not lab.map_view.follow_selected and not lab.info_panel._follow.button_pressed
+			and last == LabMain.FOLLOW_DEAD_TEXT, "죽은 개체 #%d 를 고른 채 F → 따라가기 켜지 않음(정보 창 단추도), 알림 \"%s\"" % [dead, last])
+	lab.select_slime(w.s_id[0])
+	t.check(not lab.map_view.follow_selected, "그 뒤 살아 있는 개체를 골라도 저절로 따라가지 않음")
+	_key(t, KEY_F)
+	t.check(lab.map_view.follow_selected and lab.info_panel._follow.button_pressed, "살아 있는 개체는 F → 따라가기 켬")
+	lab.select_slime(dead)
+	_key(t, KEY_F)
+	t.check(not lab.map_view.follow_selected and not lab.info_panel._follow.button_pressed, "따라가던 중 죽은 개체로 옮겨도 F 로 따라가기를 끔")
 
 
 ## 키보드만으로(검토 J16): 초점이 없을 때 Tab → 파라미터 패널 첫 칸(자리를 접었으면 정보 창), Ctrl+N·S·O·E → 패널의 새 실험·
@@ -485,7 +613,9 @@ func _command_keys(t, lab: LabMain) -> void:
 	lab.last_download_name = ""
 	_command_key(t, KEY_E)
 	t.check(lab.last_download_name.ends_with(".zip"), "Ctrl+E → 내보내기 단추와 같음(웹: 결과 zip %s)" % lab.last_download_name)
-	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://downloads/" + lab.last_download_name))
+	var dl_path := lab.download_dir.path_join(lab.last_download_name)
+	t.check(lab.download_dir.begins_with(TMP) and FileAccess.file_exists(dl_path), "내려받기는 이 검사의 임시 폴더에(%s — 실제 %s 아님)" % [dl_path, LabMain.DOWNLOAD_DIR])
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(lab.download_dir.path_join(lab.last_download_name)))
 	var od := pp.find_child("OpenSnapshotDialog", true, false) as Window
 	_command_key(t, KEY_O)
 	await t.frames(1)
@@ -799,7 +929,7 @@ func _args(t, lab: LabMain) -> void:
 			"INT64_MIN 씨앗 표기: \"%s\" / \"%s\" / %s" % [lab.experiments[0].label, lab.get_window().title, lab.default_export_dir().get_file()])
 	t.check(lab.download_snapshot(0) == "" and lab.last_download_name.contains("-seed-9223372036854775808-tick0") and not lab.last_download_name.contains("--"),
 			"INT64_MIN 스냅숏 내려받기 이름: %s" % lab.last_download_name)
-	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://downloads/" + lab.last_download_name))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(lab.download_dir.path_join(lab.last_download_name)))
 	lab.new_experiment("default", {}, 1)
 	for p in [SNAP_PATH, SNAP_PATH + ".bak"]:
 		if FileAccess.file_exists(p):
@@ -951,10 +1081,14 @@ func _speed_window(t, lab: LabMain) -> void:
 				bad = "경고 색"
 		t.check(bad == "" and absf(lab.actual_speed() - float(c[0])) < 0.05,
 				"%d배 · 프레임 %.4f초: 실제 배속 언제나 \"%s\" (%s, %.3f)" % [int(c[0]), float(c[1]), want, bad, lab.actual_speed()])
-	# 4FPS 미만(잘린 프레임 시간): 실제 = 0.75배, 경고 색
+	# 4FPS 미만(잘린 프레임 시간): 실제 = 0.75배, 경고 색. 실제 시계 예산은 끈다 — 프레임당 1.5틱이 예산에 걸리면(한 틱이
+	# 5ms 를 넘는 느린 기계) 진행이 줄어 기계 속도에 따라 실패했다(검토 I34 — 이 검사는 배속 셈을 보지 예산을 보지 않음)
+	var keep_budget := lab._budget_ms
+	lab._budget_ms = BUDGET_OFF_MS
 	lab.set_speed(1)
 	for i in 12:
 		lab.advance_frame(1.0 / 3.0)
+	lab._budget_ms = keep_budget
 	lab._refresh_status(true)
 	t.check(absf(lab.actual_speed() - 0.75) < 0.02 and _speed_color(lab) == warn,
 			"3FPS·1배: 실제 %.2f배(= 0.75, 잘리지 않은 프레임 시간), 경고 색" % lab.actual_speed())
@@ -978,6 +1112,10 @@ func _slow_process(t, lab: LabMain) -> void:
 	var slow := SlowFrames.new()
 	slow.ms = SLOW_FRAME_MS
 	t.root.add_child(slow)
+	# 실제 시계 예산은 끈다: 프레임당 1.5틱이 예산에 걸리면(느린 기계) 진행이 max_frame_delta_s 를 따라가지 못해 기계 속도에
+	# 따라 실패했다(검토 I34 — 이 검사는 프레임 시간을 재는 길을 보지 예산을 보지 않음)
+	var keep_budget := lab._budget_ms
+	lab._budget_ms = BUDGET_OFF_MS
 	lab.set_process(true)
 	await t.frames(2)
 	# set_process 전의 간격(앞 검사들의 시간)은 빼고 잼
@@ -988,6 +1126,7 @@ func _slow_process(t, lab: LabMain) -> void:
 	var wall := float(Time.get_ticks_usec() - us0) / LabMain.USEC_PER_S
 	var ticks := float(lab.world.tick) + lab._acc - start
 	lab.set_process(false)
+	lab._budget_ms = keep_budget
 	t.root.remove_child(slow)
 	slow.free()
 	var tps := UiConfig.num("speed.ticks_per_second_1x")
@@ -1029,7 +1168,7 @@ func _toast_rules(t, lab: LabMain) -> void:
 	await t.frames(1)
 	lab.set_paused(true)
 	# 백업에서 연 스냅숏: 바뀐 세계 위에 경고 알림 하나
-	var path := "user://lab_checks_backup.json"
+	var path := TMP.path_join("backup.json")
 	lab.world.step_n(10)
 	SimSnapshot.save_file(lab.world, path)
 	SimSnapshot.save_file(lab.world, path)
@@ -1128,6 +1267,8 @@ func _extinction(t, lab: LabMain) -> void:
 			"평균 세대 \"%s\", 멸종 표지 \"%s\"" % [lab._lbl_gen.text, lab._extinct_badge.text])
 	t.check(lab.info_panel.summary_text().contains("멸종") and lab.info_panel.summary_text().contains(LabMain._commas(et)),
 			"정보 창 안내: " + lab.info_panel.summary_text())
+	# 고를 개체가 없으니 "지도에서 슬라임을 클릭하면…" 도움말을 숨김(검토 I48 — 예전엔 두 문장이 어긋난 채 함께 보였음)
+	t.check(not lab.info_panel.empty_hint_visible(), "멸종 안내 아래에 클릭 도움말이 없음")
 	t.check(lab._top_bar.get_combined_minimum_size().x <= UiConfig.num("lab.min_width"), "멸종 표시에서도 위쪽 막대가 최소 창 폭 안")
 	lab.set_paused(false)
 	for i in 5:
@@ -1138,7 +1279,8 @@ func _extinction(t, lab: LabMain) -> void:
 			"다시 재생해도 멸종한 세계는 틱 %d 그대로(지금 %d), 막대 \"%s\"(경고 색 아님)" % [tk, lab.world.tick, lab._lbl_speed.text])
 	lab.set_paused(true)
 	lab.new_experiment("default", {}, 1)
-	t.check(lab.is_paused() and lab.info_panel.summary_text().contains("슬라임을 눌러"), "새 세계: 사용자가 멈춘 상태는 그대로, 안내는 처음 문구")
+	t.check(lab.is_paused() and lab.info_panel.summary_text().contains("슬라임을 눌러") and lab.info_panel.empty_hint_visible(),
+			"새 세계: 사용자가 멈춘 상태는 그대로, 안내는 처음 문구(클릭 도움말도)")
 	# 멸종 때문에 저절로 멈춘 상태는 새 실험에서 풀림
 	lab.new_experiment("no_resources", {}, 1)
 	lab.set_paused(false)
@@ -1610,7 +1752,7 @@ func _compare_stop(t, lab: LabMain) -> void:
 	lab.new_experiment("default", {}, 5)
 	t.check(not lab.is_comparing() and lab._map_area.get_node_or_null("MapContainerB") == null and lab.world.seed_value == 5 and lab.experiment(0).tag == "",
 			"새 실험 → 비교 끝(지도 하나)")
-	var path := "user://lab_checks_compare.json"
+	var path := TMP.path_join("compare.json")
 	t.check(SimSnapshot.save_file(lab.world, path) == "", "스냅숏 저장")
 	lab.start_compare({preset = "default", seed = 3}, {preset = "default", seed = 4})
 	t.check(lab.open_snapshot(path) == "" and not lab.is_comparing() and lab.map_view_of(1) == null, "스냅숏 열기 → 비교 끝")
@@ -1661,7 +1803,8 @@ func _compare_extinction(t, lab: LabMain) -> void:
 		lab.advance_frame(DT)
 	t.check(xa.world.extinct_tick >= 0 and xb.world.extinct_tick >= 0 and lab.is_paused() and xa.world.tick == tk,
 			"A·B 모두 멸종(틱 %d·%d) → 멈춤" % [xa.world.extinct_tick, xb.world.extinct_tick])
-	t.check(lab.info_panel.summary_text().contains("모두 멸종"), "정보 창 안내: " + lab.info_panel.summary_text())
+	t.check(lab.info_panel.summary_text().contains("모두 멸종") and not lab.info_panel.empty_hint_visible(),
+			"정보 창 안내(클릭 도움말 없음): " + lab.info_panel.summary_text())
 	lab.new_experiment("default", {}, 1)
 	t.check(not lab.is_paused() and not lab._extinct_badge.visible, "모두 멸종으로 멈춘 뒤 새 실험 → 다시 재생")
 	lab.set_paused(true)
@@ -1801,7 +1944,7 @@ func _export_fail(t, lab: LabMain) -> void:
 		fx.fail = k == 1
 		list.append(fx)
 	lab._adopt_list(list)
-	var dir := "user://lab_checks_export-%d" % OS.get_process_id()
+	var dir := TMP.path_join("export")
 	var abs_dir := ProjectSettings.globalize_path(dir)
 	var msg := lab.export_csv(dir)
 	var a_dir := abs_dir.path_join("A")

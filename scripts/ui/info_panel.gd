@@ -25,6 +25,12 @@ const REL_GRANDPARENT := "grandparent"
 const REL_CHILD := "child"
 const EMPTY_TEXT := "슬라임을 눌러 고르세요"
 const EMPTY_HINT := "지도에서 슬라임을 클릭하면\n상태·두뇌·가계가 여기에 나옵니다"
+## 유전체가 없는(기록만 남은) 개체의 두뇌 자리 안내
+const NO_BRAIN_TEXT := "죽은 개체의 유전체는 세계에 남지 않아 두뇌를 그릴 수 없습니다."
+## "고른 행동" 이 아직 열리지 않은 단계의 행동일 때 뒤에 붙이는 표시(효과 없이 '시도'로만 셈 — DESIGN §3.2)
+const ATTEMPT_SUFFIX := " (시도 · 발견 전)"
+## 문명 단계가 열려야 효과가 있는 행동 → 필요한 단계(SimWorld 의 행동 처리와 같은 규칙: 줍기 = 채집, 심기 = 농사)
+const ACTION_STAGE := {SimBrain.ACT_GATHER: SimWorld.STAGE_FORAGE, SimBrain.ACT_PLANT: SimWorld.STAGE_FARM}
 const BOLD_FONT := "res://assets/fonts/NanumGothic-Bold.ttf"
 ## 에너지 막대 상태(채움 색 고르기)
 const ENERGY_OK := 0
@@ -75,6 +81,8 @@ var _heading := -1
 var _empty_wrap: MarginContainer
 var _empty: VBoxContainer
 var _empty_label: Label
+# 빈 상태 아래 클릭 도움말(EMPTY_HINT). 바꾼 안내(멸종 등)가 있으면 숨김 — "고를 개체가 없습니다" 와 어긋나지 않게
+var _empty_hint: Label
 var _main: VBoxContainer
 var _swatch: SlimeSwatch
 # 비교 모드 이름표(A/B, 실험 색 바탕). 혼자면 숨김(4단계)
@@ -187,7 +195,7 @@ func show_slime(world: SimWorld, id: int) -> void:
 	var d := world.slime_info(id)
 	if d.is_empty():
 		clear()
-		_empty_label.text = "#%d 개체의 기록이 없습니다" % id
+		_empty_label.text = UiTheme.keep_words("#%d 개체의 기록이 없습니다" % id)
 		return
 	_world = world
 	_id = id
@@ -212,7 +220,7 @@ func clear() -> void:
 	_empty_wrap.show()
 	_tag.visible = false
 	_tag_label.text = ""
-	_empty_label.text = _empty_text if _empty_text != "" else EMPTY_TEXT
+	_show_empty_text()
 	_clear_flow(_parents_flow)
 	_clear_flow(_gp_flow)
 	_clear_flow(_kids_flow)
@@ -241,11 +249,23 @@ func current_id() -> int:
 
 
 ## (추가) 빈 상태 안내 문구를 바꾼다("" = 기본 "슬라임을 눌러 고르세요"). LabMain 이 멸종하면 멸종 문구로.
-## 지금 빈 상태면 바로 바뀌고, 개체를 보이는 중이면 다음 clear() 부터.
+## 바꾼 문구가 있으면 아래 클릭 도움말(EMPTY_HINT)을 숨긴다(검토 I48: "고를 개체가 없습니다" 바로 아래에 "지도에서 슬라임을
+## 클릭하면…" 이 남아 서로 어긋났음). 지금 빈 상태면 바로 바뀌고, 개체를 보이는 중이면 다음 clear() 부터.
 func set_empty_text(text: String) -> void:
 	_empty_text = text
 	if _id < 0:
-		_empty_label.text = _empty_text if _empty_text != "" else EMPTY_TEXT
+		_show_empty_text()
+
+
+## 빈 상태 안내 글(낱말 단위 줄바꿈 — UiTheme.keep_words)과 도움말 보이기.
+func _show_empty_text() -> void:
+	_empty_label.text = UiTheme.keep_words(_empty_text if _empty_text != "" else EMPTY_TEXT)
+	_empty_hint.visible = _empty_text == ""
+
+
+## (추가) 빈 상태의 클릭 도움말이 보이는가(검사용).
+func empty_hint_visible() -> bool:
+	return _id < 0 and _empty_hint.visible
 
 
 ## (추가, 4단계) 비교 모드에서 어느 실험의 개체인지 머리에 이름표("A"/"B")로 보인다. "" = 숨김(혼자 모드).
@@ -305,7 +325,7 @@ func content_overflow() -> float:
 ## (추가) 머리 한 줄 요약 "#id · N세대 · 살아 있음"(빈 상태면 안내 문구). 검사·캡처 확인용.
 func summary_text() -> String:
 	if _id < 0:
-		return _empty_label.text
+		return UiTheme.plain_text(_empty_label.text)
 	return "%s · %s · %s" % [_title.text, _gen.text, _status.text]
 
 
@@ -336,7 +356,8 @@ func _fill_static(d: Dictionary) -> void:
 		_has_brain = true
 	else:
 		_brain_scroll.hide()
-		_brain_note.text = "죽은 개체의 유전체는 세계에 남지 않아 두뇌를 그릴 수 없습니다."
+		# 낱말 단위로 줄바꿈(검토 I49: ICU 줄바꿈이 "없/습니다" 처럼 음절 사이에서 끊었음)
+		_brain_note.text = UiTheme.keep_words(NO_BRAIN_TEXT)
 		_brain_note.show()
 		_has_brain = false
 
@@ -395,7 +416,7 @@ func _apply_life(d: Dictionary, force: bool) -> void:
 	_v_life.text = "%s틱  (출생 %s)" % [_fmt_int(death - int(d.birth)), _fmt_int(int(d.birth))]
 	_brain.set_highlight_action(-1)
 	if _has_brain:
-		_brain_note.text = "죽기 직전의 두뇌"
+		_brain_note.text = UiTheme.keep_words("죽기 직전의 두뇌")
 		_brain_note.show()
 
 
@@ -418,14 +439,33 @@ func _update_live(d: Dictionary) -> void:
 	if st != _energy_state:
 		_energy_state = st
 		_energy_bar.add_theme_stylebox_override("fill", _fill_styles[st])
-	var carry := float(d.carry)
-	_v_carry.text = "%.1f" % carry if carry > 0.0 else "없음"
+	_v_carry.text = carry_text(float(d.carry))
 	var act := int(d.action)
-	_v_action.text = SimBrain.ACTION_NAMES[act] if act >= 0 and act < SimBrain.ACTION_NAMES.size() else "?"
+	var tried := is_attempt(act, _world.stage)
+	_v_action.text = action_text(act, _world.stage)
+	_v_action.add_theme_color_override("font_color", _c_dim if tried else _c_text)
 	_brain.set_highlight_action(act)
 	_v_pos.text = "(%d, %d)" % [int(d.x), int(d.y)]
 	_heading = int(d.heading)
 	_v_head.text = heading_text(_heading)
+
+
+## (추가) "운반" 값: 나르는 먹이 양에 단위를 붙인다("먹이 0.6", 없으면 "없음" — 검토 I47: 예전엔 단위 없는 "0.6").
+static func carry_text(carry: float) -> String:
+	return "먹이 %.1f" % carry if carry > 0.0 else "없음"
+
+
+## (추가) 이 문명 단계에서 그 행동이 아직 열리지 않아 효과 없이 '시도'로만 세는가(줍기 = 채집 전, 심기 = 농사 전).
+static func is_attempt(act: int, stage: int) -> bool:
+	return ACTION_STAGE.has(act) and stage < int(ACTION_STAGE[act])
+
+
+## (추가) "고른 행동" 값: 행동 이름(SimBrain.ACTION_NAMES), 단계가 열리기 전의 줍기·심기는 " (시도 · 발견 전)" 을 붙인다
+## (검토 I86: 예전엔 발견 전의 효과 없는 시도도 실제 행동처럼 "심기" 로만 보여 이미 농사 중인 것처럼 읽혔음).
+static func action_text(act: int, stage: int) -> String:
+	if act < 0 or act >= SimBrain.ACTION_NAMES.size():
+		return "?"
+	return SimBrain.ACTION_NAMES[act] + (ATTEMPT_SUFFIX if is_attempt(act, stage) else "")
 
 
 ## 자식 목록. children_of 는 계통 전체를 훑으므로 (세계, id) 가 바뀌었거나
@@ -552,9 +592,9 @@ func _build() -> void:
 	_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_empty.add_child(_empty_label)
-	var hint := _label(EMPTY_HINT, _fs_small, _c_dim)
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_empty.add_child(hint)
+	_empty_hint = _label(EMPTY_HINT, _fs_small, _c_dim)
+	_empty_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_empty.add_child(_empty_hint)
 	# 본문: 고정 머리 + 구분선 + 스크롤
 	_main = VBoxContainer.new()
 	_main.add_theme_constant_override("separation", 0)
@@ -652,7 +692,9 @@ func _build_state() -> void:
 	_energy_label.add_theme_color_override("font_outline_color", _c_bg)
 	_energy_bar.add_child(_energy_label)
 	_v_carry = _row(g, "운반")
-	_v_action = _row(g, "행동")
+	_v_action = _row(g, "고른 행동")
+	_v_action.tooltip_text = "두뇌가 고른 행동. 아직 발견하지 않은 줍기·심기는 효과 없이 '시도'로만 셉니다(발견의 재료)"
+	_v_action.mouse_filter = Control.MOUSE_FILTER_PASS
 	_v_pos = _row(g, "위치")
 	_v_head = _row(g, "방향")
 

@@ -56,6 +56,8 @@ const HINT_KEYS_B := "Home 전체 보기 · Esc 선택 해제"
 const FIT_TEXT := "전체 보기"
 ## 모든 실험이 멸종했을 때 위쪽 막대의 배속 자리(멸종한 세계는 더 진행하지 않음 — 실행기처럼)
 const EXTINCT_SPEED_TEXT := "멸종 · 진행 끝"
+## 죽은(기록만 남은) 개체를 고른 채 F 를 눌렀을 때의 알림(지도에 없어 따라갈 수 없음 — 검토 I41)
+const FOLLOW_DEAD_TEXT := "죽은 개체는 따라갈 수 없습니다"
 ## 자리 접기 단추(지도 오른쪽 아래). 눌림 = 자리가 보임
 const DOCK_LEFT := "left"
 const DOCK_BOTTOM := "bottom"
@@ -137,6 +139,10 @@ var _ui_scale := 1.0
 # 한 틱 = 모든 실험을 한 틱씩(비교 모드면 A·B 둘 몫을 합친 시간)
 var _step_us_est := 0.0
 var _est_alpha := 0.2
+# 예산을 재는 시계(µs — advance_frame 의 시뮬레이션 시간·_step_once 의 한 틱 비용). 보통은 엔진 시계. 검사는 틱마다 정해진
+# 비용만큼 흐르는 가짜 시계를 넣어 예산 규칙을 기계 속도와 상관없이 잰다(검토 I34: 예전 검사는 실제 시계로 "250마리 세계의
+# 한 틱 ≤ 10.5ms" 를 단언하는 꼴이라 느린 기계에서 코드가 맞아도 실패할 수 있었음)
+var _clock_us: Callable = Time.get_ticks_usec
 var _behind_fill := 0.5
 # 실험마다 멸종을 이미 보았는지(멸종하는 순간 한 번만 알리려고), 모두 멸종해 저절로 멈췄는지(새 세계에서는 다시 재생)
 var _extinct_seen: Array[bool] = []
@@ -417,7 +423,7 @@ static func zip_tmp_dir(web: bool) -> String:
 	return "%s/%d-%d" % [WEB_EXPORT_DIR, OS.get_process_id(), Time.get_ticks_usec()]
 
 
-## 결과를 zip 으로 내려받기(웹). 데스크톱에서는 zip 을 user://downloads/ 에 저장(검사·확인용). 성공 "".
+## 결과를 zip 으로 내려받기(웹). 데스크톱에서는 zip 을 download_dir(기본 user://downloads)에 저장(검사·확인용). 성공 "".
 ## 실패하면 알림 하나("결과를 묶을 수 없습니다: B/timeseries.csv" 처럼 실패한 파일 — export_csv 와 같은 규칙)를 띄우고
 ## 그 문장을 돌려준다(부른 쪽은 알림을 더 띄우지 않는다 — 검토 I40).
 func download_results() -> String:
@@ -434,7 +440,7 @@ func download_results() -> String:
 	return _deliver(bytes, fname, "application/zip", "결과(zip)")
 
 
-## index 번째 실험의 스냅숏 JSON 내려받기(웹). 데스크톱에서는 user://downloads/ 에 저장. 성공 "".
+## index 번째 실험의 스냅숏 JSON 내려받기(웹). 데스크톱에서는 download_dir 에 저장. 성공 "".
 ## 파일 이름 snapshot-<날짜-시각>-seed<그 실험의 씨앗>-tick<T>[-A/-B].json.
 func download_snapshot(index: int = 0) -> String:
 	var x := experiment(index)
@@ -447,6 +453,10 @@ func download_snapshot(index: int = 0) -> String:
 
 ## 마지막으로 넘긴 내려받기 파일 이름(검사용)
 var last_download_name := ""
+## 데스크톱에서 내려받기를 저장하는 폴더(기본 DOWNLOAD_DIR). 검사는 프로세스별 임시 폴더로 바꿔 끼운다(검토 I37: 예전 검사는
+## 실제 user://downloads 에 쓰고 지워, 같은 사용자 폴더를 쓰는 저장소 사본끼리 서로의 파일을 지울 수 있었음)
+var download_dir := DOWNLOAD_DIR
+const DOWNLOAD_DIR := "user://downloads"
 ## 마지막 results_zip_bytes 의 임시 폴더(검사용 — 끝나면 지워져 있어야 함)와 실패한 파일
 var last_zip_tmp_dir := ""
 var last_zip_failed := PackedStringArray()
@@ -461,7 +471,7 @@ func _deliver(bytes: PackedByteArray, fname: String, mime: String, what: String)
 		JavaScriptBridge.download_buffer(bytes, fname, mime)
 		show_toast("%s 내려받기: %s" % [what, fname], "info")
 		return ""
-	var path := "user://downloads/" + fname
+	var path := download_dir.path_join(fname)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path.get_base_dir()))
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
@@ -959,7 +969,7 @@ func advance_frame(delta: float) -> int:
 	var n := 0
 	var progress := 0.0
 	last_budget_hit = false
-	var t0 := Time.get_ticks_usec()
+	var t0: int = _clock_us.call()
 	# 모든 실험이 멸종했으면 진행할 것이 없다(멸종한 세계는 진행하지 않음 — Experiment.step)
 	if not _paused and not _all_extinct():
 		if _fast:
@@ -968,7 +978,7 @@ func advance_frame(delta: float) -> int:
 			while true:
 				_step_once()
 				n += 1
-				if _extinction_stop() or float(Time.get_ticks_usec() - t0) + _step_us_est > ff_us:
+				if _extinction_stop() or float(int(_clock_us.call()) - t0) + _step_us_est > ff_us:
 					break
 			# 빨리 감기 프레임은 "지금 틱의 끝"(alpha 1)을 그린다. 멈추거나 보통 속도로 돌아가도 그 자리에서 이어지게 1.
 			_acc = 1.0
@@ -980,7 +990,7 @@ func advance_frame(delta: float) -> int:
 			var budget_us := _budget_ms * USEC_PER_MS
 			while _acc >= 1.0:
 				# 다음 틱까지 하면 예산을 넘을 것 같으면 멈춘다(적어도 1틱은 돎)
-				if n > 0 and float(Time.get_ticks_usec() - t0) + _step_us_est > budget_us:
+				if n > 0 and float(int(_clock_us.call()) - t0) + _step_us_est > budget_us:
 					# 따라가지 못한 몫은 버린다(밀린 틱이 쌓여 점점 더 느려지지 않게). 보간용 소수 부분만 남김
 					_acc -= floorf(_acc)
 					last_budget_hit = true
@@ -993,7 +1003,7 @@ func advance_frame(delta: float) -> int:
 					_acc -= floorf(_acc)
 					break
 			progress = float(n) + _acc - acc0
-	last_sim_ms = float(Time.get_ticks_usec() - t0) / USEC_PER_MS
+	last_sim_ms = float(int(_clock_us.call()) - t0) / USEC_PER_MS
 	var alpha := clampf(_acc, 0.0, 1.0)
 	for p in _panes:
 		p.map.update_view(alpha, step_dt)
@@ -1032,11 +1042,11 @@ func advance_frame(delta: float) -> int:
 func _step_once() -> void:
 	for p in _panes:
 		p.map.before_steps()
-	var s0 := Time.get_ticks_usec()
+	var s0: int = _clock_us.call()
 	for k in experiments.size():
 		if experiments[k].step():
 			recorded.emit(k, experiments[k].rows().back())
-	var us := float(Time.get_ticks_usec() - s0)
+	var us := float(int(_clock_us.call()) - s0)
 	_step_us_est = us if _step_us_est <= 0.0 else lerpf(_step_us_est, us, _est_alpha)
 
 
@@ -1220,14 +1230,20 @@ func _handle_key(code: Key) -> bool:
 		KEY_F:
 			# 따라가기는 선택한 개체의 지도(비교 모드면 그 실험의 지도)에서
 			var mv := _sel_map()
+			# 비교 모드면 그 실험의 알림(이름표 group — 그 지도 칸에 뜨고 비교를 끝내면 함께 지워짐)
+			var tag := experiments[_selected_index].tag if is_comparing() else ""
+			var where := "%s 지도 " % tag if tag != "" else ""
+			# 고른 개체가 죽었으면(기록만 — 지도에 없음) 켜지 않는다. 정보 창 따라가기 단추가 꺼지는 규칙과 같게(검토 I41:
+			# 예전엔 "따라가기 켬" 이라 알리고 실제로는 따라가지 않았으며, 켜진 채 남아 다음에 고른 개체를 바로 따라갔음). 끄기는 됨
+			var sx := experiment(_selected_index)
+			if not mv.follow_selected and _selected >= 0 and sx != null and sx.world.index_of_id(_selected) == -1:
+				show_toast(FOLLOW_DEAD_TEXT, "info", -1, tag)
+				return true
 			mv.follow_selected = not mv.follow_selected
 			# 정보 창의 "따라가기" 단추도 같은 상태로(신호 없이)
 			info_panel.set_follow(mv.follow_selected)
 			if mv.follow_selected and _selected >= 0:
 				mv.focus_on(_selected)
-			# 비교 모드면 그 실험의 알림(이름표 group — 그 지도 칸에 뜨고 비교를 끝내면 함께 지워짐)
-			var tag := experiments[_selected_index].tag if is_comparing() else ""
-			var where := "%s 지도 " % tag if tag != "" else ""
 			show_toast(where + ("따라가기 켬" if mv.follow_selected else "따라가기 끔"), "info", -1, tag)
 			return true
 		KEY_HOME, KEY_0, KEY_KP_0:

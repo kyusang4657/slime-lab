@@ -6,7 +6,9 @@ extends RefCounted
 ## ⑤ 스냅숏 저장 → 열기 = 같은 상태·해시(비교 모드의 -A/-B 파일도) ⑥ 소리 상자 ↔ LabSound.enabled ⑦ 한국어 낱말 단위 줄바꿈.
 ## 창은 최소 창(lab.min_width × lab.min_height — 검토 J29 뒤 1280×640).
 
-const MIN_CHECKS := 59
+const MIN_CHECKS := 60
+## "세계 그대로" 비교(스냅숏 모든 절 — 틱을 진행하지 않은 채 역사 해시를 견주면 아무것도 증명하지 못함, 검토 I89)
+const WorldCompare := preload("res://tests/view/world_compare.gd")
 const DT := 1.0 / 60.0
 ## 임시 폴더(프로세스마다 따로 — 저장소 사본 여럿에서 함께 돌려도 섞이지 않게, 처음과 끝에 숨은 파일까지 지움)
 var TMP := "user://integration4_checks-%d" % OS.get_process_id()
@@ -73,8 +75,9 @@ func _param_apply(t, lab: LabMain) -> void:
 	t.check(diff == "" and ref.history_hash == lab.world.history_hash, "패널로 만든 실험을 화면으로 %d틱 진행해도 헤드리스와 같음 %s" % [lab.world.tick, diff])
 	var rows := x.rows().size()
 	var gp := lab.graph_panel
-	t.check(rows > 1 and gp.series_points(0, 0) == rows and gp.series_points(1, 0) == rows and gp.series_points(2, 0) == rows,
-			"그래프 세 개 모두 기록 줄 수만큼(%d)" % rows)
+	var drawn: Array = await _drawn_series(t, gp)
+	t.check(rows > 1 and gp.series_points(0, 0) == rows and drawn == [[0], [0], [0]],
+			"패널이 기록 %d줄을 모두 받고, 그래프 세 개가 저마다 그 계열을 그림 %s" % [rows, str(drawn)])
 	t.check(lab.chronicle_panel.item_count() == mini(lab.world.chronicle.size(), lab.chronicle_panel.max_items),
 			"연대기 줄 = 세계 연대기(%d)" % lab.world.chronicle.size())
 
@@ -124,10 +127,12 @@ func _compare(t, lab: LabMain) -> void:
 	t.check(da == "" and db == "" and ra.history_hash == a.world.history_hash and rb.history_hash == b.world.history_hash,
 			"패널로 시작한 비교를 화면으로 진행해도 A·B 모두 헤드리스와 같음 %s %s" % [da, db])
 	var gp := lab.graph_panel
-	var ok := true
-	for g in gp.graph_count():
-		ok = ok and gp.series_points(g, 0) == a.rows().size() and gp.series_points(g, 1) == b.rows().size()
-	t.check(ok and a.rows().size() > 1 and b.rows().size() > 1, "그래프 세 개에 계열 둘(A %d줄 · B %d줄)" % [a.rows().size(), b.rows().size()])
+	# 그래프마다 실제로 그린 선의 계열(GraphView.last_lines)을 본다 — series_points 는 그래프와 상관없이 기록 줄 수라 그래프
+	# 하나가 B 를 빠뜨리거나 숨어도 통과했음(검토 I38)
+	var drawn: Array = await _drawn_series(t, gp)
+	t.check(gp.series_points(0, 0) == a.rows().size() and gp.series_points(0, 1) == b.rows().size() and a.rows().size() > 1 and b.rows().size() > 1
+			and gp.graph_count() == 3 and drawn == [[0, 1], [0, 1], [0, 1]],
+			"그래프 세 개가 저마다 계열 둘을 그림 %s(A %d줄 · B %d줄)" % [str(drawn), a.rows().size(), b.rows().size()])
 	var cp := lab.chronicle_panel
 	var n_a := 0
 	var n_b := 0
@@ -167,8 +172,9 @@ func _chronicle_click(t, lab: LabMain) -> void:
 	if bi < 0:
 		return
 	var it := cp.item(bi)
-	var hash_a := lab.experiment(0).world.history_hash
-	var hash_b := lab.experiment(1).world.history_hash
+	var fp_a := WorldCompare.fingerprint(lab.experiment(0).world)
+	var fp_b := WorldCompare.fingerprint(lab.experiment(1).world)
+	var tick0 := lab.world.tick
 	cp.scroll_to_item(bi)
 	await t.frames(2)
 	var r := cp.item_rect(bi)
@@ -198,7 +204,10 @@ func _chronicle_click(t, lab: LabMain) -> void:
 		await t.frames(1)
 		t.check(lab.graph_panel.cursor_tick == int(ia.tick) and lab.selected_id() == actor and lab.selected_index() == 1,
 				"행위자 없는 A 줄: 시점만 틱 %d, 선택 그대로" % int(ia.tick))
-	t.check(lab.experiment(0).world.history_hash == hash_a and lab.experiment(1).world.history_hash == hash_b, "연대기를 눌러도 두 세계 그대로")
+	# 멈춘 채라 틱이 그대로 — 역사 해시는 검사점에서만 바뀌므로 스냅숏의 모든 절(에너지·유전체·난수 상태 등)을 견준다
+	var da := WorldCompare.diff(fp_a, lab.experiment(0).world)
+	var db := WorldCompare.diff(fp_b, lab.experiment(1).world)
+	t.check(lab.world.tick == tick0 and da == "" and db == "", "연대기를 눌러도 두 세계 그대로(스냅숏 모든 절) A[%s] B[%s]" % [da, db])
 
 
 ## ④ 패널의 CSV 내보내기(export_to = 단추가 부르는 함수) → 비교면 dir/A·dir/B. 각 timeseries.csv·chronicle.csv 가
@@ -233,6 +242,7 @@ func _snapshot(t, lab: LabMain) -> void:
 	var cmp := TMP.path_join("cmp.json")
 	var hb := lab.experiment(1).world.history_hash
 	var tb := lab.experiment(1).world.tick
+	var fp_b := WorldCompare.fingerprint(lab.experiment(1).world)
 	# 저장 대화 상자의 기본 이름은 두 씨앗(G44 — 예전엔 A 씨앗만이라 -B.json 에도 A 의 씨앗이 붙었음)
 	var dn := pp._default_snapshot_name()
 	t.check(dn.contains("-seed1-vs-seed2-tick%d" % lab.world.tick) and dn.ends_with(".json"), "비교 중 스냅숏 기본 이름에 두 씨앗: %s" % dn)
@@ -240,6 +250,8 @@ func _snapshot(t, lab: LabMain) -> void:
 			"비교 중 스냅숏 저장 → cmp-A.json · cmp-B.json")
 	t.check(pp.open_snapshot_from(TMP.path_join("cmp-B.json")) == "" and not lab.is_comparing() and lab.world.history_hash == hb and lab.world.tick == tb
 			and lab.world.seed_value == 2, "B 스냅숏을 열면 혼자 모드로 B 의 세계(틱 %d, 해시 같음)" % tb)
+	var dopen := WorldCompare.diff(fp_b, lab.world, WorldCompare.OPENED_IGNORE)
+	t.check(dopen == "", "연 B 세계 = 저장한 B 세계(스냅숏 모든 절 — 열 때 첫 기록 줄이 가져간 기간 출생·사망 수만 빼고) %s" % dopen)
 	t.check(not pp.is_compare_mode() and pp.status_text() == ParamPanel.TEXT_SAME, "스냅숏을 열면 비교 모드 끔·\"%s\"" % ParamPanel.TEXT_SAME)
 	t.check(lab.graph_panel.series_points(0, 0) == 1 and lab.graph_panel.legend_texts().size() == 1, "그래프는 연 스냅숏의 첫 줄부터(범례 하나)")
 	t.check(lab.chronicle_panel.item_count() == mini(lab.world.chronicle.size(), lab.chronicle_panel.max_items) and lab.chronicle_panel.item_count() > 0,
@@ -310,6 +322,28 @@ func _run_frames(t, lab: LabMain, n: int) -> void:
 	lab.set_paused(true)
 	lab.advance_frame(DT)
 	await t.frames(1)
+
+
+## 그래프마다 실제로 그린 선의 계열 번호(다시 그린 뒤 GraphView.last_lines 에서 점이 있는 선 — 정렬). 이번에 다시 그려지지
+## 않은(숨은 등) 그래프는 빈 목록. 결과는 그래프 순서대로의 배열(예: [[0, 1], [0, 1], [0, 1]]).
+func _drawn_series(t, gp: GraphPanel) -> Array:
+	var before: Array[int] = []
+	for g in gp.graph_count():
+		before.append(gp.view(g).draw_count)
+	gp.redraw_now()
+	await t.frames(2)
+	var out := []
+	for g in gp.graph_count():
+		var v := gp.view(g)
+		var got := {}
+		if v.draw_count > before[g] and v.is_visible_in_tree():
+			for l in v.last_lines:
+				if int(l.points) > 0:
+					got[int(l.series)] = true
+		var keys := got.keys()
+		keys.sort()
+		out.append(keys)
+	return out
 
 
 static func _has_kind(w: SimWorld, kind: String) -> bool:

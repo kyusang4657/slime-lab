@@ -7,6 +7,8 @@ extends RefCounted
 
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
 const MIN_CHECKS := 85
+## "세계 그대로" 비교(스냅숏 모든 절 — 틱을 진행하지 않은 채 역사 해시를 견주면 아무것도 증명하지 못함, 검토 I89)
+const WorldCompare := preload("res://tests/view/world_compare.gd")
 const TICKS := 400
 ## record.every(20)의 배수가 아닌 내보내기 틱과, 그 뒤 기록이 그대로인지 보려고 더 진행할 틱(배수)
 const ODD_TICKS := 407
@@ -97,7 +99,7 @@ func _odd_tick(t, root: String) -> void:
 	var z: Experiment = Experiment.create("default", {}, 42).experiment
 	z.step_n(ODD_TICKS)
 	var rows0 := z.rows().size()
-	var hash0 := z.world.history_hash
+	var fp0 := WorldCompare.fingerprint(z.world)
 	var tail := z.tail_row()
 	t.check(int(tail.get("tick", -1)) == ODD_TICKS and z.rows().size() == rows0, "배수가 아닌 틱(%d): 끝 줄은 지금 틱, 기록기는 그대로(%d줄)" % [ODD_TICKS, rows0])
 	var dir := root.path_join("odd_lab")
@@ -109,7 +111,8 @@ func _odd_tick(t, root: String) -> void:
 			"배수가 아닌 틱의 timeseries.csv = 실행기(--max-ticks=%d, 끝 줄 포함 %d / %d 글자)" % [ODD_TICKS, lab_csv.length(), run_csv.length()])
 	var sm = JSON.parse_string(FileAccess.get_file_as_string(dir.path_join("summary.json")))
 	t.check(typeof(sm) == TYPE_DICTIONARY and int(sm.rows) == rows0 + 1, "요약의 rows = 파일의 줄 수(%s)" % str(sm.get("rows") if typeof(sm) == TYPE_DICTIONARY else "?"))
-	t.check(z.rows().size() == rows0 and z.world.history_hash == hash0 and z.world.tick == ODD_TICKS, "내보내기 뒤 세계·기록기 그대로")
+	var dz := WorldCompare.diff(fp0, z.world)
+	t.check(z.rows().size() == rows0 and dz == "" and z.world.tick == ODD_TICKS, "내보내기 뒤 세계(스냅숏 모든 절)·기록기 그대로 %s" % dz)
 	# 스냅숏도 실행기와 같은 파일: 끝 줄에 보고한 기간 출생·사망을 다시 담지 않음(검토 J32 — 예전엔 원래 세계를 저장해
 	# period_births·period_deaths 만 달랐고, 이어 붙이면 끝 줄의 출생·사망을 두 번 셌음)
 	var lab_snap := FileAccess.get_file_as_string(dir.path_join("final.snapshot.json"))

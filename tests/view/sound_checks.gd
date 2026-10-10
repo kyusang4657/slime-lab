@@ -24,13 +24,20 @@ const T0 := 1000.0
 ## 끝에 오디오 서버가 멈춘 재생을 치울 시간(초 — 합격 여부와 무관한 정리)
 const DRAIN_S := 0.2
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 59
+const MIN_CHECKS := 61
+## 밭을 모두 잃은 뒤 다시 심는 세계(검토 I26): fast_civ·씨앗 9(2,000~2,900틱 사이에 밭 0 → 다시 심음), 진행 한도,
+## 사건을 실험실로 비워 내는 틱 간격
+const REPLANT_PRESET := "fast_civ"
+const REPLANT_SEED := 9
+const REPLANT_MAX_TICKS := 4000
+const DRAIN_EVERY := 20
 
 
 func run(t) -> void:
 	_synth(t)
 	await _node(t)
 	await _with_lab(t)
+	await _first_farm_once(t)
 
 
 ## ① 합성: 형식·길이·최댓값·NaN·덮개·같은 바이트·음높이
@@ -211,6 +218,54 @@ func _with_lab(t) -> void:
 	var ref: SimWorld = t.make_world({}, 2, "demo_fast")
 	ref.step_n(lab.world.tick)
 	t.check(t.same_state(lab.world, ref) == "", "소리가 붙어도 상태가 헤드리스와 같음")
+	lab.queue_free()
+	await t.frames(1)
+	await t.root.get_tree().create_timer(DRAIN_S).timeout
+
+
+## 첫 밭 알림·소리는 세계에서 한 번(검토 I26): 밭을 모두 잃고 다시 심어도 실험실(알림·LabSound 가 받는 events_tagged)에
+## "첫 밭" 사건이 다시 오지 않는다. 화면은 사건 종류마다 같은 알림·소리를 내므로(사건 수 = 첫 밭 강조 알림·저장고 소리 수)
+## 한 번인지는 시뮬레이션이 정한다 — 시뮬레이션 쪽 고침(첫 밭 틱 first_farm_tick)이 들어온 세계면 꼭 한 번, 그 전 규칙의
+## 세계면 화면이 세계의 사건보다 더 받지 않는지만(병합 전 이 가지 — 병합 뒤에는 늘 앞의 경우).
+func _first_farm_once(t) -> void:
+	var lab: LabMain = load("res://scenes/lab.tscn").instantiate()
+	t.root.add_child(lab)
+	await t.frames(1)
+	lab.set_process(false)
+	t.check(lab.new_experiment(REPLANT_PRESET, {}, REPLANT_SEED) == "", "새 실험(%s · 씨앗 %d)" % [REPLANT_PRESET, REPLANT_SEED])
+	lab.set_paused(true)
+	var got := {first_farm = 0}
+	var count := func(_k: int, list: Array) -> void:
+		for e in list:
+			if str((e as Dictionary).get("kind", "")) == "first_farm":
+				got.first_farm += 1
+	lab.events_tagged.connect(count)
+	var w := lab.world
+	var had := false
+	var lost := -1
+	var replant := -1
+	while replant < 0 and w.tick < REPLANT_MAX_TICKS and not w.is_extinct():
+		lab.step_ticks(1)
+		if w.farms.size() > 0:
+			if lost >= 0:
+				replant = w.tick
+			had = true
+		elif had and lost < 0:
+			lost = w.tick
+		if w.tick % DRAIN_EVERY == 0:
+			# 멈춘 채 한 프레임: 진행 없이 사건만 비워 알림·소리로(실제 실험실 길)
+			lab.advance_frame(0.0)
+	lab.advance_frame(0.0)
+	await t.frames(1)
+	lab.events_tagged.disconnect(count)
+	var in_world := 0
+	for e: Dictionary in w.chronicle:
+		in_world += 1 if str(e.kind) == "first_farm" else 0
+	var once_rule := "first_farm_tick" in w
+	var want := 1 if once_rule else in_world
+	t.check(lost > 0 and replant > lost and got.first_farm == want and got.first_farm == in_world,
+			"밭을 모두 잃고(틱 %d) 다시 심어도(틱 %d) 실험실이 받은 첫 밭 사건 %d번(기대 %d — %s, 세계의 연대기 %d번)"
+			% [lost, replant, got.first_farm, want, "첫 밭은 세계에서 한 번" if once_rule else "시뮬레이션 고침 전 규칙", in_world])
 	lab.queue_free()
 	await t.frames(1)
 	await t.root.get_tree().create_timer(DRAIN_S).timeout
