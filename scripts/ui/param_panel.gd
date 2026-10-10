@@ -1774,10 +1774,12 @@ func _build() -> void:
 
 	_apply_btn = _button("새 실험", "패널 조건으로 새 세계를 만듦(지금 실험은 끝남 — 오래 돈 실험이면 먼저 물음)")
 	_apply_btn.theme_type_variation = UiTheme.ACCENT_BUTTON
+	_accent_focus(_apply_btn)
 	_apply_btn.pressed.connect(_on_apply_pressed)
 	_footer.add_child(_apply_btn)
 	_start_compare_btn = _button("나란히 시작", "A·B 조건으로 두 세계를 나란히 시작(같은 배속, 지금 실험은 끝남)")
 	_start_compare_btn.theme_type_variation = UiTheme.ACCENT_BUTTON
+	_accent_focus(_start_compare_btn)
 	_start_compare_btn.pressed.connect(_on_start_compare_pressed)
 	_footer.add_child(_start_compare_btn)
 	var row := _hbox()
@@ -2097,6 +2099,13 @@ static func release_button_focus(panel: Control, event: InputEvent) -> void:
 	var f := panel.get_viewport().gui_get_focus_owner()
 	if f != null and not (f is LineEdit) and panel.is_ancestor_of(f):
 		f.release_focus()
+
+
+## 강조 단추(새 실험·나란히 시작)의 키보드 초점 테두리는 글 색(바탕·테두리가 강조 색이라 공용 강조 색 테두리가 안 보임).
+static func _accent_focus(b: Button) -> void:
+	var sb := (UiTheme.build().get_stylebox("focus", "Button") as StyleBoxFlat).duplicate() as StyleBoxFlat
+	sb.border_color = UiTheme.color("text")
+	b.add_theme_stylebox_override("focus", sb)
 
 
 ## 바탕 없는 확인 상자(기본 모양의 못 씀·올림 바탕이 패널 위에서 큰 어두운 상자로 보이지 않게). 키보드 초점은 단추 테두리.

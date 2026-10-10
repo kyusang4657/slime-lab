@@ -11,7 +11,7 @@ extends RefCounted
 ## 확인 대화 상자 모양·틱 쉼표, 무작위가 세계 상태(스냅숏 글)를 바꾸지 않음.
 ## 비교 시작 인자는 start_compare·stop_compare 를 가로채는 가짜 실험실(FakeLab)로도 확인한다(패널 단위 — 종단은 integration4_checks).
 
-const MIN_CHECKS := 246
+const MIN_CHECKS := 247
 ## 임시 폴더는 프로세스마다 따로(저장소 사본 여럿에서 함께 돌려도 서로 지우지 않게 — I37, run_tests.tmp_dir 와 같은 규칙)
 var TMP_DIR := "user://test_param-%d" % OS.get_process_id()
 var SNAP_PATH := TMP_DIR.path_join("snap.json")
@@ -979,6 +979,10 @@ func _keyboard(t, lab: LabMain, p: ParamPanel) -> void:
 		if c == null or c.focus_mode != Control.FOCUS_ALL:
 			none.append(id)
 	t.check(none.is_empty(), "단추·고르기 상자·확인 상자가 키보드 초점을 받음(못 받음: %s)" % ", ".join(none))
+	var af := (p.control("apply") as Control).get_theme_stylebox("focus") as StyleBoxFlat
+	var sf := (p.control("sound") as Control).get_theme_stylebox("focus") as StyleBoxFlat
+	t.check(af != null and af.border_color == UiTheme.color("text") and sf != null and sf.border_color.a > 0.0,
+			"초점 테두리가 보임(강조 단추 = 글 색, 확인 상자 = 단추 테두리 — 공용 모양은 비어 있거나 강조 바탕과 같은 색)")
 	var sle := p.control("seed:0") as LineEdit
 	sle.grab_focus()
 	await t.frames(1)
