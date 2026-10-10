@@ -3,7 +3,7 @@ extends SceneTree
 ## 씨앗 2 는 1,800틱 안에 채집 374 → 저장 422 → 농사 812틱, 첫 밭 869틱, 1,200틱부터 개체가 상한(250) 근처, 끝에 밭 101칸
 ## (규칙 고침 g1b 뒤 다시 고름 — 전에 쓴 씨앗 5 는 1,500틱 무렵 개체가 46까지 줄고 끝에 밭 18칸).
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1280x720 --script res://tests/timelapse_capture.gd -- --out=폴더
-##   ffmpeg 로 묶기: tools/make_timelapse.sh 폴더 (mp4 + gif)
+##   ffmpeg 로 묶기: tools/make_timelapse.sh 폴더 (webm·mp4·gif·포스터 jpg)
 ## 인자: --out=폴더(필수), --seed=N(2), --ticks=N(1800). 32배(1/30초 프레임마다 약 6.4틱)로 진행.
 ## 영상 뒤쪽 1/3 은 둘레에 밭이 가장 많은 저장고 근처 개체를 골라 따라가며 가까이 본다(죽으면 같은 저장고 근처의 다른 개체).
 

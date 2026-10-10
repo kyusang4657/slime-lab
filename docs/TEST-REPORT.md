@@ -29,7 +29,7 @@
 
 - **최종 판정: 저장소 안의 111개를 고침(코드·검사 95개 + 문서 16개), 그중 I52 는 일부를 까닭과 함께 남김. 포트폴리오 10개는 포트폴리오 저장소 몫(이 기록 때 남음). 자동 검사는 이 컨테이너와 Actions 에서 모두 통과, Pages 배포·1,000세대 5분·`fast_civ` 세대 목표는 실패, Windows·실제 GPU 는 미검증**
 - 통과 / 실패 / 미검증: 확인 항목 K01~K14 **9 / 3 / 2**(K09 Pages 배포, K10 1,000세대 5분, K11 `fast_civ` 세대 목표 / K13 Windows·플랫폼 간, K14 실제 GPU). 미검증 전체는 9절
-- 다음 확인 순서: 저장소 소유자가 Pages 를 켜고 체험판 주소가 열리는지(K09) → Windows 실기에서 zip 실행·역사 해시·사용자 폴더·명령줄 안내(K13) → 실제 GPU 에서 실험실 60FPS·웹 속도(K14) → 고침 뒤 코드로 wasm 해시 다시 견주기(K12) → 1,000세대 5분 방안 결정(K10)
+- 다음 확인 순서: 저장소 소유자가 Pages 를 켜고 체험판 주소가 열리는지(K09) → Windows 실기에서 zip 실행·역사 해시·사용자 폴더·명령줄 안내(K13) → 실제 GPU 에서 실험실 60FPS·웹 속도(K14) → 1,000세대 5분 방안 결정(K10)
 
 | ID | 확인 내용 | 판정 | 근거 |
 | --- | --- | --- | --- |
@@ -44,7 +44,7 @@
 | K09 | GitHub Pages 체험판 배포 | **실패** | 저장소 Pages 꺼짐(`has_pages = false`), #9~#13 의 pages 잡 모두 실패(#8 은 test 실패로 건너뜀) — 소유자 설정 몫(10절) |
 | K10 | 헤드리스 1,000세대 "목표 5분 이내"(설계 13절) | **실패** | 733.8초(12.2분, 기계가 느린 날 — 같은 날 고침 전 코드도 같은 속도, 7절) |
 | K11 | `fast_civ` 세대 목표(저장 15~35·농사 30~70 중앙값, TUNING) | **실패** | 규칙 고침 뒤 5.7·14.3세대(고침 전 8.6·15.9). 100세대 안 농사 12/12 는 그대로, 멸종 2/12(6절) |
-| K12 | 웹(wasm) ↔ 리눅스 데스크톱 역사 해시 | 통과(검토 때, 규칙 고침 전 코드) | 시뮬레이션만 담은 탐침을 같은 웹 템플릿으로 내보내 헤드리스 Chromium 에서 7경우 모두 비트까지 같음(I78). 고침 뒤에는 다시 재지 않음 |
+| K12 | 웹(wasm) ↔ 리눅스 데스크톱 역사 해시 | 통과(수동 탐침) | 검토 때(고침 전 코드) 7경우, 고침 뒤 코드(`bf3209a`)로 다시 8경우 — 시뮬레이션·설정만 담은 탐침을 4.4.1 `web_nothreads_release` 로 내보내 헤드리스 Chromium(SwiftShader)과 리눅스 데스크톱에서 돌려 역사 해시 64자·에너지 합 비트까지 모두 같음(default 11·1500, fast_civ 1·3400(밭 7), default 42·2500, default 7(800틱 멸종), fast_civ 3·3000, default 5·기억 2·1000, harsh_winter 9·800, demo_fast 2·1500(밭 67)). CI 검사는 아님(DESIGN §20) |
 | K13 | Windows 실행·Windows/macOS 와 리눅스의 역사 해시 | 미검증 | Windows·macOS 기기 없음(9절) |
 | K14 | 실제 GPU 에서 200마리 60FPS | 미검증 | GPU 없음, llvmpipe 로만 잼(7절) |
 
@@ -153,7 +153,7 @@
 | I75 | 낮음 | 포트폴리오 | 포트폴리오 저장소(kyusang4657.github.io) — 이 저장소 밖, 포트폴리오 고침 단계에서 | — | — |
 | I76 | 낮음 | 포트폴리오 | 포트폴리오 저장소(kyusang4657.github.io) — 이 저장소 밖, 포트폴리오 고침 단계에서 | — | — |
 | I77 | 낮음 | 원칙 | 밤 문턱을 설정 키 `time.night_light_threshold`(0.5)로 — 규칙·화면(`LabMain.is_night`)·검사가 같은 키, 옛 스냅숏은 기본값으로 채움 | run_tests `test_night_threshold`·`test_snapshot_corrupt`, lab_checks `_night_threshold` | 0.5 를 다시 박으면: 실패: 문턱 0.9 · 빛 0.8 = 밤(감지 반경 × night_factor) |
-| I78 | 낮음 | 원칙 | 검토 때 잰 wasm ↔ 데스크톱 역사 해시 일치(탐침 7경우)를 이 보고서에 기록, README 의 주장에 범위(규칙 고침 전 코드)를 적음. DESIGN 쪽은 문서 단계 | — (자동 검사 없음, 수동 기록) | 문서 |
+| I78 | 낮음 | 원칙 | wasm ↔ 데스크톱 역사 해시 일치를 기록 — 검토 때 7경우, 규칙 고침 뒤 코드로 다시 8경우(K12), README·DESIGN §20 에 범위(수동 탐침·Chromium) | — (자동 검사 없음, 수동 기록) | 문서 |
 | I79 | 사소 | 빌드·CI·라이선스 | CREDITS "가져와 고침" 표에 Actions 워크플로 | test_build_ci `test_credits_engine_notice_and_workflow_origin` | `… 가져와 고침 표에 워크플로(위치와 원래 파일)` |
 | I80 | 사소 | 빌드·CI·라이선스 | 잡마다 `timeout-minutes`(test 20·export 15·pages 10·release 10) | test_build_ci `test_jobs_have_timeout_and_pinned_runner` | `export: timeout-minutes 없음(기본 360분)` |
 | I81 | 사소 | 빌드·CI·라이선스 | `build/.gdignore` 를 저장소에, build_dist 도 만듦 | test_build_ci `test_build_gdignore_tracked` | 실제 가져오기에서 .import 3개 / `build/.gdignore 가 저장소에 없음` |
@@ -344,7 +344,7 @@ xvfb-run … --resolution 1600x900 --script res://tests/perf_capture.gd         
 | B08 | 실제 브라우저에서 사람이 누르는 내려받기 창(zip·JSON) | 묶는 바이트·이름·임시 폴더는 web_checks, 고친 웹판의 "결과 내려받기" 는 Chromium 에서 눌러 엔진 오류 없음(I39)까지만 |
 | U06 | 효과음을 실제 스피커로 | 오디오 장치 없음, 합성 바이트만 검사 |
 | K09·B13 | GitHub Pages 체험판 주소가 열리는지, Release(`v*` 태그) | Pages 꺼짐(소유자 설정), 태그 없음 |
-| K12 | 고침 뒤 코드의 wasm ↔ 데스크톱 해시 | 검토 때 고침 전 코드로만 견줌 |
+| K12 | wasm ↔ 데스크톱 해시를 CI 에서 늘 견주기, Chromium 밖 브라우저(Firefox·Safari) | 수동 탐침으로 Chromium 에서만 확인 |
 | U10 | 같은 지도 크기에서 패널만 숨긴 프레임 시간 대조 | `perf_capture` 에 그 장면이 없음 |
 | I19 | 실제 디스크 가득(쓰다 잘린 파일) | 16k tmpfs 에서 손으로 재현해 확인, 자동 검사는 실패를 흉내 낸 경로로 |
 

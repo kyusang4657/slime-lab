@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 타임랩스 프레임(tests/timelapse_capture.gd 결과)을 webm(VP9)·mp4(H.264)·gif 로 묶는다.
+# 타임랩스 프레임(tests/timelapse_capture.gd 결과)을 webm(VP9)·mp4(H.264)·gif 와 포스터 jpg(timelapse-poster.jpg)로 묶는다.
 # (웹 페이지는 webm 을 먼저: 오픈소스 Chromium 계열은 H.264 를 재생하지 못함)
 #   tools/make_timelapse.sh 프레임폴더 [결과폴더=docs/media]
 set -euo pipefail

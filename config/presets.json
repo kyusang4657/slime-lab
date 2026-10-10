@@ -36,7 +36,7 @@
 	},
 	"demo_fast": {
 		"label": "시연·검사용(아주 빠른 발견)",
-		"_comment": "예전 fast_civ 값. 씨앗 1~12 의 농사 중앙값 2.3세대(대부분 첫 세대 폭발), 씨앗 1 은 13.2세대(1,037틱) — 화면 검사·캡처가 씨앗 1 을 씀",
+		"_comment": "예전 fast_civ 값. 씨앗 1~12 의 농사 중앙값 2.3세대(대부분 첫 세대 폭발), 씨앗 1 은 13.2세대(1,037틱) — 그래프·연대기 캡처는 씨앗 1, 농사 장면 캡처(ui_driver·map_capture·perf_capture)는 씨앗 11",
 		"set": {
 			"discovery.forage_threshold": 120,
 			"discovery.store_threshold": 30.0,
