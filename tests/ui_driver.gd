@@ -2,7 +2,7 @@ extends SceneTree
 ## 실험실 화면 캡처·동작 확인(가상 디스플레이 필요). 계약: docs/VIEW-API.md "캡처".
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/ui_driver.gd -- --out=폴더 [--copy=폴더]
 ## scenes/lab.tscn 을 뿌리 창(1600×900)에 띄우고 프레임은 LabMain.advance_frame 으로 직접 몬다.
-## 시나리오: ① 전경(기본·씨앗 1, 8배로 약 10초) ② demo_fast 농사 단계 낮, 밭 가까이 자식 있는 개체 선택·카메라 맞춤
+## 시나리오: ① 전경(기본·씨앗 1, 8배로 약 10초) ② demo_fast·씨앗 11 농사 단계 낮, 밭 가까이 자식 있는 개체 선택·카메라 맞춤
 ## ③ 같은 자리의 밤(멈춤) ④ 64배와 실제 배속 표시 ⑤ 4단계 패널 자리(혼자 실험, 자리 접기 단추 클릭)
 ## ⑥ 비교 모드(demo_fast | 기본, 1,500틱 뒤 B 지도의 개체를 실제 마우스로 고름).
 ## 동작: 지도 클릭(실제 마우스 입력) → pick_slime → 정보 창 id, 빈 곳 클릭 → 선택 해제, 속도·멈춤 단추 클릭, 단축키,
@@ -14,6 +14,9 @@ const SIZE_LIMIT := 600 * 1024
 const JPG_QUALITY := 0.85
 ## 전경: 8배로 10초(600프레임)
 const OVERVIEW_FRAMES := 600
+## 농사 장면의 씨앗(demo_fast): 1,041틱에 농사 단계, 1,084틱에 밭 3칸(규칙 고침 g1b 뒤 씨앗 1 은 농사를 1,037틱에 발견하지만
+## 밭 3칸이 2,347틱에야 생겨 장면이 늦고 밭이 드묾)
+const FARM_SEED := 11
 ## 농사 단계 뒤 밭이 생길 때까지 더 돌리는 한도(틱)와 바라는 밭 수
 const FARM_EXTRA_MAX := 4000
 const FARM_WANT := 3
@@ -104,7 +107,7 @@ func _overview() -> void:
 
 func _farm() -> void:
 	# 세계를 직접 돌리지 않고 lab.step_ticks 로(기록·recorded 가 따라가 그래프·연대기가 세계와 맞음 — 통합 때 고침)
-	check(lab.new_experiment("demo_fast", {}, 1) == "", "demo_fast·씨앗 1 실험")
+	check(lab.new_experiment("demo_fast", {}, FARM_SEED) == "", "demo_fast·씨앗 %d 실험" % FARM_SEED)
 	var w := lab.world
 	var t0 := Time.get_ticks_msec()
 	var k := 0

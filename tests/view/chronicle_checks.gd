@@ -7,11 +7,13 @@ extends RefCounted
 const PRESET := "demo_fast"
 ## 세대 이정표를 5세대마다(기본 100 은 짧은 검사에서 안 나옴)
 const SETS := {"record.generation_milestone": 5}
-## 씨앗 1 을 이만큼: 채집·저장 발견, 저장고 셋, 세대 이정표가 생김
+## 실제 연대기(①)는 씨앗 17 을 이만큼: 채집·저장·농사 발견, 저장고 넷, 첫 밭, 세대 이정표(459틱)가 생김
+const SEED_REAL := 17
 const TICKS := 760
-## 씨앗 2 는 일찍 저장고·첫 밭(행위자 있는 사건)이 생김(씨앗 1 은 422틱에 첫 발견)
+## 씨앗 2 는 일찍 저장고·첫 밭(행위자 있는 사건, 266틱)이 생김. 비교(③)의 A = 씨앗 1 은 480틱에 첫 사건(세대 이정표)이라
+## 둘 다 사건이 있게 그보다 길게
 const SEED_B := 2
-const TICKS_B := 450
+const TICKS_B := 500
 ## 꾸며 넣는 사건 수(max_items 300 을 넘게)와 그 틱 시작(네 자리 — 틱 열 폭이 그대로)
 const SYNTH := 400
 const SYNTH_TICK0 := 1000
@@ -20,17 +22,17 @@ const DT := 1.0 / 60.0
 const LONG_TEXT := "아주 긴 사건 문장 — 화면 폭을 여러 번 넘도록 낱말을 계속 이어 붙여서 두 줄 안에 다 들어가지 않는지 확인합니다 (끝 표지 ZZ-끝)"
 const KEEP_ALL_TEXT := "버려진 밭 1곳이 풀밭으로 돌아감 (남은 밭 84)"
 ## 괄호·숫자를 떼지 않는 줄바꿈(G54): 예전에는 "(30, / 0)"·"(남은 밭 / 55)"·"밭 / 1곳이" 처럼 끊겼음
-const GLUE_TEXTS: Array[String] = ["첫 밭 — #1030 가 (30, 0) 에 심음", "버려진 밭 1곳이 풀밭으로 돌아감 (남은 밭 55)",
+const GLUE_TEXTS: Array[String] = ["첫 밭 — #1030, (30, 0) 에 심음", "버려진 밭 1곳이 풀밭으로 돌아감 (남은 밭 55)",
 		"채집 발견 — 배부른 줍기 시도 121회 (평균 4.3세대)", "평균 25세대 도달 — 개체 128"]
-## 씨앗 1 의 422틱 채집 발견: mean_gen 4.35(0.01 단위로 반올림해 저장), 문장은 반올림 전 값으로 "(평균 4.3세대)".
-## 줄의 평균 세대를 0.1 단위로 한 번 더 반올림하면 4.4 가 되어 문장과 어긋났음(G26)
-const GEN_PIN_TICK := 422
-const GEN_PIN_COL := "4.35세대"
-const GEN_PIN_TEXT := "4.3"
+## 씨앗 17 의 291틱 농사 발견: mean_gen 2.35(0.01 단위로 반올림해 저장), 문장은 반올림 전 값으로 "(평균 2.3세대)".
+## 줄의 평균 세대를 0.1 단위로 한 번 더 반올림하면 2.4 가 되어 문장과 어긋났음(G26)
+const GEN_PIN_TICK := 291
+const GEN_PIN_COL := "2.35세대"
+const GEN_PIN_TEXT := "2.3"
 ## 줄의 평균 세대(0.01 단위)와 문장의 평균 세대(0.1 단위)가 같은 값을 반올림한 것이면 둘의 차이는 0.05 + 0.005 이내
 const GEN_TOL := 0.0551
-## 다시 읽은 바로 뒤 틱(G04): 씨앗 2 는 126 → 127틱 진행에서 "저장 발견"·"저장고 1호"(틱 번호 126)가 나옴
-const REBUILD_W := 126
+## 다시 읽은 바로 뒤 틱(G04): 씨앗 2 는 133 → 134틱 진행에서 "저장 발견"·"저장고 1호"(틱 번호 133)가 나옴
+const REBUILD_W := 133
 ## 프로세스마다 따로(저장소 사본 여럿에서 함께 돌려도 서로의 파일을 지우지 않게 — I37)
 var SNAP_PATH := "user://chronicle_checks_rebuild-%d.json" % OS.get_process_id()
 ## 이 모듈이 하는 검사 수(조건부 검사도 고정 씨앗이라 늘 같음 — 중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
@@ -49,7 +51,7 @@ func run(t) -> void:
 
 ## ① 실제 연대기: 다시 읽기·순서·글·덧붙이기·거르기, 연대기를 고치지 않음
 func _real_chronicle(t) -> void:
-	var x: Experiment = Experiment.create(PRESET, SETS, 1).experiment
+	var x: Experiment = Experiment.create(PRESET, SETS, SEED_REAL).experiment
 	t.check(x != null, "실험 만들기")
 	if x == null:
 		return

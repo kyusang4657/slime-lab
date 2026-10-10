@@ -338,7 +338,7 @@ func _lab_checks(t) -> void:
 	await t.frames(2)
 	t.check(off_ok and panel.view(0).last_cursor.is_empty() and panel.view(2).last_cursor.is_empty(), "범위 밖 틱·-1 → 시점 표시선 없음")
 
-	# 발견: demo_fast 는 1,636틱에 농사까지
+	# 발견: demo_fast·씨앗 1 은 1,037틱에 농사까지(DEMO_TICKS 안)
 	lab.step_ticks(DEMO_TICKS - 400)
 	var w := x.world
 	var s0 := panel.series[0]

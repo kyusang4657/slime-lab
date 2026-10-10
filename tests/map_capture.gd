@@ -1,13 +1,15 @@
 extends SceneTree
 ## 지도 관찰 창 캡처(가상 디스플레이에서):
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1600x900 --script res://tests/map_capture.gd -- --out=폴더
-## 예설정 demo_fast·씨앗 1 을 농사 단계(약 1,700틱)까지 돌린 뒤 MapView 를 1600×900 SubViewport 에 띄워
-## 전경(map-overview)·저장고 부근 가까이(map-closeup)·밤(map-night)을 JPG(품질 0.85)로 찍는다.
-## 선택 인자: --ticks=N(시작 틱, 기본 1764), --size=WxH
+## 예설정 demo_fast·씨앗 11 을 농사 단계(1,040틱에 발견)를 지나 밭이 여러 칸 생길 때까지 돌린 뒤 MapView 를 1600×900
+## SubViewport 에 띄워 전경(map-overview)·저장고 부근 가까이(map-closeup)·밤(map-night)을 JPG(품질 0.85)로 찍는다.
+## 선택 인자: --ticks=N(시작 틱, 기본 DEFAULT_TICKS), --seed=N(기본 SEED), --size=WxH
 
 const SIZE_LIMIT := 500 * 1024
 const JPG_QUALITY := 0.85
-## 진행 틱 수(낮 한가운데·밭이 몇 칸 생긴 때).
+## 씨앗과 진행 틱 수(낮 한가운데·첫 저장고 둘레에 밭이 여러 칸 생긴 때 — 규칙 고침 g1b 뒤 씨앗 1 은 1,037틱에 농사를 발견하지만
+## 밭이 3,000틱 무렵까지 0~4칸이라 씨앗 11 로 바꿈: 1,764틱 = 밭 28칸·저장고 4·개체 250).
+const SEED := 11
 const DEFAULT_TICKS := 1764
 ## 찍기 전에 화면을 거쳐 진행할 틱(보간 기억이 생기게).
 const WARM_TICKS := 4
@@ -32,12 +34,15 @@ func _initialize() -> void:
 
 func _run() -> void:
 	var ticks := DEFAULT_TICKS
+	var seed_value := SEED
 	var size := Vector2i(1600, 900)
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--out="):
 			_out = a.substr(6)
 		elif a.begins_with("--ticks="):
 			ticks = int(a.substr(8))
+		elif a.begins_with("--seed="):
+			seed_value = int(a.substr(7))
 		elif a.begins_with("--size="):
 			var p := a.substr(7).split("x")
 			size = Vector2i(int(p[0]), int(p[1]))
@@ -52,7 +57,7 @@ func _run() -> void:
 
 	var b := SimConfig.build("demo_fast", {})
 	_world = SimWorld.new()
-	_world.setup(b.config, 1)
+	_world.setup(b.config, seed_value)
 	var t0 := Time.get_ticks_msec()
 	_world.step_n(ticks - WARM_TICKS)
 	print("진행 %d틱 %.1f초: 인구 %d, 단계 %d, 저장고 %d, 밭 %d, 빛 %.2f" % [_world.tick, float(Time.get_ticks_msec() - t0) / 1000.0,

@@ -9,7 +9,7 @@ const EPS := 0.0005
 const SLIME_US_LIMIT := 6000.0
 const TIMING_FRAMES := 120
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 97
+const MIN_CHECKS := 99
 ## 틱 경계에서 가만히 있는 개체를 지켜볼 틱 수
 const STILL_TICKS := 60
 ## 저장고 움집 처마 반지름(SlimeGeo.storehouse_mesh 의 가장 넓은 지붕 둘레)
@@ -34,6 +34,9 @@ const BIG_SIZE := 1.6
 const BIG_STACK := 0.5
 const TRY_DISC_INNER := 0.6
 const TRY_DISC_ALPHA := 0.7
+## 건물(저장고·밭) 검사 세계: demo_fast 씨앗 2 를 이만큼 — 저장고 4·밭 67·개체 207(규칙 고침 g1b 뒤 씨앗 1 은 1,750틱에 밭 0)
+const BUILD_SEED := 2
+const BUILD_TICKS := 1500
 
 
 func run(t) -> void:
@@ -65,6 +68,7 @@ func run(t) -> void:
 	_check_pick_depth(t, mv)
 	_check_extinct(t, mv)
 	_check_ui_tuning(t)
+	_check_attempt_bob(t, mv)
 	sv.queue_free()
 	await t.frames(1)
 
@@ -451,8 +455,8 @@ func _check_timing(t, mv: MapView) -> void:
 # ── 건물 ──
 
 func _check_buildings(t, mv: MapView) -> void:
-	var w: SimWorld = t.make_world({}, 1, "demo_fast")
-	w.step_n(1750)
+	var w: SimWorld = t.make_world({}, BUILD_SEED, "demo_fast")
+	w.step_n(BUILD_TICKS)
 	mv.bind(w)
 	var stores_mi := t.node(mv, "Stores") as MultiMeshInstance3D
 	var farms_mi := t.node(mv, "Farms") as MultiMeshInstance3D
@@ -479,6 +483,29 @@ func _check_buildings(t, mv: MapView) -> void:
 	mv.bind(fresh)
 	t.check(fresh.store_tiles.is_empty() and stores.instance_count == 0 and farms.instance_count == 0,
 			"건물 없는 세계로 다시 bind → 저장고·밭 인스턴스 0")
+
+
+# ── 행동 눌림: 먹기·줍기·심기는 눌림, 아직 열리지 않은 줍기·심기(시도)는 숨쉬기만(검토 I86 — 정보 창과 같게) ──
+
+## 가만히 선 개체(이전 틱 기억 없음 = 보간 없음)에 행동·단계를 넣고 alpha 0.5(눌림이 가장 깊은 때)로 그려 몸의 늘어남을 본다.
+## 늘어남 = 세로 배율 ÷ 몸 배율(가로² × 세로 = 배율³ — 부피 유지). 눌림 = 1 − map.action_bob, 숨쉬기 = 1 ± slime.breath_amp.
+func _check_attempt_bob(t, mv: MapView) -> void:
+	var w: SimWorld = t.make_world({}, 1)
+	mv.bind(w)
+	var pressed := 1.0 - UiConfig.num("map.action_bob") + EPS
+	var cases := [[SimBrain.ACT_EAT, SimWorld.STAGE_NONE, true], [SimBrain.ACT_GATHER, SimWorld.STAGE_NONE, false],
+		[SimBrain.ACT_GATHER, SimWorld.STAGE_FORAGE, true], [SimBrain.ACT_PLANT, SimWorld.STAGE_STORE, false],
+		[SimBrain.ACT_PLANT, SimWorld.STAGE_FARM, true], [SimBrain.ACT_REST, SimWorld.STAGE_FARM, false]]
+	var bad: Array[String] = []
+	for c in cases:
+		w.s_last_action[0] = int(c[0])
+		w.stage = int(c[1])
+		mv.update_view(0.5)
+		var sc := mv.slime_instance_scale(0)
+		var stretch := sc.y / pow(sc.x * sc.x * sc.y, 1.0 / 3.0)
+		if (stretch <= pressed) != bool(c[2]):
+			bad.append("%s·단계 %d → 늘어남 %.3f" % [SimBrain.ACTION_NAMES[int(c[0])], int(c[1]), stretch])
+	t.check(bad.is_empty(), "먹기·열린 줍기·심기만 눌림, 발견 전 시도·쉬기는 숨쉬기 %s" % str(bad))
 
 
 # ── 결정성 ──
@@ -1007,10 +1034,32 @@ func _check_store_doorstep(t, mv: MapView, w: SimWorld) -> void:
 		if Vector2(dx, dz).length() < STORE_EAVE * tl - EPS or Vector2(dx, dz).dot(door) <= 0.0:
 			ok = false
 	t.check(ok and n >= 2, "저장고 칸의 %d마리는 움집 처마(%.2f칸) 밖 문 앞(문 방향 %s)에 그려짐" % [n, STORE_EAVE, door])
+	var k := _front_on_tile(mv, w, sc)
+	t.check(k >= 0 and _pick_center(mv, k) == w.s_id[k], "문 앞에 그린 개체를 누르면 그 개체(#%d)" % (w.s_id[k] if k >= 0 else -1))
+
+
+## 칸 c 에 선 개체 가운데 카메라에 가장 가까이 그린 것(배열 번호, 없으면 -1). 저장고 문이 동·서쪽이면 문 앞 호의 개체들이
+## 화면에서 앞뒤로 겹쳐(전경의 표시 배율이면 더) 뒤 개체의 가운데를 누르면 앞 개체가 맞는다 — 광선이 맞는 가장 앞 몸이 옳음
+## (검토 I53). 그래서 "누르면 그 개체" 는 앞 개체로 본다.
+static func _front_on_tile(mv: MapView, w: SimWorld, c: int) -> int:
 	var cam := mv.get_camera()
+	var best := -1
+	var best_d := INF
+	for i in w.population():
+		if w.s_y[i] * w.w + w.s_x[i] != c:
+			continue
+		var d := cam.global_position.distance_to(mv.slime_instance_position(i))
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+## k 번째 개체의 그린 몸 가운데를 눌러 고른 id
+static func _pick_center(mv: MapView, k: int) -> int:
 	var center_y := SlimeGeo.slime_mesh().get_aabb().size.y * 0.5 * mv.display_scale()
-	var q := mv.slime_instance_position(0)
-	t.check(mv.pick_slime(cam.unproject_position(Vector3(q.x, center_y, q.z))) == w.s_id[0], "문 앞에 그린 개체를 누르면 그 개체")
+	var q := mv.slime_instance_position(k)
+	return mv.pick_slime(mv.get_camera().unproject_position(Vector3(q.x, center_y, q.z)))
 
 
 # ── 남쪽이 바위·물이거나 지도 끝인 저장고: 문 앞 자리는 지나갈 수 있는 이웃 쪽(검토 I54) ──
@@ -1053,6 +1102,9 @@ func _check_store_blocked(t, mv: MapView) -> void:
 		if not inside or not SimGrid.passable(w.tiles[tz * w.w + tx]) or off.length() < STORE_EAVE * tl - EPS or off.dot(door) <= 0.0:
 			bad.append("#%d 칸(%d,%d) → 몸 가운데 (%.2f, %.2f)" % [k, c % w.w, c / w.w, p.x, p.z])
 	t.check(bad.is_empty(), "남쪽이 막힌 저장고(바위·물 / 지도 끝): 문 앞 개체가 지도 안 지나갈 수 있는 칸 위, 문이 그쪽 %s" % [bad])
+	# A 는 문이 동쪽이라 문 앞 두 마리가 화면에서 앞뒤로 겹침 — 앞 개체를 누르면 그 개체(뒤 개체·칸 가운데가 아님)
+	var fk := _front_on_tile(mv, w, a)
+	t.check(fk >= 0 and _pick_center(mv, fk) == w.s_id[fk], "동쪽 문 앞에 겹쳐 선 개체 가운데 앞 개체를 누르면 그 개체(#%d)" % (w.s_id[fk] if fk >= 0 else -1))
 
 
 # ── 밭 칸: 슬라임·그림자·선택 고리가 흙판 위 ──
