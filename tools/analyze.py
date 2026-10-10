@@ -257,6 +257,30 @@ def _positive_number(text: str) -> str:
     return t
 
 
+## 실행기의 틱 상한 SimConfig.TICK_MAX 를 읽을 곳(단일 기준 — 실행기 --max-ticks 는 1~이 값, 밖이면 인자 오류 2)
+SIM_CONFIG_GD = "scripts/sim/sim_config.gd"
+TICK_MAX_RE = re.compile(r"^const TICK_MAX := (\d+)$", re.M)
+## --max-ticks 글: 실행기 int_arg(String.is_valid_int)가 받는 꼴(부호 하나 + 숫자) — 1e5·1_0 은 거부
+INT_RE = re.compile(r"[+-]?[0-9]+")
+
+
+def tick_max(repo: Path | None = None) -> int:
+    """실행기의 틱 상한(scripts/sim/sim_config.gd 의 `const TICK_MAX`)."""
+    m = TICK_MAX_RE.search((repo or default_repo()).joinpath(SIM_CONFIG_GD).read_text(encoding="utf-8"))
+    if not m:
+        raise ValueError(f"{SIM_CONFIG_GD} 에서 TICK_MAX 를 찾지 못했습니다")
+    return int(m.group(1))
+
+
+def _max_ticks(text: str) -> int:
+    """--max-ticks: 실행기와 같은 1~TICK_MAX 의 정수. 예전엔 0·음수를 조용히 "상한 없음"(설정의 run.max_ticks)으로 돌렸음."""
+    t = str(text).strip()
+    hi = tick_max()
+    if not INT_RE.fullmatch(t) or not 1 <= int(t) <= hi:
+        raise argparse.ArgumentTypeError(f"1~{hi} 의 정수여야 합니다: {text}")
+    return int(t)
+
+
 def _arg_type(fn):
     """ValueError 를 argparse 오류로 바꾸는 감싸개."""
     def wrapped(text: str):
@@ -1323,7 +1347,7 @@ def _add_batch_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--lineage", dest="lineage", action="store_true", help="lineage.csv 도 쓰기(크다)")
     p.add_argument("--no-lineage", dest="lineage", action="store_false", help="lineage.csv 쓰지 않기(기본)")
     p.set_defaults(lineage=False)
-    p.add_argument("--max-ticks", type=int, default=None, help="틱 상한(기본 설정값)")
+    p.add_argument("--max-ticks", type=_max_ticks, default=None, help="틱 상한(1~SimConfig.TICK_MAX 의 정수, 기본 설정값)")
     p.add_argument("--timeout", type=float, default=3600.0, help="실행 하나의 시간 제한(초, 기본 3600)")
     p.add_argument("--no-report", action="store_true", help="실행만 하고 보고서는 만들지 않기")
     _add_report_opts(p)

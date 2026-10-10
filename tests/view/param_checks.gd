@@ -12,7 +12,7 @@ extends RefCounted
 ## 두뇌 열지도 범례 끝 글(weight_clamp 를 반올림하지 않음 — I44).
 ## 비교 시작 인자는 start_compare·stop_compare 를 가로채는 가짜 실험실(FakeLab)로도 확인한다(패널 단위 — 종단은 integration4_checks).
 
-const MIN_CHECKS := 256
+const MIN_CHECKS := 262
 ## 임시 폴더는 프로세스마다 따로(저장소 사본 여럿에서 함께 돌려도 서로 지우지 않게 — I37, run_tests.tmp_dir 와 같은 규칙)
 var TMP_DIR := "user://test_param-%d" % OS.get_process_id()
 var SNAP_PATH := TMP_DIR.path_join("snap.json")
@@ -102,6 +102,7 @@ func run(t) -> void:
 	await _keyboard(t, lab, p)
 	await _real_compare(t, lab, p)
 	await _compare_save(t, lab, p)
+	await _engine_overwrite(t, lab, p)
 	await _confirm(t, lab, p)
 	lab.queue_free()
 	await t.frames(2)
@@ -511,6 +512,13 @@ func _seed(t, lab: LabMain, p: ParamPanel) -> void:
 	var under := p.set_value("seed", "-9223372036854775809")
 	t.check(over.contains("사이 정수") and under.contains("사이 정수") and int(p.current_settings(0).seed) == INT64_MIN,
 			"64비트 밖 씨앗 → 오류(엔진이 넘치는 수를 자르지 않게): %s" % over)
+	# 정수 설정 칸도 64비트를 넘는 글을 to_int 하지 않는다(엔진 ERROR 줄·INT64_MIN 대신 적은 값 그대로 범위 문장 — 검토 최종 확인)
+	var bigs: Array[String] = []
+	for big: String in ["100000000000000000000", "1e20", "-1e20"]:
+		var be := p.set_value("time.day_ticks", big)
+		if not (be.contains("time.day_ticks = %s:" % str(big.to_float())) and be.contains("범위") and not be.contains(str(INT64_MIN))):
+			bigs.append("%s → %s" % [big, be])
+	t.check(bigs.is_empty(), "정수 칸의 64비트 밖 글 → 그 값 그대로 범위 오류(어긋난 것: %s)" % ", ".join(bigs))
 	t.check(p.set_value("seed", 42.7) != "" and p.set_value("seed", 3e9) == "" and int(p.current_settings(0).seed) == 3000000000,
 			"실수 씨앗: 소수는 오류, 정수 값(3e9)은 그 정수")
 	t.check(p.set_value("seed", " +4321 ") == "" and int(p.current_settings(0).seed) == 4321 and sle.text == "4321", "글자 \" +4321 \" → 4321")
@@ -1163,6 +1171,52 @@ func _compare_save(t, lab: LabMain, p: ParamPanel) -> void:
 	ow.get_ok_button().pressed.emit()
 	await t.frames(1)
 	t.check(not ow.visible and _snap_tick(pa) == tick1 + 30 and _snap_tick(pb) == tick1 + 30, "덮어쓰기 → 새 틱 %d" % _snap_tick(pa))
+	p.set_compare_mode(false)
+
+
+## 엔진 FileDialog 의 같은 이름 확인(운영 체제 대화 상자를 못 쓸 때 — 헤드리스는 늘 이것, 검토 최종 확인 I50·J05):
+## 혼자 저장은 실험실 모양·한국어로 묻고(기본 초점 취소), 비교 중에는 쓰지도 않을 <이름>.json 을 묻지 않고 -A/-B 를 쓴다.
+func _engine_overwrite(t, lab: LabMain, p: ParamPanel) -> void:
+	lab.set_paused(true)
+	if lab.is_comparing():
+		p.set_compare_mode(false)
+	var dir := ProjectSettings.globalize_path(p.snapshot_dir)
+	var solo := dir.path_join("same.json")
+	for f in [solo, solo + ".bak", dir.path_join("same-A.json"), dir.path_join("same-B.json")]:
+		DirAccess.remove_absolute(f)
+	await _save_named(t, p, "same")
+	var tick1 := lab.world.tick
+	t.check(not lab.is_comparing() and _snap_tick(solo) == tick1, "혼자 저장 → same.json(틱 %d)" % tick1)
+	lab.step_ticks(10)
+	await _save_named(t, p, "same")
+	var sd := p.control("save_dialog") as FileDialog
+	var asked: ConfirmationDialog = null
+	for c in sd.get_children(true):
+		if c is ConfirmationDialog:
+			asked = c
+			break
+	var sb := asked.get_theme_stylebox("panel") as StyleBoxFlat if asked != null else null
+	t.check(asked != null and asked.visible and asked.title == "스냅숏을 덮어쓸까요?" and asked.dialog_text.contains("same.json")
+			and asked.ok_button_text == "덮어쓰기" and sb != null and sb.bg_color == UiTheme.color("panel"),
+			"혼자 같은 이름 → 엔진 확인 창이 실험실 모양·한국어(%s / %s / 바탕 %s)" % [asked.title if asked else "", asked.dialog_text.replace("\n", " ") if asked else "", str(sb.bg_color) if sb else ""])
+	if asked == null:
+		return
+	await t.frames(1)
+	t.check(asked.get_cancel_button().has_focus(), "엔진 확인 창의 기본 초점 = 취소")
+	asked.get_cancel_button().pressed.emit()
+	sd.hide()
+	await t.frames(1)
+	t.check(_snap_tick(solo) == tick1, "취소 → same.json 그대로")
+	# 비교 중: same.json 이 있어도 묻지 않고 -A/-B 를 씀, same.json 은 그대로
+	var before := FileAccess.get_file_as_bytes(solo)
+	p.set_compare_mode(true)
+	p.apply_compare()
+	lab.set_paused(true)
+	await _save_named(t, p, "same")
+	var tick2 := lab.world.tick
+	t.check(lab.is_comparing() and not asked.visible and _snap_tick(dir.path_join("same-A.json")) == tick2 and _snap_tick(dir.path_join("same-B.json")) == tick2
+			and FileAccess.get_file_as_bytes(solo) == before,
+			"비교 중 같은 이름(same.json 있음) → 쓰지 않을 same.json 을 묻지 않고 -A/-B(틱 %d), same.json 그대로" % tick2)
 	p.set_compare_mode(false)
 
 

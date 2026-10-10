@@ -90,8 +90,8 @@ func _init() -> void:
 		"test_extinction_no_resources", "test_memory_units", "test_performance", "test_farm_reachable",
 		"test_time_after_step", "test_event_copies", "test_extinction_mean_gen",
 		"test_config_rules", "test_presets_file", "test_night_threshold", "test_components_fast", "test_snapshot_corrupt",
-		"test_recorder_files",
-		"test_empty_start", "test_mate_once_per_tick", "test_store_max_count", "test_first_farm_once", "test_store_takes_pile",
+		"test_recorder_files", "test_tick_basis",
+		"test_empty_start", "test_mate_once_per_tick", "test_store_max_count", "test_first_farm_once", "test_store_takes_pile", "test_store_tile_plants",
 		"test_child_energy_cap", "test_store_built_in_act", "test_spoil_lifetime", "test_growth_interval",
 		"test_farm_abandon_any_growth", "test_light_curve", "test_store_not_on_farm", "test_action_names", "test_harsh_winter",
 		"test_farm_rule_values", "test_civ_rule_values", "test_runner_guards",
@@ -1589,6 +1589,10 @@ func test_config_rules() -> void:
 	check(e1.contains("time.day_ticks = 1:") and not e1.contains("1.0") and not e1.contains(" 가 범위"), "범위 오류 문장: " + e1)
 	var e2 := str(SimConfig.build("default", {"mutation.rate": 2.0}).error)
 	check(e2.contains("mutation.rate = 2:") and e2.contains("0~1"), "실수 키 오류 문장: " + e2)
+	# 64비트를 넘는 큰 수는 정수 키라도 적은 값 그대로(INT64_MIN 으로 바뀌지 않게 — 검토 최종 확인)
+	for big: float in [1e20, -1e20]:
+		var e3 := str(SimConfig.build("default", {"time.day_ticks": big}).error)
+		check(e3.contains("time.day_ticks = %s:" % str(big)) and not e3.contains(str(-9223372036854775807 - 1)), "큰 수 오류 문장: " + e3)
 	done()
 
 
@@ -1704,7 +1708,14 @@ func test_snapshot_corrupt() -> void:
 		"연대기 항목 text 없음": func(d): d.chronicle.append({tick = 1.0, kind = "milestone", actor = -1.0, mean_gen = 0.0}),
 		"tick 없음": func(d): d.erase("tick"),
 		"설정의 절 통째로 빠짐": func(d): d.config.erase("carry"),
+		# 종류가 틀린 형식·난수 상태(검토 최종 확인 I04): 스크립트 오류로 검증을 건너뛰지 않고 그 이유로 거부
+		"format 숫자": func(d): d.format = 1.0,
+		"format 사전": func(d): d.format = {},
+		"rng.world 숫자": func(d): d.rng.world = 5.0,
+		"rng.life 배열": func(d): d.rng.life = [1],
+		"rng.world null": func(d): d.rng.world = null,
 	}
+	var reason := {"format 숫자": "형식", "format 사전": "형식", "rng.world 숫자": "rng.world", "rng.life 배열": "rng.life", "rng.world null": "rng.world"}
 	var leaked: Array[String] = []
 	for name: String in cases:
 		var d = JSON.parse_string(text)
@@ -1712,6 +1723,8 @@ func test_snapshot_corrupt() -> void:
 		var r = SimSnapshot.from_dict(d)
 		if typeof(r) != TYPE_DICTIONARY or r.get("world") != null or str(r.get("error", "")) == "":
 			leaked.append(name)
+		elif reason.has(name) and not str(r.error).contains(reason[name]):
+			leaked.append("%s(이유 '%s')" % [name, str(r.error)])
 	check(leaked.is_empty(), "구조가 틀린 스냅숏 %d종을 오류 문장으로 거부(샌 것: %s)" % [cases.size(), ", ".join(leaked)])
 	var ok := SimSnapshot.from_text(text)
 	check(ok.error == "" and SimSnapshot.to_text(ok.world) == text, "멀쩡한 스냅숏은 그대로 왕복")
@@ -1744,6 +1757,67 @@ func test_snapshot_corrupt() -> void:
 		w2.step_n(150)
 		ro.world.step_n(150)
 		check(ro.world.history_hash == w2.history_hash, "옛 스냅숏에서 이어 돌린 해시 = 끊김 없이 돌린 해시")
+	done()
+
+
+## 결과 파일의 틱 기준(DESIGN 8.4 "틱 기준" — 검토 J26): 매 틱 기록한 시계열을 계통 기록으로 다시 세고, 사건의 tick·mean_gen 이
+## 어느 상태인지 본다. 개체는 birth < t ≤ death 인 줄 t 에(초기 개체는 0 ≤ t), 줄의 출생·사망 = 틱 번호가 [앞 줄, t) 인 개체,
+## 채집·농사 발견의 mean_gen = 틱 T+1 상태, 저장 발견·저장고 = 틱 T 상태, 이정표 = 적힌 틱(진행한 뒤 틱)의 상태.
+func test_tick_basis() -> void:
+	var wd := world({"record.every": 1, "record.generation_milestone": 1}, 2, "fast_civ")
+	var rec := SimRecorder.new()
+	rec.record(wd)
+	while wd.discovery_tick[SimWorld.STAGE_FARM] < 0 and wd.tick < int(wd.cfg.run.max_ticks) and not wd.is_extinct():
+		wd.step()
+		rec.record(wd)
+	wd.step()
+	rec.record(wd)
+	var rows := rec.rows
+	check(wd.discovery_tick[SimWorld.STAGE_FARM] >= 0 and int(rows.back().tick) == rows.size() - 1, "농사 발견까지 매 틱 기록(%d줄)" % rows.size())
+	var n := rows.size()
+	var pop := PackedInt32Array()
+	var births := PackedInt32Array()
+	var deaths := PackedInt32Array()
+	pop.resize(n)
+	births.resize(n)
+	deaths.resize(n)
+	for i in wd.lin_birth.size():
+		var initial := wd.lin_pa[i] < 0 and wd.lin_pb[i] < 0
+		var b := wd.lin_birth[i]
+		var d := wd.lin_death[i] if wd.lin_death[i] >= 0 else n
+		for t in range(b if initial else b + 1, mini(d + 1, n)):
+			pop[t] += 1
+		if not initial and b + 1 < n:
+			births[b + 1] += 1
+		if wd.lin_death[i] >= 0 and d + 1 < n:
+			deaths[d + 1] += 1
+	var bad := PackedStringArray()
+	for t in n:
+		var r: Dictionary = rows[t]
+		if int(r.population) != pop[t] or (t > 0 and (int(r.births) != births[t] or int(r.deaths) != deaths[t])):
+			bad.append("줄 %d: 개체 %d/%d 출생 %d/%d 사망 %d/%d" % [t, r.population, pop[t], r.births, births[t], r.deaths, deaths[t]])
+	check(bad.is_empty(), "계통 기록(birth < t ≤ death, 초기 개체 0 ≤ t)으로 다시 센 개체·출생·사망 = 시계열(%d줄, 어긋난 줄 %d: %s)"
+			% [n, bad.size(), ", ".join(bad.slice(0, 3))])
+	var gen_at := func(t: int) -> float: return snappedf(float(rows[t].mean_gen), SimWorld.EVENT_GEN_STEP)
+	var seen := {}
+	var wrong := PackedStringArray()
+	for e in wd.chronicle:
+		var t := int(e.tick)
+		var want := -1
+		match str(e.kind):
+			"discovery":
+				want = t if int(e.stage) == SimWorld.STAGE_STORE else t + 1
+			"store_built", "first_farm":
+				want = t
+			"milestone":
+				want = t
+		if want < 0 or want >= n:
+			continue
+		seen[str(e.kind)] = true
+		if not is_equal_approx(float(e.mean_gen), gen_at.call(want)):
+			wrong.append("%s(틱 %d) %.2f ≠ 줄 %d 의 %.2f" % [e.kind, t, float(e.mean_gen), want, gen_at.call(want)])
+	check(seen.has("discovery") and seen.has("store_built") and seen.has("milestone") and wrong.is_empty(),
+			"연대기 mean_gen 의 기준(채집·농사 T+1, 저장·저장고·첫 밭 T, 이정표 = 적힌 틱): 본 종류 %s, 어긋난 것 %s" % [seen.keys(), wrong])
 	done()
 
 
@@ -1971,6 +2045,30 @@ func test_store_takes_pile() -> void:
 	w3.s_dead[i3] = SimWorld.CAUSE_STARVED
 	w3._remove_dead()
 	check(w3.store_food[0] == cap and w3.dropped[sc] == 3.0, "저장고 칸에서 죽은 개체의 운반분 5 → 저장분이 용량까지(+2), 남은 3 은 바닥")
+	done()
+
+
+## 저장고 칸의 풀(규칙 — DESIGN 6절 "저장고 칸의 풀", 검토 최종 확인에서 고치지 않고 규칙으로 둠): 풀은 그 칸에서도 자라지만
+## 그 칸의 입력(발밑 먹이)·먹기는 저장분만 보고, 풀은 줍기로만 꺼낸다. 이 규칙을 바꾸면 저장고가 생긴 뒤의 모든 역사가 바뀐다.
+func test_store_tile_plants() -> void:
+	var wd := empty_world()
+	var p := grass_spot(wd)
+	var c := p.y * wd.w + p.x
+	var i := wd.index_of_id(add_slime(wd, p))
+	wd.store_tiles.append(c)
+	wd.store_food.append(0.0)
+	wd._rebuild_stores()
+	check(wd.grow_rate[c] > 0.0 and wd.food_cap[c] > 0.0, "저장고 칸에도 풀이 자람(성장 %.4f·상한 %.2f)" % [wd.grow_rate[c], wd.food_cap[c]])
+	var plant := 5.0
+	wd.food[c] = plant
+	wd._think(i, p.x, p.y, c, wd.s_head[i], wd.s_emax[i])
+	check(wd._in[SimBrain.IN_FOOD_HERE] == 0.0, "저장고 칸의 발밑 먹이 입력은 저장분만(풀 %.0f, 입력 %.3f)" % [plant, wd._in[SimBrain.IN_FOOD_HERE]])
+	wd.s_energy[i] = 1.0
+	wd.s_carry[i] = 0.0
+	wd._eat(i, c, wd.s_size[i], wd.s_emax[i])
+	check(wd.s_energy[i] == 1.0 and wd.food[c] == plant, "저장고 칸에서 먹기는 저장분만(저장분 0 → 풀 그대로 %.1f)" % wd.food[c])
+	wd._gather(i, c, wd.s_size[i])
+	check(wd.s_carry[i] > 0.0 and is_equal_approx(wd.food[c] + wd.s_carry[i], plant), "저장고 칸의 풀은 줍기로 꺼냄(운반 %.2f)" % wd.s_carry[i])
 	done()
 
 

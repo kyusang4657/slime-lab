@@ -8,7 +8,8 @@ extends SceneTree
 ## --resume: 설정·씨앗은 스냅숏의 것을 쓴다 — --seed·--preset·--set 과 함께 주면 인자 오류. 이어 돌린 summary.json 은
 ## preset = ""·overrides = {}(스냅숏에는 예설정 이름이 없음 — 실험실에서 스냅숏을 연 실험과 같음, 실제 설정은 config),
 ## resumed_from = 실제로 읽은 파일, resume_status = "loaded"(본 파일) · "backup"(본 파일이 깨져 .bak 에서 — 경고 줄을 찍음).
-## 이어 돌릴 스냅숏이 --out 폴더 바로 안에 있으면 거부(그 폴더를 비우며 지우게 되므로).
+## 이어 돌릴 스냅숏이 --out 폴더 바로 안에 있으면 거부(그 폴더를 비우며 지우게 되므로). 경로 글자만이 아니라, 지울 파일 가운데
+## 크기·내용이 그 스냅숏과 같은 것이 있어도 거부한다(링크·대소문자만 다른 경로로 같은 폴더를 가리킨 경우 — 검토 최종 확인).
 ## 결과 폴더(--out): 없거나 비었으면 그대로 쓴다. 실행기가 쓰는 파일(OUT_FILES·snapshot-<틱>.json, 그리고 그 .tmp·.bak·.broken)만
 ## 있으면 그것을 모두 지우고 새로 쓴다(앞 실행의 lineage.csv·snapshot-N.json·.bak 이 새 결과와 섞이지 않게). OUT_KEEP(.gdignore·
 ## analyze.py 의 run.log·OS 가 만드는 파일)은 그대로 둔다. 그 밖의 파일이나 하위 폴더가 하나라도 있으면 아무것도 지우지 않고 오류 2.
@@ -138,8 +139,10 @@ static func run(a: Dictionary) -> int:
 			resumed_from = a.resume + ".bak"
 			printerr("경고: %s 이(가) 깨져(%s) 백업 %s 에서 이어 돌립니다 — 백업은 같은 이름으로 앞서 저장한 다른 실험일 수 있습니다(summary.json 의 resume_status = backup)"
 					% [a.resume, lr.error, resumed_from])
-		if abs_path(resumed_from).get_base_dir() == out_dir:
-			printerr("이어 돌릴 스냅숏이 결과 폴더 안에 있습니다(%s) — 결과 폴더를 비우며 지우게 되므로 다른 --out 을 주세요" % resumed_from)
+		var same := same_file_in(out_dir, resumed_from)
+		if same != "":
+			printerr("이어 돌릴 스냅숏이 결과 폴더 안에 있습니다(%s = 결과 폴더의 %s) — 결과 폴더를 비우며 지우게 되므로 다른 --out 을 주세요"
+					% [resumed_from, same])
 			return 2
 	else:
 		var b := SimConfig.build(a.preset, a.sets)
@@ -236,6 +239,27 @@ static func is_runner_file(name: String) -> bool:
 			base = base.left(-suf.length())
 			break
 	return OUT_FILES.has(base) or RegEx.create_from_string(SNAPSHOT_PATTERN).search(base) != null
+
+
+## 결과 폴더 dir 을 비울 때 지울 파일 가운데 path 와 같은 파일의 이름("" = 없음). 경로 글자가 같은 폴더면 바로, 아니면 크기·내용이
+## 같은 실행기 파일을 찾는다(심볼릭 링크·대소문자만 다른 경로·.. 로 돌아온 경로는 글자로는 다른 폴더로 보이므로).
+static func same_file_in(dir: String, path: String) -> String:
+	if abs_path(path).get_base_dir() == dir:
+		return abs_path(path).get_file()
+	if not DirAccess.dir_exists_absolute(dir):
+		return ""
+	var want := FileAccess.get_file_as_bytes(path)
+	var d := DirAccess.open(dir)
+	if d == null or want.is_empty():
+		return ""
+	d.include_hidden = true
+	for f in d.get_files():
+		if not is_runner_file(f):
+			continue
+		var fa := FileAccess.open(dir.path_join(f), FileAccess.READ)
+		if fa != null and fa.get_length() == want.size() and fa.get_buffer(want.size()) == want:
+			return f
+	return ""
 
 
 ## 결과 폴더 정리(머리 주석의 규칙). 결과: {removed = 지운 파일 수, error = "" 또는 오류 문장, code = 오류일 때 종료 코드}

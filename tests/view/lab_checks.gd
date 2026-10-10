@@ -7,7 +7,7 @@ const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 287
+const MIN_CHECKS := 293
 ## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
 const B_MUTATION := 0.07
 ## 최소 창(lab.min_width × lab.min_height = 1280×640)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기,
@@ -63,6 +63,8 @@ func run(t) -> void:
 	await t.frames(2)
 	lab.set_process(false)
 	lab.download_dir = TMP.path_join("downloads")
+	# Ctrl+S·Ctrl+O 대화 상자의 시작 폴더도 이 검사의 임시 폴더로(실제 user://experiments 를 만들지 않게 — 검토 I37 최종 확인)
+	lab.param_panel.snapshot_dir = TMP.path_join("snapshots")
 	await _layout(t, lab)
 	await _screen_fit(t, lab)
 	_night_threshold(t)
@@ -89,6 +91,7 @@ func run(t) -> void:
 	await _compare_layout(t, lab)
 	_export_fail(t, lab)
 	await _dock_empty(t, lab)
+	_big_map(t, lab)
 	lab.queue_free()
 	await t.frames(1)
 	t.root.size = root_size
@@ -622,6 +625,9 @@ func _command_keys(t, lab: LabMain) -> void:
 		await t.frames(1)
 		var d := pp.find_child(str(c[1]), true, false) as Window
 		t.check(d != null and d.visible, "Ctrl+%s → %s" % [OS.get_keycode_string(c[0]), str(c[1])])
+		var start := str(d.get("current_dir")) if d != null else ""
+		t.check(start.begins_with(ProjectSettings.globalize_path(TMP)), "Ctrl+%s 대화 상자 시작 폴더 = 이 검사의 임시 폴더(%s — 실제 %s 아님)"
+				% [OS.get_keycode_string(c[0]), start, ParamPanel.SNAPSHOT_DIR])
 		if d != null:
 			d.hide()
 		await t.frames(1)
@@ -1166,6 +1172,21 @@ func _speed_color(lab: LabMain) -> Color:
 
 ## 알림 규칙: 세계를 바꾸면 앞 세계 알림이 사라짐(F13), 밭 잃음은 하나로 묶고 강조 알림은 덜 중요한 것보다 늦게 지움(F21),
 ## 긴 문장은 지도 폭 안에서 줄을 바꾸고 오류는 더 오래 보임(F22).
+## 큰 지도 경고(검토 I52 최종 확인): 칸 수가 지도 창 권장 상한(ui.lab.view_map_side_max²)을 넘는 실험을 열면 "화면이 느릴 수
+## 있음 — 큰 지도는 헤드리스 실행기로" 경고 알림 하나, 상한 그대로면 없음(예전엔 앱 안에 상한도 경고도 없었음).
+func _big_map(t, lab: LabMain) -> void:
+	var side := UiConfig.integer("lab.view_map_side_max")
+	var warns := func() -> Array:
+		return lab.visible_toasts().filter(func(v): return v.kind == "warn").map(func(v): return str(v.text))
+	var e1 := lab.new_experiment("default", {"map.width": side, "map.height": side}, 1)
+	t.check(e1 == "" and warns.call().is_empty(), "지도 %d×%d(권장 상한 그대로) → 경고 없음 %s" % [side, side, warns.call()])
+	var e2 := lab.new_experiment("default", {"map.width": side + 1, "map.height": side}, 1)
+	var got: Array = warns.call()
+	t.check(e2 == "" and got.size() == 1 and str(got[0]).contains("%d×%d칸" % [side + 1, side]) and str(got[0]).contains("헤드리스 실행기"),
+			"지도 %d×%d → 경고 알림 하나: %s" % [side + 1, side, got])
+	lab.new_experiment("default", {}, 1)
+
+
 func _toast_rules(t, lab: LabMain) -> void:
 	lab.set_paused(true)
 	lab.show_toast("시험 멸종", "extinction", 5)
@@ -1316,14 +1337,29 @@ func _extinction(t, lab: LabMain) -> void:
 	lab.new_experiment("no_resources", {}, 1)
 	lab.set_paused(false)
 	guard = 0
+	var counted := 0
 	while lab.world.extinct_tick < 0 and guard < 600:
-		lab.advance_frame(DT)
+		counted += lab.advance_frame(DT)
 		guard += 1
 	var t2 := lab.world.tick
 	for i in 5:
-		lab.advance_frame(DT)
+		counted += lab.advance_frame(DT)
 	lab_cfg["pause_on_extinction"] = keep
 	t.check(not lab.is_paused() and lab.world.tick == t2 and t2 == lab.world.extinct_tick, "pause_on_extinction 끄면 멈추지 않음(세계는 멸종한 틱 %d 그대로)" % t2)
+	# 멸종한 프레임의 남은 반복을 틱으로 세지 않음(검토 I13 최종 확인: 예전엔 그 프레임 예산이 다할 때까지 빈 반복을 셈)
+	t.check(counted == t2, "끈 경우에도 advance_frame 이 센 틱 %d = 실제로 나아간 틱 %d" % [counted, t2])
+	lab_cfg["pause_on_extinction"] = false
+	lab.new_experiment("no_resources", {}, 1)
+	lab.set_paused(false)
+	lab.set_fast_forward(true)
+	guard = 0
+	counted = 0
+	while lab.world.extinct_tick < 0 and guard < 600:
+		counted += lab.advance_frame(DT)
+		guard += 1
+	lab.set_fast_forward(false)
+	lab_cfg["pause_on_extinction"] = keep
+	t.check(counted == lab.world.tick, "빨리 감기도 멸종한 프레임의 빈 반복을 세지 않음(센 %d = 틱 %d)" % [counted, lab.world.tick])
 	# Home 키 = 지도 전체 보기(따라가기 끔)
 	lab.new_experiment("default", {}, 1)
 	lab.select_slime(lab.world.s_id[0])

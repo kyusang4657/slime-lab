@@ -212,6 +212,26 @@ class TestResume(RunnerCase):
         self.assertIn("결과 폴더 안", cp.stderr)
         self.assertEqual(listing(self.orig), before)
 
+    def test_resume_inside_out_dir_by_other_path_refused(self) -> None:
+        """링크(또는 대소문자만 다른 경로)로 같은 결과 폴더를 가리켜도 거부 — 경로 글자만 견주면 이어 돌린 스냅숏을 지웠음
+        (검토 최종 확인, I21 고침의 곁효과). 같은 파일인지는 지울 파일의 크기·내용으로 본다."""
+        link = self.tmp / "orig_link"
+        try:
+            link.symlink_to(self.orig, target_is_directory=True)
+        except OSError as e:
+            self.skipTest(f"심볼릭 링크를 만들 수 없음: {e}")
+        before = listing(self.orig)
+        for resume, out in ((link / "snapshot-35.json", self.orig), (self.orig / "snapshot-35.json", link)):
+            cp = run_runner(f"--resume={resume}", "--max-ticks=70", f"--out={out}", "--quiet")
+            self.assertEqual(cp.returncode, 2, f"--resume={resume} --out={out}: {cp.stderr}")
+            self.assertIn("결과 폴더 안", cp.stderr)
+            self.assertEqual(listing(self.orig), before)
+        # 다른 폴더에 둔 스냅숏 사본에서 새 폴더로 이어 돌리기는 그대로 됨
+        other = self.tmp / "copy_src"
+        other.mkdir()
+        shutil.copy(self.orig / "snapshot-35.json", other / "snapshot-35.json")
+        self.ok(run_runner(f"--resume={other / 'snapshot-35.json'}", "--max-ticks=70", f"--out={self.tmp / 'copy_out'}", "--quiet"))
+
     def test_missing_snapshot(self) -> None:
         cp = run_runner(f"--resume={self.tmp / '없는.json'}", f"--out={self.tmp / 'nosnap'}", "--quiet")
         self.assertEqual(cp.returncode, 2)

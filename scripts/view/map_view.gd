@@ -273,6 +273,9 @@ var _prev_off := PackedFloat32Array()
 var _offsets_tick := -1
 ## 저장고 칸 표시(칸마다 0 = 저장고 아님, 1 + 문 방향(0~3), 1 + DIR_COUNT = 둘레가 모두 막힘). 저장고 목록이 바뀔 때 다시 만든다.
 var _store_mask := PackedByteArray()
+## 저장고 칸 → 문 방향에서 문 앞 호를 펼칠 수 있는 각 Vector2(왼쪽 −, 오른쪽 +, 라디안): 몸이 막힌 이웃(지도 밖·지나갈 수 없는
+## 칸)에 걸리기 전까지(_arc_limits). 저장고 목록이 바뀔 때 다시 만든다. 없으면 map.store_slime_arc_max_deg 의 절반씩.
+var _store_span := {}
 ## 표시 배율(멀리서 작은 슬라임을 키움, 1 = 실제 크기). update_view 마다 카메라 거리로 정한다.
 var _display_k := 1.0
 ## 마지막으로 그린 위치(고르기·선택 고리·따라가기용).
@@ -600,6 +603,7 @@ func bind(w: SimWorld) -> void:
 	_last_stores = PackedInt32Array()
 	_last_farms = PackedInt32Array()
 	_store_mask = PackedByteArray()
+	_store_span = {}
 	# 앞 세계의 건물을 지운다(새 세계도 건물이 없으면 _sync_buildings 가 "바뀜 없음"으로 보고 넘어가므로)
 	_store_mm.instance_count = 0
 	_farm_mm.instance_count = 0
@@ -1398,16 +1402,21 @@ func _calc_offsets(xs: PackedInt32Array, ys: PackedInt32Array) -> PackedFloat32A
 		var ox := 0.0
 		var oz := 0.0
 		if stores and _store_mask[c] != 0:
-			var step := _store_arc if m < 2 else minf(_store_arc, _store_arc_max / float(m - 1))
-			var a := (float(k) - float(m - 1) * 0.5) * step
 			# 문 방향 이웃 쪽(지나갈 수 있는 칸)으로. 둘레가 모두 막힌 저장고는 남쪽, 몸이 칸 밖으로 나가지 않는 반지름까지만
 			var d := int(_store_mask[c]) - 1
 			var r := _store_off
 			var face := 0.0
+			var half_max := _store_arc_max * 0.5
+			var lim := Vector2(half_max, half_max)
 			if d < SimGrid.DIR_COUNT:
 				face = atan2(float(SimGrid.DX[d]), float(SimGrid.DY[d]))
+				lim = _store_span.get(c, lim)
 			else:
 				r = minf(_store_off, 0.5 - _radius)
+			# 붐비면 호가 문 둘레로 펼쳐진다 — 막힌 이웃 쪽으로는 펼칠 수 있는 각(lim)까지만, 모자라면 간격을 줄이고 열린 쪽으로 민다(검토 I54)
+			var step := _store_arc if m < 2 else minf(_store_arc, (lim.x + lim.y) / float(m - 1))
+			var spread := float(m - 1) * 0.5 * step
+			var a := clampf(0.0, spread - lim.x, lim.y - spread) + (float(k) - float(m - 1) * 0.5) * step
 			ox = sin(face + a) * r * tl
 			oz = cos(face + a) * r * tl
 		elif m > 1:
@@ -1724,10 +1733,12 @@ func _sync_buildings() -> void:
 				_store_mask[c] = 1
 		# 저장고 정면(-Z, 문)을 문 앞 자리 쪽(지나갈 수 있는 이웃, 보통 남쪽 = 처음 카메라 쪽)으로 돌린다
 		var yaws := PackedFloat32Array()
+		_store_span = {}
 		for c in _last_stores:
 			var d := _door_dir(c) if c >= 0 and c < _n_tiles else -1
 			if d >= 0:
 				_store_mask[c] = 1 + d
+				_store_span[c] = _arc_limits(c, d)
 			elif c >= 0 and c < _n_tiles:
 				_store_mask[c] = 1 + SimGrid.DIR_COUNT
 			yaws.append(-float(d if d >= 0 else DOOR_ORDER[0]) * QUARTER)
@@ -1756,6 +1767,54 @@ func _door_dir(c: int) -> int:
 		if fallback == -1:
 			fallback = d
 	return fallback
+
+
+## 저장고 칸 c(문 방향 d)의 문 앞 호를 펼칠 수 있는 각 Vector2(왼쪽, 오른쪽 — 라디안, 최대 map.store_slime_arc_max_deg 의 절반).
+## 문에서 θ 만큼 돈 자리의 몸(가운데 = 칸 가운데에서 map.store_slime_offset 칸, 반지름 slime.radius 칸)이 걸치는 이웃 칸은 몸
+## 가운데의 가로·세로가 ±(0.5 − 반지름)을 지나는 각에서만 바뀐다 — 그 각들로 나눈 구간마다 걸치는 이웃을 보고, 처음으로
+## 지도 밖·지나갈 수 없는 칸에 걸리는 구간 앞에서 멈춘다. 붐비는 저장고의 호가 막힌 옆·뒤 이웃(바위·물·지도 밖)으로 다시 돌지 않게.
+func _arc_limits(c: int, d: int) -> Vector2:
+	var half := _store_arc_max * 0.5
+	var r := _store_off
+	var e := 0.5 - _radius
+	if r <= e:
+		return Vector2(half, half)
+	var face := atan2(float(SimGrid.DX[d]), float(SimGrid.DY[d]))
+	var cuts: Array[float] = [asin(e / r), acos(e / r), PI - asin(e / r), PI - acos(e / r), half]
+	cuts.sort()
+	var out := Vector2(half, half)
+	for side in 2:
+		var sgn := -1.0 if side == 0 else 1.0
+		var prev := 0.0
+		for b in cuts:
+			if b > half:
+				break
+			if b <= prev:
+				continue
+			if _arc_blocked(c, face + sgn * (prev + b) * 0.5, r, e):
+				out[side] = prev
+				break
+			prev = b
+	return out
+
+
+## 칸 c 가운데에서 각 ang(문 방향 각과 같은 꼴: 0 = 남쪽 +Z)으로 r 칸 떨어진 몸이 걸치는 이웃(가운데의 가로·세로가 e 를 넘는 쪽과
+## 그 대각선) 가운데 지도 밖이거나 지나갈 수 없는 칸이 있는지.
+func _arc_blocked(c: int, ang: float, r: float, e: float) -> bool:
+	var px := sin(ang) * r
+	var pz := cos(ang) * r
+	var dx := int(signf(px)) if absf(px) > e else 0
+	var dz := int(signf(pz)) if absf(pz) > e else 0
+	var x := c % world.w
+	var y := c / world.w
+	for o: Vector2i in [Vector2i(dx, 0), Vector2i(0, dz), Vector2i(dx, dz)]:
+		if o == Vector2i.ZERO:
+			continue
+		var nx := x + o.x
+		var ny := y + o.y
+		if nx < 0 or ny < 0 or nx >= world.w or ny >= world.h or not SimGrid.passable(world.tiles[ny * world.w + nx]):
+			return true
+	return false
 
 
 ## 칸 가운데에 크기 1 로 놓는다. yaws = 칸마다 Y 축 회전(라디안, 모자라면 0). 직각 회전만 쓰므로 cos·sin 을 반올림해 정확히.

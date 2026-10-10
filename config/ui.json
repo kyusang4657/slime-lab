@@ -65,7 +65,8 @@
 		"pause_on_extinction": true,
 		"left_dock_open": true,
 		"bottom_dock_open": true,
-		"label_max_overrides": 2
+		"label_max_overrides": 2,
+		"view_map_side_max": 256
 	},
 	"theme": {
 		"background": "#15181d",

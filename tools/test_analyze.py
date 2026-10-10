@@ -186,6 +186,19 @@ class TestArgs(unittest.TestCase):
                 with self.assertRaises(SystemExit, msg=bad):
                     p.parse_args(["run", "--out", "o", "--generations", bad])
 
+    def test_max_ticks_like_runner(self) -> None:
+        """--max-ticks 는 실행기와 같은 1~TICK_MAX 의 정수: 0·음수는 예전에 조용히 "상한 없음" 으로 돌았고, 상한 위는 모든
+        실행이 실행기 인자 오류로 실패했음(검토 최종 확인 — I20 의 분석 도구 쪽)."""
+        hi = analyze.tick_max()
+        self.assertGreater(hi, 1)
+        p = analyze.build_parser()
+        for good, want in (("1", 1), ("2000", 2000), (str(hi), hi), (" +50 ", 50)):
+            self.assertEqual(p.parse_args(["run", "--out", "o", "--max-ticks", good]).max_ticks, want, good)
+        with quiet(), contextlib.redirect_stderr(io.StringIO()):
+            for bad in ("0", "-5", str(hi + 1), "1e5", "1_0", "abc", "2.5"):
+                with self.assertRaises(SystemExit, msg=bad):
+                    p.parse_args(["sweep", "--out", "o", "--param", "a=1", "--max-ticks", bad])
+
     def test_quoted_key_rejected(self) -> None:
         """Windows cmd 는 작은따옴표를 벗기지 않음: 따옴표째 넘어온 키는 모든 실행이 '알 수 없는 키' 로 실패하기 전에
         인자 오류로, 큰따옴표를 쓰라고 안내(J23)."""

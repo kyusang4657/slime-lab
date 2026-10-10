@@ -639,7 +639,22 @@ func _adopt_list(list: Array) -> void:
 		_title = "비교 · A %s │ B %s" % [experiments[0].label, experiments[1].label]
 	_set_pane_count(experiments.size())
 	_adopt(experiments[0].world)
+	_warn_big_maps()
 	experiments_changed.emit(experiments)
+
+
+## 지도 칸 수가 지도 창 권장 상한(ui.lab.view_map_side_max 의 제곱 — 256×256)을 넘는 실험을 열면 경고 알림(검토 I52: 큰 지도는
+## 지도를 붙이는 시간·그리는 삼각형이 칸 수에 비례해 화면이 느려진다 — 앱 안에는 상한도 경고도 없고 말풍선에만 적혀 있었음).
+func _warn_big_maps() -> void:
+	var side := UiConfig.integer("lab.view_map_side_max")
+	for x in experiments:
+		var w := x.world
+		if w == null or w.w * w.h <= side * side:
+			continue
+		var text := "지도가 커서(%d×%d칸 — 지도 창은 %d×%d 이하 권장) 화면이 느릴 수 있습니다. 큰 지도는 헤드리스 실행기로 돌리세요" % [w.w, w.h, side, side]
+		if x.tag != "":
+			text = "%s · %s" % [x.tag, text]
+		show_toast(text, "warn", -1, x.tag)
 
 
 ## 세계를 바꿔 끼우고 선택·누적·측정·알림을 처음으로 되돌린다(_adopt_list 가 부름). 지도마다 자기 실험의 세계를 붙인다.
@@ -978,7 +993,7 @@ func advance_frame(delta: float) -> int:
 			while true:
 				_step_once()
 				n += 1
-				if _extinction_stop() or float(int(_clock_us.call()) - t0) + _step_us_est > ff_us:
+				if _all_extinct() or float(int(_clock_us.call()) - t0) + _step_us_est > ff_us:
 					break
 			# 빨리 감기 프레임은 "지금 틱의 끝"(alpha 1)을 그린다. 멈추거나 보통 속도로 돌아가도 그 자리에서 이어지게 1.
 			_acc = 1.0
@@ -998,7 +1013,7 @@ func advance_frame(delta: float) -> int:
 				_step_once()
 				_acc -= 1.0
 				n += 1
-				if _extinction_stop():
+				if _all_extinct():
 					# 멸종한 틱에서 멈춘다(아래 _on_extinct). 남은 몫은 버림 — 다시 재생하면 그 자리에서
 					_acc -= floorf(_acc)
 					break
@@ -1062,18 +1077,10 @@ func _on_extinct(k: int) -> void:
 		_extinct_paused = true
 
 
-## 이 틱에서 모든 실험이 멸종했고(아직 알리지 않은 멸종이 있음) lab.pause_on_extinction 이면 true — 프레임의 남은 틱을 돌지 않고
-## 멸종한 틱에서 멈추게(4단계 최종 점검: 한 프레임에 여러 틱을 돌 때 멸종한 다음 틱까지 가서 멈출 수 있었음, 예산에 따라 달라짐).
-## 멸종해 멈춘 뒤 다시 재생해도(모두 알렸음) 멸종한 세계는 진행하지 않는다(위쪽 막대 "멸종 · 진행 끝").
-func _extinction_stop() -> bool:
-	if not _all_extinct() or not bool(UiConfig.value("lab.pause_on_extinction", true)):
-		return false
-	for k in experiments.size():
-		if k >= _extinct_seen.size() or not _extinct_seen[k]:
-			return true
-	return false
-
-
+## 모든 실험이 멸종했는지. advance_frame 은 이 틱에서 모두 멸종하면 프레임의 남은 틱을 돌지 않는다 — 멸종한 틱에서 멈추게
+## (4단계 최종 점검: 한 프레임에 여러 틱을 돌 때 멸종한 다음 틱까지 가서 멈출 수 있었음, 예산에 따라 달라짐), 그리고
+## lab.pause_on_extinction 을 꺼도 진행하지 않는 빈 반복을 틱으로 세지 않게(검토 I13 최종 확인: 예전엔 그 프레임 예산이 다할 때까지
+## 돌며 센 수에 넣었음). 멸종해 멈춘 뒤 다시 재생해도 멸종한 세계는 진행하지 않는다(위쪽 막대 "멸종 · 진행 끝").
 func _all_extinct() -> bool:
 	for x in experiments:
 		if x.extinct_at() < 0:

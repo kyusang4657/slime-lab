@@ -185,7 +185,8 @@ func _chronicle_click(t, lab: LabMain) -> void:
 	var actor := int(it.actor)
 	t.check(lab.selected_id() == actor and lab.selected_index() == 1, "누르면 B 의 행위자 #%d 선택(지금 #%d · 실험 %d)" % [actor, lab.selected_id(), lab.selected_index()])
 	t.check(lab.graph_panel.cursor_tick == int(it.tick), "그래프 시점 표시 = 그 줄의 틱 %d(지금 %d)" % [int(it.tick), lab.graph_panel.cursor_tick])
-	# 값만이 아니라 세 그래프가 실제로 그 틱에 시점 표시선을 그림(GraphView.last_cursor — 검토 I15)
+	# 값만이 아니라 세 그래프가 실제로 그 틱에 시점 표시선을 그림(GraphView.last_cursor). 이 장면의 첫 밭 틱은 이미 가로축 안이라
+	# 검토 I15(마지막 기록 줄 뒤 사건)는 잡지 못한다 — I15 를 지키는 검사는 graph_checks _cursor_tail_checks(검토 최종 확인).
 	await t.frames(2)
 	var drawn := true
 	for g in 3:

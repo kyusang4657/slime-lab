@@ -234,7 +234,7 @@ static func with_added_keys(config: Dictionary) -> Dictionary:
 static func validate(d: Variant) -> String:
 	if typeof(d) != TYPE_DICTIONARY:
 		return "스냅숏이 사전이 아닙니다"
-	if d.get("format") != FORMAT:
+	if typeof(d.get("format")) != TYPE_STRING or d.format != FORMAT:
 		return "형식이 %s 가 아닙니다" % FORMAT
 	if typeof(d.get("version")) != TYPE_FLOAT or int(d.version) != VERSION:
 		return "지원하지 않는 버전입니다: %s" % str(d.get("version"))
@@ -250,8 +250,9 @@ static func validate(d: Variant) -> String:
 	var cerr := SimConfig.validate(with_added_keys(d.config))
 	if cerr != "":
 		return "설정 오류: " + cerr
-	if not String(d.rng.get("world", "")).is_valid_int() or not String(d.rng.get("life", "")).is_valid_int():
-		return "난수 상태가 정수 문자열이 아닙니다"
+	for k in ["world", "life"]:
+		if typeof(d.rng.get(k)) != TYPE_STRING or not String(d.rng[k]).is_valid_int():
+			return "난수 상태가 정수 문자열이 아닙니다: rng.%s" % k
 	var e := _check_keys(d.map, "map", MAP_B64, [], [])
 	if e == "":
 		e = _check_keys(d.civ, "civ", CIV_B64, CIV_INT, CIV_HEX)

@@ -739,7 +739,8 @@ func hover_state() -> HoverState:
 	return _hover_state
 
 
-## 실험마다 가장 가까운 줄 → 그 가운데 마우스에 가장 가까운 줄이 기준(세로선·머리 글). 다른 실험의 줄은 기준에서
+## 실험마다 가장 가까운 줄 → 그 가운데 마우스에 가장 가까운 줄이 기준(세로선·머리 글). 다른 실험은 기준 가로 값에 가장 가까운
+## 줄을 고르고, 그 줄이 기준에서
 ## (gap = 마우스 그래프의 hover_gap_px 픽셀, 또는 그 실험의 기록 간격의 반) 안에 있을 때만 값으로 보인다 —
 ## 세대 축에서 그 세대에 이르지 못한(멸종·느린) 실험의 먼 줄이 이 세대의 값처럼 보이지 않게.
 func _compute_hover(gap: float) -> HoverState:
@@ -760,6 +761,10 @@ func _compute_hover(gap: float) -> HoverState:
 	if st.anchor < 0:
 		return st
 	for k in series.size():
+		# 다른 실험은 기준 가로 값에 가장 가까운 줄(마우스 자리가 아니라 — 기록 간격이 다르면 같은 기준에서도 마우스가 줄 사이
+		# 어디에 있느냐에 따라 다른 줄을 골라 "기록 없음" 으로 바뀌었음, 검토 최종 확인)
+		if k != st.anchor:
+			st.rows[k] = nearest_row(k, st.anchor_x)
 		var r := st.rows[k]
 		if r >= 0 and absf(row_x(k, r) - st.anchor_x) <= _row_tolerance(k, gap):
 			st.valid[k] = 1

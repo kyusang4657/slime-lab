@@ -196,10 +196,14 @@ static func get_value(cfg: Dictionary, dotted: String) -> Variant:
 	return node
 
 
-## 수 값을 글로(정수 키는 정수로 — JSON 에서 읽은 수가 실수라 "1.0" 으로 보이지 않게).
+## 정수로 적는 수의 크기 상한: 이보다 크면 int 로 바꿀 때 64비트를 넘쳐 다른 값(INT64_MIN)이 되므로 그대로 적는다.
+const INT_TEXT_MAX := 1e15
+
+
+## 수 값을 글로(정수 키는 정수로 — JSON 에서 읽은 수가 실수라 "1.0" 으로 보이지 않게, 아주 큰 수는 그대로).
 static func num_text(v: Variant, as_int: bool) -> String:
 	var f := float(v)
-	if is_finite(f) and (as_int or (f == floorf(f) and absf(f) < 1e15)):
+	if is_finite(f) and absf(f) < INT_TEXT_MAX and (as_int or f == floorf(f)):
 		return str(int(f))
 	return str(v)
 

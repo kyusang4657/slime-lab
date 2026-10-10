@@ -4,7 +4,7 @@ extends RefCounted
 ## 비교 모드는 패널 단위로(LabMain.start_compare 를 거친 종단은 integration4_checks), 실험 둘을 직접 만들어 LabMain 이 내는 것과 같은 호출로 몬다:
 ##   x.tag = "A"/"B" → panel.load_experiments([a, b])(= experiments_changed) → 진행할 때마다 append_row(k, rows().back())(= recorded).
 
-const MIN_CHECKS := 148
+const MIN_CHECKS := 149
 ## 합성 줄 수(긴 실행 흉내: 실험 둘 × 이만큼)와 그 줄 간격(틱)
 const LONG_ROWS := 6000
 const LONG_EVERY := 20
@@ -18,6 +18,7 @@ func run(t) -> void:
 	await _lab_checks(t)
 	await _compare_checks(t)
 	await _gen_compare_checks(t)
+	await _interval_compare_checks(t)
 	await _extinct_compare_checks(t)
 	await _narrow_checks(t)
 	await _x_label_checks(t)
@@ -758,6 +759,39 @@ func _host(t, sz: Vector2) -> Control:
 	host.size = sz
 	t.root.add_child(host)
 	return host
+
+
+# ── 틱 축 비교, 기록 간격이 다른 두 실험: 같은 기준 줄이면 마우스가 그 안 어디에 있든 값 읽기가 같음(검토 최종 확인) ──
+## 예전엔 다른 실험도 마우스에 가장 가까운 줄을 골라 기준과 견줬다 — 기록 간격이 성긴 B 는 기준 틱 540 의 허용 범위 안에 줄(500)이
+## 있어도 마우스가 552 면 600 줄을 골라 "이 틱 기록 없음" 으로 바뀌었다. 이제 다른 실험은 기준 가로 값에 가장 가까운 줄.
+func _interval_compare_checks(t) -> void:
+	var a: Experiment = Experiment.create("default", {"record.every": 30}, 1).experiment
+	var b: Experiment = Experiment.create("default", {"record.every": 100}, 1).experiment
+	a.tag = "A"
+	b.tag = "B"
+	a.step_n(600)
+	b.step_n(600)
+	var host := _host(t, Vector2(1200, 240))
+	var panel := GraphPanel.new()
+	host.add_child(panel)
+	panel.size = host.size
+	panel.load_experiments([a, b])
+	await t.frames(2)
+	var v := panel.view(GraphPanel.GRAPH_POP)
+	v.layout_now()
+	var seen := {}
+	var bad := PackedStringArray()
+	for tk: float in [542.0, 545.0, 548.0, 552.0]:
+		v.hover_at(Vector2(v.data_to_px(tk), v.plot.get_center().y))
+		var st := panel.hover_state()
+		seen[v.readout_text()] = true
+		if st.anchor != 0 or st.anchor_x != 540.0 or st.valid[1] != 1 or panel.series[1].tick[st.rows[1]] != 500.0:
+			bad.append("%.0f: 기준 %d·%.0f, B 줄 틱 %.0f(보임 %d)" % [tk, st.anchor, st.anchor_x, panel.series[1].tick[st.rows[1]], st.valid[1]])
+	t.check(bad.is_empty() and seen.size() == 1, "기록 간격 30·100 비교: 기준 틱 540 이면 마우스(542~552) 어디서나 같은 값 읽기(B = 틱 500 줄) %s %s"
+			% [bad, seen.keys()])
+	panel.clear_hover()
+	host.queue_free()
+	await t.frames(1)
 
 
 # ── 세대 축 비교: A 는 일찍 멸종(자원 없음), B 는 시연용 — 마우스·시점 표시가 A 의 줄에 묶이지 않음(G05·G06) ──

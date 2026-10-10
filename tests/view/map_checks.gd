@@ -9,7 +9,7 @@ const EPS := 0.0005
 const SLIME_US_LIMIT := 6000.0
 const TIMING_FRAMES := 120
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 99
+const MIN_CHECKS := 100
 ## 틱 경계에서 가만히 있는 개체를 지켜볼 틱 수
 const STILL_TICKS := 60
 ## 저장고 움집 처마 반지름(SlimeGeo.storehouse_mesh 의 가장 넓은 지붕 둘레)
@@ -478,6 +478,7 @@ func _check_buildings(t, mv: MapView) -> void:
 	_check_store_doorstep(t, mv, w)
 	_check_farm_ground(t, mv, w)
 	_check_store_blocked(t, mv)
+	_check_store_crowded(t, mv)
 	# 건물 없는 새 세계로 다시 붙이면 앞 세계의 저장고·밭이 남지 않아야 함(통합 때 찾은 버그)
 	var fresh: SimWorld = t.make_world({}, 1)
 	mv.bind(fresh)
@@ -1105,6 +1106,54 @@ func _check_store_blocked(t, mv: MapView) -> void:
 	# A 는 문이 동쪽이라 문 앞 두 마리가 화면에서 앞뒤로 겹침 — 앞 개체를 누르면 그 개체(뒤 개체·칸 가운데가 아님)
 	var fk := _front_on_tile(mv, w, a)
 	t.check(fk >= 0 and _pick_center(mv, fk) == w.s_id[fk], "동쪽 문 앞에 겹쳐 선 개체 가운데 앞 개체를 누르면 그 개체(#%d)" % (w.s_id[fk] if fk >= 0 else -1))
+
+
+## 붐비는 저장고(검토 I54 최종 확인): 둘레의 막힌 이웃(바위·물·지도 끝) 꼴이 서로 다른 저장고마다 4~6마리를 세워도 몸 가운데가
+## 지도 밖이나 지나갈 수 없는 칸 위에 그려지지 않고 처마 밖에 선다(예전엔 문 앞 호가 문 둘레로 260°까지 펼쳐져 막힌 옆·뒤
+## 이웃으로 다시 돌았음 — 원 탐침에서 4마리 14/348, 6마리 26/522).
+func _check_store_crowded(t, mv: MapView) -> void:
+	var w: SimWorld = t.make_world({}, 3)
+	var picks := {}
+	for y in w.h:
+		for x in w.w:
+			var c := y * w.w + x
+			if not SimGrid.passable(w.tiles[c]):
+				continue
+			var mask := 0
+			for d in SimGrid.DIR_COUNT:
+				var nx: int = x + SimGrid.DX[d]
+				var ny: int = y + SimGrid.DY[d]
+				if nx < 0 or ny < 0 or nx >= w.w or ny >= w.h or not SimGrid.passable(w.tiles[ny * w.w + nx]):
+					mask |= 1 << d
+			if mask != 0 and mask != (1 << SimGrid.DIR_COUNT) - 1 and not picks.has(mask):
+				picks[mask] = c
+	var stores := PackedInt32Array(picks.values())
+	var tl := UiConfig.num("map.tile_size")
+	var bad := PackedStringArray()
+	var drawn := 0
+	for m in range(4, 7):
+		if w.population() < stores.size() * m:
+			bad.append("개체 %d < 저장고 %d × %d" % [w.population(), stores.size(), m])
+			break
+		w.store_tiles = stores
+		var k := 0
+		for c in stores:
+			for j in m:
+				w.s_x[k] = c % w.w
+				w.s_y[k] = c / w.w
+				k += 1
+		mv.bind(w)
+		for i in k:
+			var c := w.s_y[i] * w.w + w.s_x[i]
+			var p := mv.slime_instance_position(i)
+			var off := Vector2(p.x - (float(c % w.w) + 0.5) * tl, p.z - (float(c / w.w) + 0.5) * tl)
+			var tx := floori(p.x / tl)
+			var tz := floori(p.z / tl)
+			if tx < 0 or tz < 0 or tx >= w.w or tz >= w.h or not SimGrid.passable(w.tiles[tz * w.w + tx]) or off.length() < STORE_EAVE * tl - EPS:
+				bad.append("%d마리 #%d 칸(%d,%d) → 몸 가운데 (%.2f, %.2f)" % [m, i, c % w.w, c / w.w, p.x / tl, p.z / tl])
+		drawn += k
+	t.check(stores.size() >= 6 and bad.is_empty(), "붐비는 저장고(막힌 이웃 꼴 %d가지 × 4~6마리, %d번 그림): 몸 가운데가 지도 밖·바위·물 위 0, 처마 밖 %s"
+			% [stores.size(), drawn, bad.slice(0, 4)])
 
 
 # ── 밭 칸: 슬라임·그림자·선택 고리가 흙판 위 ──

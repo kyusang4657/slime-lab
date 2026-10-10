@@ -35,7 +35,8 @@ const KIND_BOOL := "bool"
 const KIND_OTHER := "other"
 ## 스냅숏 대화 상자의 시작 폴더(LabMain.default_export_dir 와 같은 곳). 실제로 쓰는 폴더는 snapshot_dir(검사가 바꿈)
 const SNAPSHOT_DIR := "user://experiments"
-## 씨앗 = 64비트 정수 전체(실험실·실행기·스냅숏과 같음). 글자 비교용 한계(부호를 뺀 숫자)와 실수로 받은 씨앗의 한계(2^63)
+## 씨앗 = 64비트 정수 전체(실험실·실행기·스냅숏과 같음). 글자 비교용 한계(부호를 뺀 숫자)와 실수로 받은 씨앗의 한계(2^63).
+## 정수 설정 칸도 같은 한계로 넘침을 막는다(_coerce)
 const SEED_DIGITS_MAX := "9223372036854775807"
 const SEED_DIGITS_MIN := "9223372036854775808"
 const SEED_FLOAT_LIMIT := 9223372036854775808.0
@@ -505,14 +506,19 @@ static func _parse_seed(value: Variant) -> Dictionary:
 			var s := str(value).strip_edges()
 			if not s.is_valid_int():
 				return {value = 0, error = "씨앗은 정수여야 합니다: %s" % s}
-			# is_valid_int 는 자릿수를 보지 않는다(넘치는 수를 to_int 하면 엔진 오류) — 숫자 글자를 한계와 견줌
-			var neg := s.begins_with("-")
-			var digits := s.trim_prefix("-").trim_prefix("+").lstrip("0")
-			var limit := SEED_DIGITS_MIN if neg else SEED_DIGITS_MAX
-			if digits.length() > limit.length() or (digits.length() == limit.length() and digits > limit):
+			if not _int_text_fits(s):
 				return {value = 0, error = "씨앗은 -%s ~ %s 사이 정수여야 합니다: %s" % [SEED_DIGITS_MIN, SEED_DIGITS_MAX, s]}
 			return {value = s.to_int(), error = ""}
 	return {value = 0, error = "씨앗은 정수여야 합니다"}
+
+
+## 정수 글자(is_valid_int)가 64비트에 들어가는지. is_valid_int 는 자릿수를 보지 않는다(넘치는 수를 to_int 하면 엔진 오류와
+## 다른 값) — 숫자 글자를 한계와 견줌.
+static func _int_text_fits(s: String) -> bool:
+	var neg := s.begins_with("-")
+	var digits := s.trim_prefix("-").trim_prefix("+").lstrip("0")
+	var limit := SEED_DIGITS_MIN if neg else SEED_DIGITS_MAX
+	return not (digits.length() > limit.length() or (digits.length() == limit.length() and digits > limit))
 
 
 ## 설정 값 해석(칸에 적은 글자 또는 값) → 그 키의 종류. {value, error}
@@ -532,7 +538,8 @@ func _coerce(key: String, value: Variant) -> Dictionary:
 				return {value = false, error = ""}
 			return {value = null, error = "%s 는 참·거짓(true/false)이어야 합니다: %s" % [key, s]}
 		if s.is_valid_int():
-			v = s.to_int()
+			# 64비트를 넘는 정수 글자는 실수로 읽는다(to_int 의 엔진 오류·다른 값 대신 아래 범위 문장으로 거부)
+			v = s.to_int() if _int_text_fits(s) else s.to_float()
 		elif s.is_valid_float():
 			v = s.to_float()
 		else:
@@ -547,6 +554,10 @@ func _coerce(key: String, value: Variant) -> Dictionary:
 				var f := float(v)
 				if not is_finite(f) or f != floorf(f):
 					return {value = null, error = "%s 는 정수여야 합니다: %s" % [key, str(v)]}
+				if absf(f) >= SEED_FLOAT_LIMIT:
+					# int 로 바꾸면 64비트를 넘쳐 다른 값(INT64_MIN)이 된다 — 설정 검사의 범위 문장(적은 값 그대로)으로 거부
+					var big_err := str(SimConfig.build("", {key: f}).error)
+					return {value = null, error = big_err if big_err != "" else "%s 는 정수여야 합니다: %s" % [key, str(v)]}
 				return {value = int(f), error = ""}
 			if typeof(v) == TYPE_INT:
 				return {value = v, error = ""}
@@ -1515,6 +1526,7 @@ func open_snapshot_dialog(save: bool) -> FileDialog:
 		d.use_native_dialog = true
 		d.file_selected.connect(_on_snapshot_save if save else _on_snapshot_open)
 		style_dialog(d)
+		_style_inner_dialogs(d, save)
 		add_child(d)
 		if save:
 			d.canceled.connect(_end_save_hold)
@@ -1534,6 +1546,44 @@ func open_snapshot_dialog(save: bool) -> FileDialog:
 		d.current_file = _newest_snapshot(dir)
 	d.popup_centered(Vector2i(UiConfig.integer("param.dialog_width"), UiConfig.integer("param.dialog_height")))
 	return d
+
+
+## 엔진 FileDialog(운영 체제 대화 상자를 못 쓸 때 — 헤드리스·포털 없는 Linux)의 안쪽 창(같은 이름 확인·폴더 만들기·오류)도 실험실
+## 모양으로 — style_dialog 의 덮어쓰기는 그 대화 상자에만 닿는다(검토 I50 최종 확인: 예전엔 "같은 파일이 있음" 물음만 엔진 기본
+## 회색 바탕에 영어). 저장 대화 상자의 같은 이름 확인(엔진이 만든 첫 ConfirmationDialog)은 제목·단추·글도 한국어로.
+func _style_inner_dialogs(d: FileDialog, save: bool) -> void:
+	var asked: ConfirmationDialog = null
+	for c in d.get_children(true):
+		if not (c is AcceptDialog):
+			continue
+		style_dialog(c as AcceptDialog)
+		if save and asked == null and c is ConfirmationDialog:
+			asked = c as ConfirmationDialog
+	if asked == null:
+		return
+	asked.title = "스냅숏을 덮어쓸까요?"
+	asked.ok_button_text = "덮어쓰기"
+	asked.cancel_button_text = "취소"
+	asked.dialog_autowrap = true
+	# 글은 엔진이 띄우기 직전에 쓰므로 그 뒤(about_to_popup)에 바꾼다
+	asked.about_to_popup.connect(_on_engine_overwrite.bind(d, asked))
+
+
+## 엔진 FileDialog 의 같은 이름 확인: 비교 중이면 고른 이름의 파일은 쓰지 않으므로(-A/-B 를 씀) 묻지 않고 넘긴다 — -A/-B 가
+## 이미 있으면 _on_snapshot_save 가 그 두 파일을 적어 따로 묻는다(검토 J05 최종 확인: 예전엔 혼자 저장한 <이름>.json 이 있으면
+## 쓰지도 않을 그 파일을 먼저 묻고, -A/-B 도 있으면 두 번 물었음). 혼자면 한국어 글, 기본 초점은 취소.
+func _on_engine_overwrite(d: FileDialog, asked: ConfirmationDialog) -> void:
+	if snapshot_paths(d.current_path).size() > 1:
+		_pass_engine_overwrite.call_deferred(asked)
+		return
+	asked.dialog_text = UiTheme.keep_words("같은 이름의 파일이 있습니다:") + "\n" + d.current_file + "\n" \
+			+ UiTheme.keep_words("덮어쓰면 바로 앞 파일만 .bak 으로 남습니다.")
+	asked.get_cancel_button().grab_focus.call_deferred()
+
+
+func _pass_engine_overwrite(asked: ConfirmationDialog) -> void:
+	if asked.visible:
+		asked.get_ok_button().pressed.emit()
 
 
 ## 폴더에서 가장 최근에 바뀐 스냅숏 파일 이름(*.json, 없으면 "").

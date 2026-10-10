@@ -48,6 +48,7 @@
 - 운반하던 먹이를 내려놓으면 칸에 `dropped[c]` 로 쌓입니다. 타이머는 칸마다 하나라서, **마지막으로 내려놓은 틱부터 꼭 `dropped.spoil_ticks`(기본 90)틱 뒤** 그 칸의 더미 전체가 한꺼번에 썩어 사라집니다(더 내려놓으면 더미 전체가 다시 셈 — 검토 I30·J12, 검사 `test_spoil_lifetime`).
 - 썩을 때 그 칸이 풀밭이면 확률 `dropped.sprout_chance` 로 **싹이 틈**: 먹이 + `dropped.sprout_food × 자원량`, 비옥도 + `dropped.sprout_fertility`(최대 1 — 그 칸의 본래 비옥도가 오름). 저장고 근처의 싹이 농사 발견의 재료입니다(6절).
 - 저장고에 넣은 먹이는 썩지 않습니다. 저장고를 지을 때 그 칸의 바닥 더미를 저장분으로 옮기고(용량을 넘는 몫만 바닥에 남아 썩음), 그 칸에서 죽은 개체의 운반분도 저장분으로 들어갑니다(6절 — 저장고 칸에서는 입력·먹기가 저장분만 보므로 더미가 숨지 않게, 검토 I27).
+- **저장고 칸의 풀(규칙):** 저장고 칸에도 풀은 지형·비옥도대로 자랍니다. 그 칸의 입력 2(발밑 먹이)·먹기는 저장분만 보므로 그 풀은 그 칸에서 보이지도 먹히지도 않고, 줍기(채집)로만 꺼내지며 이웃 칸의 감지(입력 3~5)에는 잡힙니다(칸마다 먹이 몇 개 — 기본·`fast_civ` 실행에서 칸당 최대 6~9). 검토 최종 확인에서 찾았으나, 바꾸면 저장고가 생긴 뒤의 모든 역사(기본 씨앗 1·100세대 해시, 웹·다른 기계 결정성 기록, 타임랩스, `fast_civ` 표)가 바뀌어 규칙으로 두었습니다(검사 `test_store_tile_plants`).
 
 ## 2. 슬라임
 
@@ -98,7 +99,7 @@
 |---|---|---|
 | 0 | 편향 | 1 |
 | 1 | 에너지 | energy / 최대 |
-| 2 | 발밑 먹이 | (식물 + 바닥 먹이) / `plants.max_food`. 저장고 칸이면 저장분 / `store.capacity` |
+| 2 | 발밑 먹이 | (식물 + 바닥 먹이) / `plants.max_food`. 저장고 칸이면 저장분 / `store.capacity`(그 칸의 풀은 보지 않음 — 1.4 "저장고 칸의 풀") |
 | 3 | 앞쪽 먹이 | 앞쪽 반 영역(앞 r칸 × 폭 2r+1) 식물 + 바닥 먹이 합 / (칸 수 × max_food) (누적 합 표) |
 | 4 | 왼쪽 먹이 | 왼쪽 반 영역(옆 r칸 × 2r+1, 모서리는 앞쪽과 겹침) |
 | 5 | 오른쪽 먹이 | 오른쪽 반 영역 |
@@ -313,14 +314,16 @@ eaten = struct.unpack("<d", bytes.fromhex(d["stats"]["led_eaten"]))[0]
 
 | 진행 중인 틱 번호로 적는 것 | 진행한 뒤 틱으로 적는 것 |
 |---|---|
-| `lineage.csv` 의 `birth_tick`·`death_tick`, `summary.json` 의 `discovery_ticks`, 연대기 `discovery`·`store_built`·`first_farm`·`farm_lost`, 실험실 알림 "틱 N" | `timeseries.csv` 의 `tick`, `summary.json` 의 `tick`·`extinct_tick`, 연대기 `milestone`·`extinction` |
+| `lineage.csv` 의 `birth_tick`·`death_tick`, `summary.json` 의 `discovery_ticks`, 연대기 `discovery`·`store_built`·`first_farm`·`farm_lost` | `timeseries.csv` 의 `tick`, `summary.json` 의 `tick`·`extinct_tick`, 연대기 `milestone`·`extinction` |
 
 그래서:
 - 개체는 `birth_tick` < t ≤ `death_tick` 인 줄 t 에 있습니다(초기 개체만 `birth_tick` 0 이고 틱 0 줄부터 있음: 0 ≤ t ≤ `death_tick`. `death_tick` −1 = 끝까지 살아 있음). 흔한 읽기(birth ≤ t < death)는 한 줄씩 어긋납니다.
 - 줄 t 의 `births`·`deaths` = 태어난(죽은) 틱 번호가 [앞 줄 틱, t) 인 개체 수.
 - `extinct_tick` = 마지막 `death_tick` + 1(그 줄의 `population` 0). 처음부터 개체가 없는 세계는 0.
 - 틱 T 의 발견·저장고·첫 밭·밭 잃음은 줄 tick ≥ T+1 부터 `civ_stage`·`storehouses`·`farms` 에 보입니다(T 가 기록 줄의 틱과 같으면 그 줄에는 아직 없고 다음 줄부터).
-- 연대기 `mean_gen` 의 기준: 채집·농사 발견과 `milestone` 은 그 틱을 진행한 뒤 살아 있는 개체(틱 T+1 상태), 저장 발견·`store_built`·`first_farm`·`farm_lost` 는 진행 전 개체(틱 T 상태 — 행동 도중·틱 처음에 일어남), `extinction` 은 마지막 틱에 죽은 개체들의 평균 세대. `analyze.py` 의 발견 세대는 이 값입니다.
+- 연대기 `mean_gen` 의 기준(T = 그 사건의 `tick` 열): 채집·농사 발견은 그 틱을 진행한 뒤 살아 있는 개체(틱 T+1 상태), 저장 발견·`store_built`·`first_farm`·`farm_lost` 는 진행 전 개체(틱 T 상태 — 행동 도중·틱 처음에 일어남), `milestone` 은 적힌 T 가 이미 진행한 뒤 틱이라 **틱 T 상태**(같은 틱 `timeseries.csv` 줄의 `mean_gen` 과 같음 — 진행 중인 틱으로 읽어 T+1 상태로 보면 한 틱 어긋남), `extinction` 은 마지막 틱(T−1)에 죽은 개체들의 평균 세대. `analyze.py` 의 발견 세대는 이 값입니다.
+- 실험실 알림의 "틱 N" 은 그 사건의 `tick` 열 그대로입니다: 발견·저장고·첫 밭·밭 잃음은 진행 중인 틱 번호, 이정표·멸종은 진행한 뒤 틱.
+- 검사: `tests/run_tests.gd` `test_tick_basis`(매 틱 기록한 시계열을 계통 기록으로 다시 세고, 사건마다 `mean_gen` 의 기준 상태를 봄).
 
 **`timeseries.csv`** (열 순서 그대로, "구간" = 앞 줄 뒤 이 줄까지, "누적" = 처음부터, 그 밖은 이 줄 틱의 값)
 
@@ -417,7 +420,7 @@ scripts/ui/    실험실 화면 — Experiment(세계 + 기록기)가 진행·�
 └──────────────────────────────┴──────────────────────────────────────────┘
 ```
 (처음 그린 배치 — 지금은 정보 창이 아래 자리 옆까지 세로 전체를 씀: 19절·VIEW-API.)
-- **지도 관찰 창:** 비스듬한 위 3D. 끌기 = 이동, 휠 = 확대, 오른쪽 끌기 = 회전. 땅은 칸마다 정점 색(비옥도·먹이량, 밤에는 어둡게), 식물은 MultiMesh(먹이량에 따라 크기). 땅·풀포기는 `ui.map.chunk_tiles`(64)² 칸 덩어리로 나눠 그리고(기본 지도는 덩어리 하나), 식물·땅 색 갱신은 한 프레임에 덩어리 하나씩·바뀐 것만 씁니다(검토 I52 — 큰 지도는 붙이는 시간·삼각형이 칸 수에 비례해 지도 창으로 보려면 256×256 이하 권장). 슬라임은 **조각 구 메시 하나를 MultiMesh 로**(200마리 = 그리기 호출 1). 개체별 색(hue), 크기(size), 통통 튀는 눌림(틱 사이 보간), 운반 중이면 머리 위 열매. 아직 열리지 않은 줍기·심기 시도는 끄덕이지 않음(3.2).
+- **지도 관찰 창:** 비스듬한 위 3D. 끌기 = 이동, 휠 = 확대, 오른쪽 끌기 = 회전. 땅은 칸마다 정점 색(비옥도·먹이량, 밤에는 어둡게), 식물은 MultiMesh(먹이량에 따라 크기). 땅·풀포기는 `ui.map.chunk_tiles`(64)² 칸 덩어리로 나눠 그리고(기본 지도는 덩어리 하나), 식물·땅 색 갱신은 한 프레임에 덩어리 하나씩·바뀐 것만 씁니다(검토 I52 — 큰 지도는 붙이는 시간·삼각형이 칸 수에 비례해 지도 창으로 보려면 256×256 이하 권장 — 넘는 실험을 열면 경고 알림). 슬라임은 **조각 구 메시 하나를 MultiMesh 로**(200마리 = 그리기 호출 1). 개체별 색(hue), 크기(size), 통통 튀는 눌림(틱 사이 보간), 운반 중이면 머리 위 열매. 아직 열리지 않은 줍기·심기 시도는 끄덕이지 않음(3.2).
 - **슬라임 모델:** 이전 `demon_geo.gd` 의 `sculpt()`(방향별 반지름 함수로 구 변형)를 가져와 아래가 납작하고 위가 둥근 물방울형, 두 눈은 같은 메시의 정점 색. 표정·뼈대 없음(MultiMesh 이므로). 삼각형 예산 `ui.slime.triangles_max`(기본 400).
 - **건물:** 저장고 = `lathe()` 회전체(둥근 움집 + 뚜껑), 밭 = 칸 위 이랑 줄무늬 판. 코드로 생성.
 - **클릭:** 화면 광선을 슬라임 몸 삼각형과 교차해 가장 앞 개체(빗나가면 몸 중심 높이 평면에서 반경 안 가장 가까운 개체 — 검토 I53) → 오른쪽 정보 창(상태·특성·**고른 행동**(발견 전 줍기·심기는 "(시도 · 발견 전)" 흐리게)·운반("먹이 0.6" 처럼 단위)·두뇌 가중치 열지도(범례 끝은 `brain.weight_clamp` 를 반올림하지 않은 값)·부모·조부모·자식 목록, 이름 대신 #id 와 색 점). 가계 항목을 누르면 그 개체(살아 있으면 지도에서, 죽었으면 기록)로 이동.
@@ -443,7 +446,7 @@ godot --headless --path . --script res://tests/run_experiment.gd -- \
   (`hash` 는 앞 12자, `time` 은 기계에 따라 다름 — 13절. 쓰기에 실패하면 끝에 ` write_failed=파일(까닭),…` 가 붙음)
 - 인자 규칙: `--seed` 는 64비트 정수, `--generations` 는 0 보다 큰 유한한 수, `--max-ticks` 는 1~1,000,000,000(`SimConfig.TICK_MAX`), `--snapshot-every` 는 0(끔)~1,000,000,000 의 정수 — `1e5`·`10k` 처럼 글자가 섞이면 앞 숫자만 쓰지 않고 인자 오류. 상대 경로는 프로젝트 폴더(`--path`) 기준. 진행 표시는 10초마다 한 줄(틱/초 포함, `--quiet` 면 없음).
 - **종료 코드**: **0** 정상 · **2** 인자·설정·결과 폴더 오류(모르는 인자, 8.2 설정 검사, 이어 돌릴 스냅숏을 읽지 못함, `--resume` 과 함께 준 `--seed`·`--preset`·`--set`, 실행기가 모르는 파일이 있는 `--out`) · **3** 파일 쓰기 실패(중간·최종 스냅숏, CSV, `summary.json` — 실패마다 오류 줄, 결과 폴더를 열거나 앞 결과를 지울 수 없을 때도) · **1** 은 실행기가 내지 않습니다(Godot 이 스크립트를 읽지 못하면 엔진이 1 로 끝냄). CI 와 `analyze.py` 는 종료 코드와 줄 끝까지 맞춘 `reason=generations$` 로 판정합니다. (검사 실행기 `run_tests.gd`·`run_view_tests.gd` 는 다른 약속: 모두 통과 0, 실패나 `--only` 의 모르는 이름 1 — 12절.)
-- **`--resume`**: 설정·씨앗은 스냅숏의 것을 씁니다(`--seed`·`--preset`·`--set` 을 함께 주면 무시하지 않고 2). 이어 돌린 것과 끊김 없이 돌린 것은 **같은 역사 해시**입니다 — 검사 `tools/test_runner_cli.py` `TestResume`(실행기를 명령줄 그대로 불러 `--snapshot-every` 의 중간 스냅숏에서 이어 돌림, 검토 I63). 이어 돌린 `summary.json` 은 `preset ""`·`overrides {}`·`resumed_from`(실제로 읽은 파일)·`resume_status`(`loaded`, 본 파일이 깨져 `.bak` 에서 읽었으면 `backup` + 경고 줄). 이어 돌리자마자 끝나도 시계열은 그 틱 한 줄. 이어 돌릴 스냅숏이 `--out` 폴더 바로 안이면 2.
+- **`--resume`**: 설정·씨앗은 스냅숏의 것을 씁니다(`--seed`·`--preset`·`--set` 을 함께 주면 무시하지 않고 2). 이어 돌린 것과 끊김 없이 돌린 것은 **같은 역사 해시**입니다 — 검사 `tools/test_runner_cli.py` `TestResume`(실행기를 명령줄 그대로 불러 `--snapshot-every` 의 중간 스냅숏에서 이어 돌림, 검토 I63). 이어 돌린 `summary.json` 은 `preset ""`·`overrides {}`·`resumed_from`(실제로 읽은 파일)·`resume_status`(`loaded`, 본 파일이 깨져 `.bak` 에서 읽었으면 `backup` + 경고 줄). 이어 돌리자마자 끝나도 시계열은 그 틱 한 줄. 이어 돌릴 스냅숏이 `--out` 폴더 바로 안이면 2(링크·대소문자만 다른 경로도 — 지울 파일 가운데 크기·내용이 같은 것이 있으면).
 - **결과 폴더(`--out`)**: 없거나 비었으면 그대로 쓰고, 실행기가 쓰는 파일만 있으면 모두 지우고 새로 쓰며(앞 실행의 `lineage.csv`·`snapshot-N.json`·`.bak` 이 섞이지 않게), 그 밖의 파일·하위 폴더가 하나라도 있으면 아무것도 지우지 않고 2. 설정 오류는 폴더를 보기 전에 거르므로 앞 결과가 남습니다. 자세한 규칙과 Windows 콘솔 판(`Godot_v4.4.1-stable_win64_console.exe`)은 [`ANALYSIS.md`](ANALYSIS.md) "헤드리스 실행기를 직접 쓸 때"·"Windows".
 
 ## 12. 검사 항목(tests/run_tests.gd, 헤드리스)
@@ -457,12 +460,12 @@ godot --headless --path . --script res://tests/run_experiment.gd -- \
 | 난수·지형 | 같은 씨앗 같은 수열, 상태 저장·복원, 정규 근사 평균·분산(`test_rng`). 씨앗별 결정적 지형, 통과 영역 하나, 땅 비율, 아래 32비트만 같은 씨앗은 다른 지형(`test_terrain`), 연결 요소 계산 시간이 같은 지도의 BFS 한 번의 10배 미만(`test_components_fast`) |
 | 두뇌 | 손으로 계산한 순전파(기억 0·2)·배열 크기·정책 확률(`test_brain_layout_forward`), 교차 덩어리(기억 0·2)·돌연변이율 0 이면 그대로·가중치와 특성 범위·float32(`test_brain_genetics`), 정책 가중치·동률 작은 번호(`test_policy`), 세계 안 순전파 = `SimBrain.forward`·영역 감지·기억 되먹임(`test_world_think_matches`), 기억 값 범위·갱신(`test_memory_units`), 행동 이름 "돌기"(`test_action_names`) |
 | 생태 | 밤 성장 0·자원량 0 → 먹이 0·계절(`test_plants_light_resources`), 빛 곡선(`test_light_curve`), 갱신 간격과 같은 성장(`test_growth_interval`), 밤 문턱 키(`test_night_threshold`), 에너지 장부 — 발견 전·운반분·저장분·밭 단계(`test_energy_ledger`), 굶주림·노화(`test_death_causes`), 번식 조건·에너지 전달·쿨다운·반경·돌연변이 0 이면 자식 유전자는 부모 값·혼자 분열(`test_reproduction`), 한 틱에 한 번 짝짓기(`test_mate_once_per_tick`), 자식 에너지 상한(`test_child_energy_cap`), 개체 수 상한(`test_population_cap`), 바닥 먹이 수명(`test_spoil_lifetime`), 처음부터 개체 0(`test_empty_start`), 틱 사이 빛·계절 = 지금 틱(`test_time_after_step`) |
-| 발견 | 발견 전 줍기는 시도만·채집 임계에서 정확히 한 번(`test_discovery_forage`), 채집 전 저장 셈 없음·구역 임계 → 저장 발견·저장고 자리·간격(`test_discovery_store`), 저장·용량·저장분 썩지 않음·바닥 먹이 썩음(`test_storehouse_rules`), 농사 전 심기 효과 없음·싹 임계 → 농사·심기 → 밭·버려진 밭 복귀·싹(`test_farm_rules`), **밭 규칙 값**: 심기 반경 `farm.radius` 안팎·성장 배수·상한 배수·겨울 하한·들어오면 시계 다시(`test_farm_rule_values`), **문명 규칙 값**: 저장고 최대 수·간격·싹 반경·채집 시도 조건·운반 상한·죽을 때 운반분(`test_civ_rule_values` — 검토 I11), 저장고 최대 수 ≥ 1(`test_store_max_count`), 저장고가 더미를 저장분으로(`test_store_takes_pile`), 저장고는 ③ 에서(`test_store_built_in_act`), 밭 위에 짓지 않음(`test_store_not_on_farm`), 밭 버려짐은 매 틱(`test_farm_abandon_any_growth`), 첫 밭은 한 번(`test_first_farm_once`), 알림 사건은 사본(`test_event_copies`) |
+| 발견 | 발견 전 줍기는 시도만·채집 임계에서 정확히 한 번(`test_discovery_forage`), 채집 전 저장 셈 없음·구역 임계 → 저장 발견·저장고 자리·간격(`test_discovery_store`), 저장·용량·저장분 썩지 않음·바닥 먹이 썩음(`test_storehouse_rules`), 농사 전 심기 효과 없음·싹 임계 → 농사·심기 → 밭·버려진 밭 복귀·싹(`test_farm_rules`), **밭 규칙 값**: 심기 반경 `farm.radius` 안팎·성장 배수·상한 배수·겨울 하한·들어오면 시계 다시(`test_farm_rule_values`), **문명 규칙 값**: 저장고 최대 수·간격·싹 반경·채집 시도 조건·운반 상한·죽을 때 운반분(`test_civ_rule_values` — 검토 I11), 저장고 최대 수 ≥ 1(`test_store_max_count`), 저장고가 더미를 저장분으로(`test_store_takes_pile`), 저장고 칸의 풀은 입력·먹기에 안 잡히고 줍기로만(규칙 — `test_store_tile_plants`, 1.4), 저장고는 ③ 에서(`test_store_built_in_act`), 밭 위에 짓지 않음(`test_store_not_on_farm`), 밭 버려짐은 매 틱(`test_farm_abandon_any_growth`), 첫 밭은 한 번(`test_first_farm_once`), 알림 사건은 사본(`test_event_copies`) |
 | **결정성** | 같은 씨앗 2회 → 같은 역사 해시·같은 `timeseries.csv`·같은 유전체·계통, 다른 씨앗·다른 파라미터 → 다른 해시, 밭 단계(`demo_fast` 씨앗 2·1,000틱, 밭 잃음 포함)는 스냅숏 글 전체까지(`test_determinism`) |
 | **농사 도달** | `presets.json` 의 예설정 가운데 **적어도 하나가 평균 100세대 안에 농사**에 도달(어느 예설정·씨앗인지 출력). 따로 연구용 `fast_civ` 씨앗 1 이 100세대 안에 농사 — 결정적이라 문서의 **2,040틱·28.5세대**와 같은지까지(규칙 고침 전 3,321틱·49.0세대), 씨앗 1~3 의 채집이 평균 2세대 이상(`test_farm_reachable`, 느린 검사) |
 | **멸종** | `no_resources` → 수명 + 흔들림 + 10틱 안에 개체 0, 연대기 마지막 = 멸종, 죽음은 대부분 굶주림·마지막 틱의 죽음도 굶주림(`test_extinction_no_resources`). 멸종 사건의 평균 세대(`test_extinction_mean_gen`). **실행기의 `end_reason = extinction`·`extinct_tick`** 은 처음부터 개체 0 인 실험으로 확인(`test_empty_start`) — `no_resources` 를 실행기로 돌려 끝난 이유를 보는 검사는 없음. `harsh_winter` 는 멸종 조건(이름표·설명, 느린 부분: 씨앗 1 은 1,118틱에 멸종 — `test_harsh_winter`) |
-| **저장·복원 왕복** | 틱 T 에서 스냅숏 → JSON 글자 → 복원 → 다시 쓴 글자가 같음, T+K 까지 이어 돌린 해시 = 끊김 없이 돌린 해시, 모든 세계 변수가 같음(밭 단계·기억 2 포함 — `test_snapshot_roundtrip`). 파일 저장·`.bak` 복구·길이 틀린 유전체 거부(`test_snapshot_files`), 구조가 틀린 파일 17가지 거부·옛 파일 열기(`test_snapshot_corrupt`) |
-| 실행기·기록 | 인자 해석·오류, 정상 0, 설정 오류 2, 결과 파일·열 이름·행 수·BOM, `summary.json` 의 끝난 이유·실제 설정·틱 상한(`test_runner`), CSV 의 BOM·쓰는 순서·쓰기 실패 감지(`test_recorder_files`), 검사 실행기 자신(`test_runner_guards`). 명령줄 그대로: 수 인자 거부, `--resume` 해시·조합 거부·백업 경고, 결과 폴더 정리·거부, 종료 코드 2·3(`tools/test_runner_cli.py`) |
+| **저장·복원 왕복** | 틱 T 에서 스냅숏 → JSON 글자 → 복원 → 다시 쓴 글자가 같음, T+K 까지 이어 돌린 해시 = 끊김 없이 돌린 해시, 모든 세계 변수가 같음(밭 단계·기억 2 포함 — `test_snapshot_roundtrip`). 파일 저장·`.bak` 복구·길이 틀린 유전체 거부(`test_snapshot_files`), 구조가 틀린 파일 22가지 거부(형식·난수 상태의 종류가 틀린 것도 스크립트 오류 없이 — 검토 I04 최종 확인)·옛 파일 열기(`test_snapshot_corrupt`) |
+| 실행기·기록 | 인자 해석·오류, 정상 0, 설정 오류 2, 결과 파일·열 이름·행 수·BOM, `summary.json` 의 끝난 이유·실제 설정·틱 상한(`test_runner`), CSV 의 BOM·쓰는 순서·쓰기 실패 감지(`test_recorder_files`), 결과 파일의 틱 기준 — 계통으로 다시 센 시계열·사건 `mean_gen` 의 기준(`test_tick_basis`, 8.4), 검사 실행기 자신(`test_runner_guards`). 명령줄 그대로: 수 인자 거부, `--resume` 해시·조합 거부·백업 경고, 결과 폴더 정리·거부(링크로 가리킨 같은 폴더 포함), 종료 코드 2·3(`tools/test_runner_cli.py`). 문서 형식 표: 8.3·8.4 표가 스냅숏 키·결과 열을 모두 적음(`tools/test_design_format.py`, 검토 I18·J25) |
 | 성능(기준) | 기본·씨앗 2, 800틱 뒤 400틱(평균 약 170마리): 개체·틱당 비용이 같은 프로세스에서 번갈아 잰 **기준 일**(순전파 모양 곱셈·덧셈 고리)의 1,750배 미만(지금 약 700배). µs·틱/초는 출력만 — 기계 속도에 묶인 단언을 두지 않음(검토 I34, `test_performance`) |
 
 **화면 검사**(`tests/run_view_tests.gd`, 헤드리스 — 구성 요소마다 `tests/view/*_checks.gd`, 계약은 VIEW-API)와 **실제 화면 확인**(가상 디스플레이, `tests/ui_driver.gd`): ① 전경(8배로 진행, 지도 클릭(실제 마우스)·속도·멈춤 단추·단축키) ② 농사 단계 낮 — 고른 개체의 정보 창 내용 ③ 같은 자리 밤 ④ 속도 64배와 실제 배속 표시 ⑤ 패널 자리(그래프·연대기, 자리 접기) ⑥ 비교 모드(B 지도 클릭) → 각 단계 캡처를 `docs/screenshots/v0.1/` 에. 결과 `RESULT: N passed, M failed (ui)`. 화면의 시간 예산 검사는 가짜 시계로 결정적이고(틱 비용 c·예산 B → 프레임당 max(1, floor(B ÷ c))틱) 실제 시계 수치는 출력만 합니다(검토 I34). **CSV 내보내기는 화면 캡처가 아니라 헤드리스로** 확인합니다(파일 대화 상자를 거치지 않고): `tests/view/integration4_checks.gd` ④(패널 단추가 부르는 내보내기 → 같은 조건 헤드리스 실행기 결과와 글자까지 같음)·`experiment_checks.gd`, 웹판 내려받기는 `web_checks.gd`.
