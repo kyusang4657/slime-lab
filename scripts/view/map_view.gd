@@ -166,6 +166,10 @@ var _follow_fps := 60.0
 var _slime_base := 0.0
 var _slime_top := 0.0
 var _slime_center := 0.0
+## 고르기용 슬라임 메시(지역 좌표): 삼각형(세 점씩), 경계 상자, 원점에서 상자 가장 먼 모서리까지 거리
+var _body_tris := PackedVector3Array()
+var _body_box := AABB()
+var _body_reach := 0.0
 var _plant_base := 0.0
 var _berry_base := 0.0
 var _berry_mid := 0.0
@@ -440,6 +444,9 @@ func _build_nodes() -> void:
 	_slime_base = -sa.position.y
 	_slime_top = sa.size.y
 	_slime_center = sa.size.y * 0.5
+	_body_tris = _triangles_of(SlimeGeo.slime_mesh())
+	_body_box = sa
+	_body_reach = sa.get_center().length() + sa.size.length() * 0.5
 	_plant_base = -SlimeGeo.plant_mesh().get_aabb().position.y
 	var ba := SlimeGeo.berry_mesh().get_aabb()
 	_berry_base = -ba.position.y
@@ -506,6 +513,23 @@ static func _disc_mesh(segs: int, inner: float, inner_alpha: float) -> ArrayMesh
 	var m := ArrayMesh.new()
 	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 	return m
+
+
+## 메시의 모든 삼각형 꼭짓점(세 점씩, 번호가 없으면 정점 순서대로). 고르기용.
+static func _triangles_of(mesh: Mesh) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	if mesh == null:
+		return out
+	for si in mesh.get_surface_count():
+		var arr := mesh.surface_get_arrays(si)
+		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var ix: Variant = arr[Mesh.ARRAY_INDEX]
+		if ix is PackedInt32Array and not (ix as PackedInt32Array).is_empty():
+			for k in ix as PackedInt32Array:
+				out.append(v[k])
+		else:
+			out.append_array(v.slice(0, v.size() - v.size() % 3))
+	return out
 
 
 ## 메시에 정점 색이 있으면 흰색(메시 색 그대로), 없으면(기본 도형 대용품) 대신할 색.
@@ -667,10 +691,17 @@ func set_selected(id: int) -> void:
 	_update_ring()
 
 
-## 뷰포트 좌표의 광선을 슬라임 중심 높이의 수평면과 교차해 가장 가까운(그려진 위치 기준) 살아 있는 슬라임 id. 없으면 -1.
+## 뷰포트 좌표의 광선으로 살아 있는 슬라임 id 를 고른다(없으면 -1).
+## ① 그린 몸(인스턴스 변환 = 크기·표시 배율·늘어남·뜀·땅 높이를 입힌 슬라임 메시 삼각형)에 광선이 맞는 개체 가운데
+##    가장 앞(카메라에 가장 가까운) 것 — 겹친 칸·낮은 고각에서도 보이는 앞 개체를 고른다(검토 I53).
+## ② 아무 몸에도 맞지 않으면 광선을 슬라임 중심 높이의 수평면과 교차해 pick_radius × 표시 배율 칸 안의 가장 가까운
+##    (그려진 위치 기준) 개체 — 작은 몸의 둘레를 눌러도 고를 수 있게.
 func pick_slime(screen_pos: Vector2) -> int:
 	if world == null or not _camera.is_inside_tree():
 		return -1
+	var hit := _pick_body(screen_pos)
+	if hit != -1:
+		return hit
 	# 표시 배율로 키운 몸에 맞춰 교차 높이·반경도 키운다
 	var g: Variant = _camera.ground_point(screen_pos, _slime_center * _display_k)
 	if g == null:
@@ -686,6 +717,44 @@ func pick_slime(screen_pos: Vector2) -> int:
 		if d < best_d:
 			best_d = d
 			best = _pick_id[i]
+	return best
+
+
+## 광선이 맞는 그린 몸(슬라임 메시 삼각형) 가운데 가장 앞 개체의 id(없으면 -1). 몸을 감싸는 구 → 지역 경계 상자로 먼저
+## 거르고(이미 찾은 것보다 뒤면 건너뜀) 남은 개체만 삼각형을 본다. 광선 매개변수 t 는 지역 좌표로 바꿔도 같아 개체끼리 견준다.
+func _pick_body(screen_pos: Vector2) -> int:
+	var o := _camera.project_ray_origin(screen_pos)
+	var dir := _camera.project_ray_normal(screen_pos)
+	var buf := _slime_buf
+	var tris := _body_tris
+	var n := mini(_pick_id.size(), _slime_mm.instance_count)
+	var best := -1
+	var best_t := INF
+	for i in n:
+		var b := i * XFC
+		var bs := Basis(Vector3(buf[b], buf[b + 4], buf[b + 8]), Vector3(buf[b + 1], buf[b + 5], buf[b + 9]),
+				Vector3(buf[b + 2], buf[b + 6], buf[b + 10]))
+		var org := Vector3(buf[b + 3], buf[b + 7], buf[b + 11])
+		var sc := bs.get_scale()
+		var k := maxf(sc.x, maxf(sc.y, sc.z))
+		var to := org - o
+		if k <= 0.0 or (to - dir * to.dot(dir)).length() > _body_reach * k:
+			continue
+		var inv := Transform3D(bs, org).affine_inverse()
+		var lo := inv * o
+		var ld := inv.basis * dir
+		var ll := ld.length_squared()
+		var entry: Variant = _body_box.intersects_ray(lo, ld)
+		if entry == null or ll <= 0.0 or ((entry as Vector3) - lo).dot(ld) / ll >= best_t:
+			continue
+		for q in range(0, tris.size(), 3):
+			var hit: Variant = Geometry3D.ray_intersects_triangle(lo, ld, tris[q], tris[q + 1], tris[q + 2])
+			if hit == null:
+				continue
+			var t := ((hit as Vector3) - lo).dot(ld) / ll
+			if t >= 0.0 and t < best_t:
+				best_t = t
+				best = _pick_id[i]
 	return best
 
 

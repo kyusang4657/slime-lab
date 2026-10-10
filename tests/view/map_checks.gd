@@ -9,7 +9,7 @@ const EPS := 0.0005
 const SLIME_US_LIMIT := 6000.0
 const TIMING_FRAMES := 120
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 89
+const MIN_CHECKS := 92
 ## 틱 경계에서 가만히 있는 개체를 지켜볼 틱 수
 const STILL_TICKS := 60
 ## 저장고 움집 처마 반지름(SlimeGeo.storehouse_mesh 의 가장 넓은 지붕 둘레)
@@ -20,6 +20,11 @@ const BIG_MAPS: Array[Vector2i] = [Vector2i(128, 96), Vector2i(200, 150)]
 const TECH_CONSTS: Array[String] = ["XF", "XFC", "HASH_A", "HASH_B", "HASH_C", "HASH_MASK", "HASH_DIV", "SALT_JITTER", "SALT_PLANT_X",
 	"SALT_PLANT_Z", "SALT_PLANT_YAW", "SALT_PLANT_H", "SALT_PLANT_TINT", "SALT_STACK", "SALT_BREATH", "QUARTER", "BYTE", "OPAQUE",
 	"DEFAULT_ASPECT", "SIDE_EPS", "VOLUME_EXP", "RING_OUTER", "DOOR_ORDER"]
+## 깊이 고르기 검사: 카메라 거리(가까이, 표시 배율 1), 누를 높이(몸 높이에 대한 비), 큰 개체 크기
+const PICK_DIST := 6.0
+const PICK_TOP_K := 0.85
+const PICK_HEAD_K := 0.95
+const BIG_SIZE := 1.6
 ## ui.json 값을 바꿔 MapView 를 만들어 볼 값: 겹침 둘레(예전 코드 상한 0.42 보다 큼), 그림자 원판 안쪽 고리 반지름·진하기
 const BIG_STACK := 0.5
 const TRY_DISC_INNER := 0.6
@@ -51,6 +56,7 @@ func run(t) -> void:
 	_check_buildings(t, mv)
 	_check_determinism(t, mv)
 	_check_big_maps(t, mv)
+	_check_pick_depth(t, mv)
 	_check_extinct(t, mv)
 	_check_ui_tuning(t)
 	sv.queue_free()
@@ -808,6 +814,76 @@ func _check_big_maps(t, mv: MapView) -> void:
 			cam.call("zoom_at", Vector2(VP_SIZE) * 0.5, -1.0)
 		t.check(float(cam.get("distance")) >= fitted - EPS and float(cam.call("distance_max")) >= fitted * UiConfig.num("camera.fit_zoom_out_factor") - EPS,
 				"%d×%d 지도: 축소로 맞춘 거리 이상까지(최대 %.0f)" % [sz.x, sz.y, float(cam.call("distance_max"))])
+
+
+# ── 고르기는 깊이를 본다: 겹친 칸의 앞 개체·낮은 고각의 큰 개체 머리(검토 I53) ──
+
+## 그린 k 번째 개체의 몸 가운데 축 위, 바닥에서 몸 높이 × frac 인 점(월드).
+func _body_point(mv: MapView, k: int, frac: float) -> Vector3:
+	var p := mv.slime_instance_position(k)
+	var h := SlimeGeo.slime_mesh().get_aabb().size.y * mv.slime_instance_scale(k).y
+	return Vector3(p.x, p.y + h * frac, p.z)
+
+
+## 카메라를 target 쪽으로 방위 yaw·가장 낮은 고각·PICK_DIST 에 두고 그린다.
+func _low_camera(mv: MapView, target: Vector3, yaw: float) -> void:
+	var cam := mv.get_camera()
+	cam.set("target", Vector3(target.x, 0.0, target.z))
+	cam.set("yaw", yaw)
+	cam.set("pitch", deg_to_rad(UiConfig.num("camera.pitch_min_deg")))
+	cam.set("distance", PICK_DIST)
+	cam.call("apply")
+	mv.update_view(1.0)
+
+
+func _check_pick_depth(t, mv: MapView) -> void:
+	var w: SimWorld = t.make_world({}, 3)
+	var tile := _empty_tile(w)
+	var iso := -1
+	if tile != -1:
+		# 개체 0·1 을 빈 풀밭 칸 하나에 겹쳐 세우고(크기 1), 떨어진 개체 하나는 가장 큰 크기로
+		for k in 2:
+			w.s_x[k] = tile % w.w
+			w.s_y[k] = tile / w.w
+			w.s_size[k] = 1.0
+		for i in range(2, w.population()):
+			if absi(w.s_x[i] - tile % w.w) + absi(w.s_y[i] - tile / w.w) >= 6:
+				var alone := true
+				for k in w.population():
+					if k != i and absi(w.s_x[k] - w.s_x[i]) + absi(w.s_y[k] - w.s_y[i]) < 3:
+						alone = false
+						break
+				if alone:
+					iso = i
+					break
+	if tile == -1 or iso == -1:
+		t.check(false, "깊이 고르기 검사용 칸·개체 (%d, %d)" % [tile, iso])
+		return
+	w.s_size[iso] = BIG_SIZE
+	mv.bind(w)
+	var cam := mv.get_camera()
+	# ① 겹친 칸: 카메라를 앞 개체(0) 쪽, 가장 낮은 고각에 두고 앞 개체 몸 위쪽을 누름 → 앞 개체(고치기 전: 뒤 개체)
+	var f := mv.slime_instance_position(0)
+	var b := mv.slime_instance_position(1)
+	_low_camera(mv, (f + b) * 0.5, atan2(f.x - b.x, f.z - b.z))
+	var got := mv.pick_slime(cam.unproject_position(_body_point(mv, 0, PICK_TOP_K)))
+	# 반대쪽에서 보면 앞뒤가 바뀜
+	_low_camera(mv, (f + b) * 0.5, atan2(b.x - f.x, b.z - f.z))
+	var got2 := mv.pick_slime(cam.unproject_position(_body_point(mv, 1, PICK_TOP_K)))
+	t.check(got == w.s_id[0] and got2 == w.s_id[1],
+			"겹친 칸: 앞 개체 몸 위쪽을 누르면 앞 개체(#%d → %d, #%d → %d)" % [w.s_id[0], got, w.s_id[1], got2])
+	# ② 가장 낮은 고각에서 큰 개체(크기 %.1f)의 머리를 누름 → 그 개체(고치기 전: 반경 밖이라 -1 = 선택 해제)
+	_low_camera(mv, mv.slime_instance_position(iso), 0.0)
+	var head := mv.pick_slime(cam.unproject_position(_body_point(mv, iso, PICK_HEAD_K)))
+	t.check(head == w.s_id[iso], "고각 %.0f° 에서 큰 개체(크기 %.1f) 머리 → 그 개체 (#%d → %d)" % [
+			UiConfig.num("camera.pitch_min_deg"), BIG_SIZE, w.s_id[iso], head])
+	# ③ 몸 옆 빈 곳(몸에는 안 맞지만 pick_radius 안)을 눌러도 그 개체 — 물러서는 고르기는 그대로
+	var p := mv.slime_instance_position(iso)
+	var side := Vector3(p.x + UiConfig.num("map.pick_radius") * 0.9 * UiConfig.num("map.tile_size"), p.y, p.z)
+	var center_plane := SlimeGeo.slime_mesh().get_aabb().size.y * 0.5 * mv.display_scale()
+	var near := mv.pick_slime(cam.unproject_position(Vector3(side.x, center_plane, side.z)))
+	t.check(near == w.s_id[iso], "몸 옆(고르기 반경 안)을 눌러도 그 개체 (#%d → %d)" % [w.s_id[iso], near])
+	mv.fit_map()
 
 
 # ── 저장고 칸: 움집 안에 묻히지 않게 문 앞(문 방향, 보통 +Z)에 ──
