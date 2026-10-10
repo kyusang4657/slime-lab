@@ -148,6 +148,7 @@ var _rest := 0.0
 var _crowd_r := 0
 var _crowd_norm := 0.0
 var _night_sense := 0.0
+var _night_light := 0.0
 var _think_every := 1
 var _forage_frac := 0.0
 var _store_cap := 0.0
@@ -220,6 +221,7 @@ func _load_config(config: Dictionary) -> void:
 	_crowd_r = int(cfg.sense.crowd_radius)
 	_crowd_norm = float(cfg.sense.crowd_norm)
 	_night_sense = float(cfg.sense.night_factor)
+	_night_light = float(cfg.time.night_light_threshold)
 	_think_every = int(cfg.brain.think_every)
 	_forage_frac = float(cfg.discovery.forage_min_energy_frac)
 	_store_cap = float(cfg.store.capacity)
@@ -537,7 +539,7 @@ func _act(i: int) -> void:
 ## 감지 → 순전파 → 행동 번호. SimBrain.forward 와 같은 식(검사로 일치 확인).
 func _think(i: int, x: int, y: int, c: int, hd: int, emax: float) -> int:
 	var r := s_sense[i]
-	if light < 0.5:
+	if light < _night_light:
 		r = maxi(1, int(float(r) * _night_sense))
 	_in[SimBrain.IN_BIAS] = 1.0
 	_in[SimBrain.IN_ENERGY] = s_energy[i] / emax
@@ -748,7 +750,7 @@ func _plant(i: int, x: int, y: int, hd: int) -> void:
 	_update_tile_rates(nc)
 	farms.append(nc)
 	if farms.size() == 1:
-		_event("first_farm", s_id[i], "첫 밭 — #%d 가 (%d, %d) 에 심음" % [s_id[i], nx, ny])
+		_event("first_farm", s_id[i], "첫 밭 — #%d, (%d, %d) 에 심음" % [s_id[i], nx, ny])
 
 
 # ── 번식 ──

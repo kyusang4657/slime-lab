@@ -66,21 +66,39 @@ static func distance_field(tiles: PackedByteArray, w: int, h: int, sources: Pack
 
 
 ## 통과 가능 칸의 연결 요소 번호(통과 불가 = -1). 결과: {labels, sizes}
+## 번호는 칸 번호 순으로 처음 만난 요소부터 0, 1, …. 큐와 번호 배열 하나로 한 번만 훑는다(칸 수에 비례 —
+## 요소마다 거리장을 새로 만들면 잘게 갈라진 큰 지도에서 요소 수 × 칸 수가 됨).
 static func components(tiles: PackedByteArray, w: int, h: int) -> Dictionary:
+	var n := w * h
 	var labels := PackedInt32Array()
-	labels.resize(w * h)
+	labels.resize(n)
 	labels.fill(-1)
 	var sizes := PackedInt32Array()
-	for c in w * h:
+	var queue := PackedInt32Array()
+	queue.resize(n)
+	for c in n:
 		if labels[c] != -1 or not passable(tiles[c]):
 			continue
 		var id := sizes.size()
-		var src := PackedInt32Array([c])
-		var d := distance_field(tiles, w, h, src)
-		var count := 0
-		for i in w * h:
-			if d[i] != FAR:
-				labels[i] = id
-				count += 1
-		sizes.append(count)
+		labels[c] = id
+		queue[0] = c
+		var head := 0
+		var tail := 1
+		while head < tail:
+			var cur := queue[head]
+			head += 1
+			var x := cur % w
+			var y := cur / w
+			for d in DIR_COUNT:
+				var nx: int = x + DX[d]
+				var ny: int = y + DY[d]
+				if nx < 0 or ny < 0 or nx >= w or ny >= h:
+					continue
+				var nb := ny * w + nx
+				if labels[nb] != -1 or not passable(tiles[nb]):
+					continue
+				labels[nb] = id
+				queue[tail] = nb
+				tail += 1
+		sizes.append(tail)
 	return {labels = labels, sizes = sizes}

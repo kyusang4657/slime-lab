@@ -6,8 +6,9 @@
 
 1. config/sim-defaults.json 의 모든 잎 키(절.키)가 config/sim-labels.json 에 이름·단위·범위·뜻과 함께 있다
    (실험실 고급 설정의 말풍선이 쓰는 한국어 설명 — 키를 더하면 설명도 함께, 없는 키의 설명은 남지 않음).
-2. SimConfig.validate 가 막는 범위(scripts/sim/sim_config.gd 의 규칙)는 이름표의 범위 글과 같은 수이고 "(검사)" 가 붙어 있다.
-   "(검사)" 는 validate 가 실제로 보는 키에만 붙는다.
+2. 모든 잎 키의 범위가 SimConfig.validate 의 규칙이고 이름표 범위 글에는 "(검사)" 가 붙어 있다: 수 키는 RULES 의
+   [하한, 상한](글에 두 수, "0 초과" = ABOVE), 배열 키는 ARRAY_RULES(원소 수와 원소 범위), 글자 키는 CHOICES(고를 값),
+   참·거짓 키는 "true / false". 규칙에만 있는 키(낡은 규칙)도, 기본값·예설정이 규칙 밖인 것도 없다.
 3. 절 이름(_sections)이 모든 절에 있고 ParamPanel.SECTION_NAMES(고급 설정 절 머리)와 같다.
 4. docs/CONFIG.md 가 이름표에서 만든 글과 글자까지 같다(어긋나면 --write 로 다시 만듦).
 5. config/*.json 의 _comment 가 가리키는 docs/*.md 는 실제로 있다(죽은 안내 없음).
@@ -46,18 +47,56 @@ def leaves(defaults: dict) -> list[tuple[str, str, object]]:
     return out
 
 
-def validate_rules() -> dict[str, tuple[float, float]]:
-    """SimConfig.validate 의 [키, 하한, 상한] 규칙."""
-    text = SIM_CONFIG.read_text(encoding="utf-8")
-    return {m.group(1): (float(m.group(2)), float(m.group(3)))
-            for m in re.finditer(r'\["([a-z_]+\.[a-z_]+)",\s*([-0-9.e]+),\s*([-0-9.e]+)\]', text)}
+def _sim_config_text() -> str:
+    return SIM_CONFIG.read_text(encoding="utf-8")
 
 
-def validate_cfg_keys() -> set[str]:
-    """validate 함수 몸통이 cfg.절.키 로 직접 보는 키(관계 검사)."""
-    text = SIM_CONFIG.read_text(encoding="utf-8")
-    body = text.split("static func validate(", 1)[1].split("\nstatic func ", 1)[0]
-    return {f"{a}.{b}" for a, b in re.findall(r"cfg\.([a-z_]+)\.([a-z_]+)", body)}
+def _consts(text: str) -> dict[str, str]:
+    """sim_config.gd 의 `const 이름 := 수` (규칙 칸이 상수 이름을 쓸 때 풀기)."""
+    return dict(re.findall(r"^const ([A-Z_0-9]+) := ([-0-9.e]+)\s*$", text, re.M))
+
+
+def _block(text: str, name: str) -> str:
+    """`const 이름 := [` 또는 `{` 로 시작하는 블록의 몸통."""
+    start = text.index(f"const {name} := ")
+    close = "\n]" if text[start:].split("\n", 1)[0].rstrip().endswith("[") else "\n}"
+    return text[start:text.index(close, start)]
+
+
+RULE_RE = re.compile(r'\["([a-z_]+\.[a-z_]+)",\s*([-0-9.e]+|[A-Z_]+),\s*([-0-9.e]+|[A-Z_]+)(?:,\s*([A-Z_]+))?\]')
+
+
+def _rules(name: str) -> dict[str, tuple[float, float, bool, bool]]:
+    """규칙 블록: 키 → (하한, 상한, 하한 제외(ABOVE), 두 끝이 정수로 적힘)."""
+    text = _sim_config_text()
+    consts = _consts(text)
+    out = {}
+    for m in RULE_RE.finditer(_block(text, name)):
+        lo, hi = (consts.get(x, x) for x in (m.group(2), m.group(3)))
+        ints = all(re.fullmatch(r"-?\d+", x) for x in (lo, hi))
+        out[m.group(1)] = (float(lo), float(hi), m.group(4) == "ABOVE", ints)
+    return out
+
+
+def validate_rules() -> dict[str, tuple[float, float, bool, bool]]:
+    """SimConfig.RULES — 수 잎 키의 [키, 하한, 상한(, ABOVE)]."""
+    return _rules("RULES")
+
+
+def array_rules() -> dict[str, tuple[float, float, bool, bool]]:
+    """SimConfig.ARRAY_RULES — 배열 잎 키 원소의 [키, 하한, 상한]."""
+    return _rules("ARRAY_RULES")
+
+
+def choices() -> dict[str, list[str]]:
+    """SimConfig.CHOICES — 글자 잎 키 → 고를 값."""
+    block = _block(_sim_config_text(), "CHOICES")
+    return {k: re.findall(r'"([^"]*)"', vals) for k, vals in re.findall(r'"([a-z_]+\.[a-z_]+)":\s*\[([^\]]*)\]', block)}
+
+
+def in_rule(v: float, rule: tuple[float, float, bool, bool]) -> bool:
+    lo, hi, above, _ = rule
+    return (v > lo if above else v >= lo) and v <= hi
 
 
 def panel_section_names() -> dict[str, str]:
@@ -86,11 +125,13 @@ def render_doc() -> str:
         " + 바꾼 값(실험실 파라미터 패널, 헤드리스 실행기 `--set=절.키=값`). 아래 표는 모든 잎 키의 한국어 이름·기본값·단위·범위·뜻입니다."
         " 실험실 **고급 설정**에서 키 이름에 마우스를 올리면 같은 설명이 말풍선으로 나옵니다.",
         "",
-        "- **범위**의 \"(검사)\" = `SimConfig.validate` 가 막는 범위(밖이면 실험을 만들지 않고 패널은 그 줄 아래 오류)."
-        " 나머지는 뜻이 통하는 범위이며 검사하지 않습니다.",
+        "- **범위**는 모두 \"(검사)\" = `SimConfig.validate` 가 막는 범위입니다(밖이면 실험을 만들지 않고 패널은 그 줄 아래 오류)."
+        " 규칙은 `scripts/sim/sim_config.gd` 의 `RULES`·`ARRAY_RULES`·`CHOICES` 와 관계 검사(크기·감지 초기값, 해 뜨고 지는 시간,"
+        " 수명 흔들림)이고 `tools/test_sim_labels.py` 가 이 표의 범위 글과 대조합니다. \"0 초과\" 는 0 을 뺀 범위(나눗수로 쓰이는 값).",
         "- 규칙의 자세한 식은 [`DESIGN-v0.1.md`](DESIGN-v0.1.md) 1~7절, 발견(`discovery.*`) 임계를 고른 기록은"
         " [`TUNING-fast_civ.md`](TUNING-fast_civ.md).",
-        "- 정수 키는 파일에 소수점 없이 적힌 키입니다(패널은 정수만 받음). 배열·글자 키(`seasons.growth`·`brain.policy`)는 패널에서 보기만 합니다.",
+        "- 정수 키는 파일에 소수점 없이 적힌 키입니다(소수는 거부 — 검사, 패널도 정수만 받음). 틱 단위 키의 상한 1e9 ="
+        " `SimConfig.TICK_MAX`(틱 값을 32비트 정수 배열에 담음). 배열·글자 키(`seasons.growth`·`brain.policy`)는 패널에서 보기만 합니다.",
         "",
     ]
     by_sec: dict[str, list[tuple[str, str, object]]] = {}
@@ -139,19 +180,76 @@ class TestSimLabels(unittest.TestCase):
         extra = sorted(k for k in self.labels if not k.startswith("_") and k not in self.keys)
         self.assertEqual(extra, [], "sim-defaults.json 에 없는 키의 이름표")
 
-    def test_validated_ranges_match(self) -> None:
-        rules = validate_rules()
-        self.assertGreater(len(rules), 10, "validate 규칙을 찾지 못함(정규식 확인)")
+    def test_every_range_is_checked(self) -> None:
+        rules, arrays, chs = validate_rules(), array_rules(), choices()
+        self.assertGreater(len(rules), 50, "validate 규칙을 찾지 못함(정규식 확인)")
+        self.assertEqual(sorted(k for k in self.keys if "(검사)" not in str(self.labels.get(k, {}).get("range", ""))), [],
+                         "범위가 검사되지 않는 키(이름표에 (검사) 없음)")
         bad = []
-        for key, (lo, hi) in rules.items():
+        for sec, k, v in leaves(self.defaults):
+            key = f"{sec}.{k}"
             rng = str(self.labels.get(key, {}).get("range", ""))
             nums = [float(x) for x in NUM_RE.findall(rng)]
-            if "(검사)" not in rng or lo not in nums or hi not in nums:
-                bad.append(f"{key}: [{lo}, {hi}] ≠ \"{rng}\"")
-        self.assertEqual(bad, [], "validate 범위와 이름표 범위가 다름")
-        checked = set(rules) | validate_cfg_keys()
-        claimed = sorted(k for k in self.keys if "(검사)" in str(self.labels.get(k, {}).get("range", "")) and k not in checked)
-        self.assertEqual(claimed, [], "validate 가 보지 않는 키에 (검사)")
+            if isinstance(v, bool):
+                if rng != "true / false (검사)":
+                    bad.append(f"{key}: 참·거짓 키 범위는 \"true / false (검사)\" ≠ \"{rng}\"")
+            elif isinstance(v, (int, float)):
+                if key not in rules:
+                    bad.append(f"{key}: SimConfig.RULES 에 없음")
+                    continue
+                lo, hi, above, ints = rules[key]
+                if lo not in nums or hi not in nums or ("초과" in rng) != above:
+                    bad.append(f"{key}: [{lo}, {hi}{' 초과' if above else ''}] ≠ \"{rng}\"")
+                if isinstance(v, int) and not ints:
+                    bad.append(f"{key}: 정수 키의 규칙 끝값이 정수가 아님")
+            elif isinstance(v, list):
+                if key not in arrays:
+                    bad.append(f"{key}: SimConfig.ARRAY_RULES 에 없음")
+                    continue
+                lo, hi, _, _ = arrays[key]
+                if lo not in nums or hi not in nums or float(len(v)) not in nums:
+                    bad.append(f"{key}: 원소 {len(v)}개 [{lo}, {hi}] ≠ \"{rng}\"")
+            elif isinstance(v, str):
+                if key not in chs:
+                    bad.append(f"{key}: SimConfig.CHOICES 에 없음")
+                    continue
+                missing = [c for c in chs[key] if f'"{c}"' not in rng]
+                if missing or rng.count('"') != 2 * len(chs[key]):
+                    bad.append(f"{key}: 고를 값 {chs[key]} ≠ \"{rng}\"")
+            else:
+                bad.append(f"{key}: 알 수 없는 종류 {type(v).__name__}")
+        self.assertEqual(bad, [], "validate 규칙과 이름표 범위가 다름")
+        stale = sorted(k for k in list(rules) + list(arrays) + list(chs) if k not in self.keys)
+        self.assertEqual(stale, [], "sim-defaults.json 에 없는 키의 규칙")
+
+    def test_defaults_and_presets_inside_rules(self) -> None:
+        """기본값과 예설정 값이 규칙 안(정수 키는 정수) — 규칙이 기본 실험을 막지 않게."""
+        rules, arrays, chs = validate_rules(), array_rules(), choices()
+        flat = {f"{s}.{k}": v for s, k, v in leaves(self.defaults)}
+        cases = [("기본", flat)]
+        for name, p in load(PRESETS).items():
+            if not name.startswith("_") and isinstance(p, dict):
+                cases.append((name, {**flat, **p.get("set", {})}))
+        bad = []
+        for name, vals in cases:
+            for key, v in vals.items():
+                if key in rules and not isinstance(v, bool):
+                    if not in_rule(float(v), rules[key]) or (isinstance(flat[key], int) and float(v) != int(v)):
+                        bad.append(f"{name}: {key} = {v}")
+                elif key in arrays and not all(in_rule(float(x), arrays[key]) for x in v):
+                    bad.append(f"{name}: {key} = {v}")
+                elif key in chs and v not in chs[key]:
+                    bad.append(f"{name}: {key} = {v}")
+        self.assertEqual(bad, [], "규칙 밖인 기본값·예설정 값")
+
+    def test_rule_parser_reads_forms(self) -> None:
+        """규칙 정규식이 상수 이름·ABOVE·지수 표기를 읽는다(정규식이 낡아 규칙을 놓치면 대조가 비게 됨)."""
+        rules = validate_rules()
+        self.assertEqual(rules.get("map.width"), (8.0, 1024.0, False, True))
+        self.assertEqual(rules.get("plants.max_food"), (0.0, 1e9, True, False))
+        self.assertEqual(rules.get("life.max_age", (0, 0))[1], 1e9, "TICK_MAX 상수를 풂")
+        self.assertEqual(choices().get("brain.policy"), ["sample", "argmax"])
+        self.assertEqual(array_rules().get("seasons.growth", (0, 0))[:2], (0.0, 100.0))
 
     def test_section_names(self) -> None:
         sections = self.labels.get("_sections", {})
