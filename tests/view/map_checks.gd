@@ -9,13 +9,31 @@ const EPS := 0.0005
 const SLIME_US_LIMIT := 6000.0
 const TIMING_FRAMES := 120
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 84
+const MIN_CHECKS := 97
 ## 틱 경계에서 가만히 있는 개체를 지켜볼 틱 수
 const STILL_TICKS := 60
 ## 저장고 움집 처마 반지름(SlimeGeo.storehouse_mesh 의 가장 넓은 지붕 둘레)
 const STORE_EAVE := 0.47
 ## 큰 지도(설정 최대 거리 95 로는 다 안 보이던 크기)
 const BIG_MAPS: Array[Vector2i] = [Vector2i(128, 96), Vector2i(200, 150)]
+## map_view.gd 에 남아도 되는 숫자 상수(버퍼 짜임·해시·단위 바꿈·수치 오차·메시 치수). 보기 조정값은 ui.json(검토 I55).
+const TECH_CONSTS: Array[String] = ["XF", "XFC", "HASH_A", "HASH_B", "HASH_C", "HASH_MASK", "HASH_DIV", "SALT_JITTER", "SALT_PLANT_X",
+	"SALT_PLANT_Z", "SALT_PLANT_YAW", "SALT_PLANT_H", "SALT_PLANT_TINT", "SALT_STACK", "SALT_BREATH", "QUARTER", "BYTE", "OPAQUE",
+	"DEFAULT_ASPECT", "SIDE_EPS", "VOLUME_EXP", "RING_OUTER", "DOOR_ORDER"]
+## 큰 지도 갱신 비용 검사(검토 I52): 견줄 큰 지도, 진행하며 잴 프레임 수, 시간 비 상한 = 칸 수 비 / COST_RATIO_DIV
+## (칸 수에 비례하면 시간 비 ≈ 칸 수 비 21 배). 절대 시간이 아니라 같은 실행 안의 비율만 본다.
+const COST_MAP := Vector2i(256, 256)
+const COST_FRAMES := 80
+const COST_RATIO_DIV := 4.0
+## 깊이 고르기 검사: 카메라 거리(가까이, 표시 배율 1), 누를 높이(몸 높이에 대한 비), 큰 개체 크기
+const PICK_DIST := 6.0
+const PICK_TOP_K := 0.85
+const PICK_HEAD_K := 0.95
+const BIG_SIZE := 1.6
+## ui.json 값을 바꿔 MapView 를 만들어 볼 값: 겹침 둘레(예전 코드 상한 0.42 보다 큼), 그림자 원판 안쪽 고리 반지름·진하기
+const BIG_STACK := 0.5
+const TRY_DISC_INNER := 0.6
+const TRY_DISC_ALPHA := 0.7
 
 
 func run(t) -> void:
@@ -43,7 +61,10 @@ func run(t) -> void:
 	_check_buildings(t, mv)
 	_check_determinism(t, mv)
 	_check_big_maps(t, mv)
+	_check_big_map_cost(t, mv)
+	_check_pick_depth(t, mv)
 	_check_extinct(t, mv)
+	_check_ui_tuning(t)
 	sv.queue_free()
 	await t.frames(1)
 
@@ -144,14 +165,14 @@ func _check_motion(t, mv: MapView, w: SimWorld) -> void:
 			alone_ok = false
 		alone_n += 1
 	t.check(alone_ok and alone_n > 0, "alpha=1 에서 혼자 있는 개체 %d 마리가 칸 가운데" % alone_n)
-	# 겹친 개체는 가운데에서 조금(최대 STACK_MAX 칸) 비켜 남
+	# 겹친 개체는 가운데에서 조금(최대 stack_offset × stack_max_k 칸) 비켜 남
 	var stack_ok := true
 	for i in w.population():
 		if int(occ[w.s_y[i] * w.w + w.s_x[i]]) < 2:
 			continue
 		var p := mv.slime_instance_position(i)
 		var d := Vector2(p.x - (float(w.s_x[i]) + 0.5), p.z - (float(w.s_y[i]) + 0.5)).length()
-		stack_ok = stack_ok and d > EPS and d <= MapView.STACK_MAX + EPS
+		stack_ok = stack_ok and d > EPS and d <= MapView.stack_max() + EPS
 	t.check(stack_ok, "같은 칸의 개체는 작은 둘레에 나뉘어 놓임")
 	# alpha 0.5: 움직인 개체는 두 칸 사이, 위로 뜸(앞 틱·지금 틱 모두 혼자 있던 개체 — 둘레 자리도 보간하므로)
 	var pocc := {}
@@ -452,6 +473,7 @@ func _check_buildings(t, mv: MapView) -> void:
 	t.check(int(st.stores) == w.store_tiles.size() and int(st.farms) == w.farms.size(), "view_stats 저장고·밭")
 	_check_store_doorstep(t, mv, w)
 	_check_farm_ground(t, mv, w)
+	_check_store_blocked(t, mv)
 	# 건물 없는 새 세계로 다시 붙이면 앞 세계의 저장고·밭이 남지 않아야 함(통합 때 찾은 버그)
 	var fresh: SimWorld = t.make_world({}, 1)
 	mv.bind(fresh)
@@ -480,6 +502,64 @@ func _check_determinism(t, mv: MapView) -> void:
 			mv.view_stats()
 	b.step_n(a.tick)
 	t.check(a.tick == b.tick and a.history_hash == b.history_hash, "화면을 거쳐 진행해도 역사 해시가 같음 (t=%d)" % a.tick)
+
+
+# ── 보기 조정값은 ui.json 에서(검토 I55) ──
+
+func _check_ui_tuning(t) -> void:
+	# ① map_view.gd 의 숫자 상수는 기술 상수뿐(겹침·옆면 그늘·그림자 원판·끄덕임 같은 조정값은 ui.json)
+	var src := FileAccess.get_file_as_string("res://scripts/view/map_view.gd")
+	var re := RegEx.new()
+	re.compile("(?m)^const\\s+(\\w+)\\s*:?=\\s*(.+)$")
+	var extra := PackedStringArray()
+	for m in re.search_all(src):
+		if not m.get_string(2).begins_with("preload(") and not TECH_CONSTS.has(m.get_string(1)):
+			extra.append(m.get_string(1))
+	t.check(src != "" and extra.is_empty(), "map_view.gd 에 보기 조정 상수 없음(ui.json 으로) %s" % [extra])
+	# ② slime.stack_offset 을 예전 코드 상한(0.42)보다 크게 바꿔도 그대로 쓰임 — 둘레 반지름 = stack_offset,
+	#    stack_ring 을 넘으면 stack_grow 씩 넓히되 stack_offset × stack_max_k 까지
+	var slime_sec: Dictionary = UiConfig.data()["slime"]
+	var map_sec: Dictionary = UiConfig.data()["map"]
+	var keep := [slime_sec["stack_offset"], map_sec["blob_shadow_inner"], map_sec["blob_shadow_inner_alpha"]]
+	slime_sec["stack_offset"] = BIG_STACK
+	map_sec["blob_shadow_inner"] = TRY_DISC_INNER
+	map_sec["blob_shadow_inner_alpha"] = TRY_DISC_ALPHA
+	var mv := MapView.new()
+	slime_sec["stack_offset"] = keep[0]
+	map_sec["blob_shadow_inner"] = keep[1]
+	map_sec["blob_shadow_inner_alpha"] = keep[2]
+	var w: SimWorld = t.make_world({}, 3)
+	mv.bind(w)
+	var tile := _empty_tile(w)
+	var tl := UiConfig.num("map.tile_size")
+	var ring := UiConfig.integer("slime.stack_ring")
+	var many := ring + 8
+	var radii := []
+	for m in [2, many]:
+		var xs := PackedInt32Array()
+		var ys := PackedInt32Array()
+		for k in m:
+			xs.append(tile % w.w)
+			ys.append(tile / w.w)
+		var off: PackedFloat32Array = mv.call("_calc_offsets", xs, ys)
+		radii.append(Vector2(off[0], off[1]).length() / tl)
+	var want_many := minf(BIG_STACK * (1.0 + UiConfig.num("slime.stack_grow") * float(many - ring)), BIG_STACK * UiConfig.num("slime.stack_max_k"))
+	t.check(absf(float(radii[0]) - BIG_STACK) < EPS and absf(float(radii[1]) - want_many) < EPS,
+			"stack_offset %.2f 가 잘리지 않음: 2마리 %.3f칸, %d마리 %.3f칸(= %.3f, 고치기 전 0.42 에서 잘림)" % [BIG_STACK, float(radii[0]), many, float(radii[1]), want_many])
+	t.check(is_equal_approx(MapView.stack_max(), UiConfig.num("slime.stack_offset") * UiConfig.num("slime.stack_max_k")),
+			"겹침 둘레 상한 = stack_offset × stack_max_k")
+	# ③ 둥근 그림자 원판: 안쪽 고리 반지름·진하기 = map.blob_shadow_inner·blob_shadow_inner_alpha(바꾼 값이 그대로)
+	var sh := mv.get_node_or_null("SlimeShadows") as MultiMeshInstance3D
+	var got := Vector2(-1.0, -1.0)
+	if sh != null:
+		var arr := sh.multimesh.mesh.surface_get_arrays(0)
+		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var cl: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+		if v.size() > 2:
+			got = Vector2(Vector2(v[1].x, v[1].z).length(), cl[1].a)
+	t.check(absf(got.x - TRY_DISC_INNER) < EPS and absf(got.y - TRY_DISC_ALPHA) < 0.01,
+			"그림자 원판 안쪽 고리 = ui map.blob_shadow_inner·blob_shadow_inner_alpha (%.2f, %.2f)" % [got.x, got.y])
+	mv.free()
 
 
 # ── 멸종·빈 세계 ──
@@ -742,7 +822,164 @@ func _check_big_maps(t, mv: MapView) -> void:
 				"%d×%d 지도: 축소로 맞춘 거리 이상까지(최대 %.0f)" % [sz.x, sz.y, float(cam.call("distance_max"))])
 
 
-# ── 저장고 칸: 움집 안에 묻히지 않게 문 앞(+Z)에 ──
+# ── 큰 지도: 식물·땅 색 갱신은 한 프레임에 덩어리 하나, 바뀐 것만(검토 I52) ──
+
+func _median(a: Array) -> float:
+	if a.is_empty():
+		return 0.0
+	var b := a.duplicate()
+	b.sort()
+	return float(b[b.size() / 2])
+
+
+## 세계를 붙이고 1틱씩 진행하며 식물·땅 색 갱신이 있었던 프레임의 시간(µs)·본 수를 모은다.
+## (view_stats 에 plant_n·terrain_n 이 없던 예전 코드로 되돌려 보면: 시간이 바뀐 프레임 = 갱신, 본 수 = 지도 전체.)
+func _refresh_costs(mv: MapView, w: SimWorld) -> Dictionary:
+	mv.bind(w)
+	var pu := []
+	var pn := []
+	var tu := []
+	var tn := []
+	var last := mv.view_stats()
+	var n_plants := (mv.get_node("Plants") as MultiMeshInstance3D).multimesh.instance_count
+	for f in COST_FRAMES:
+		mv.before_steps()
+		w.step()
+		mv.update_view(1.0)
+		var st := mv.view_stats()
+		var p_n := int(st.get("plant_n", n_plants if st.plant_us != last.plant_us else 0))
+		var t_n := int(st.get("terrain_n", w.w * w.h if st.terrain_us != last.terrain_us else 0))
+		last = st
+		if p_n > 0:
+			pu.append(int(st.plant_us))
+			pn.append(p_n)
+		if t_n > 0:
+			tu.append(int(st.terrain_us))
+			tn.append(t_n)
+	return {
+		plant_us = _median(pu), plant_n = int(pn.max()) if not pn.is_empty() else 0, terrain_us = _median(tu),
+		terrain_n = int(tn.max()) if not tn.is_empty() else 0, plant_steps = pu.size(), terrain_steps = tu.size(),
+		tiles = w.w * w.h, chunks = int(mv.view_stats().get("chunks", 1)),
+	}
+
+
+func _check_big_map_cost(t, mv: MapView) -> void:
+	var small := _refresh_costs(mv, t.make_world({}, 3))
+	var big_w: SimWorld = t.make_world({"map.width": COST_MAP.x, "map.height": COST_MAP.y}, 3)
+	var big := _refresh_costs(mv, big_w)
+	var chunk := UiConfig.integer("map.chunk_tiles")
+	var tile_ratio := float(big.tiles) / float(small.tiles)
+	var p_ratio := float(big.plant_us) / maxf(float(small.plant_us), 1.0)
+	var t_ratio := float(big.terrain_us) / maxf(float(small.terrain_us), 1.0)
+	print("  큰 지도 비용: %d×%d(덩어리 %d) / 기본(덩어리 %d) — 칸 수 %.1f배, 식물 한 프레임 %.0f/%.0fµs = %.2f배(본 수 최대 %d/%d), 땅 색 %.0f/%.0fµs = %.2f배(최대 %d/%d칸)" % [
+		COST_MAP.x, COST_MAP.y, int(big.chunks), int(small.chunks), tile_ratio, float(big.plant_us), float(small.plant_us), p_ratio,
+		int(big.plant_n), int(small.plant_n), float(big.terrain_us), float(small.terrain_us), t_ratio, int(big.terrain_n), int(small.terrain_n)])
+	t.check(int(small.chunks) == 1 and int(big.chunks) == ceili(float(COST_MAP.x) / chunk) * ceili(float(COST_MAP.y) / chunk),
+			"기본 지도는 덩어리 하나, %d×%d 는 %d칸 덩어리 %d개" % [COST_MAP.x, COST_MAP.y, chunk, int(big.chunks)])
+	t.check(int(big.plant_steps) > 0 and int(big.terrain_steps) > 0 and int(big.plant_n) <= chunk * chunk and int(big.terrain_n) <= chunk * chunk,
+			"%d×%d: 한 프레임에 다시 보는 풀포기 %d·칸 %d ≤ 덩어리 %d칸(지도 %d칸, 고치기 전 모든 칸)" % [
+			COST_MAP.x, COST_MAP.y, int(big.plant_n), int(big.terrain_n), chunk * chunk, int(big.tiles)])
+	t.check(int(small.plant_steps) > 0 and p_ratio < tile_ratio / COST_RATIO_DIV,
+			"식물 갱신 한 프레임 시간이 칸 수에 비례하지 않음: %.2f배 < 칸 수 비 %.1f / %.0f" % [p_ratio, tile_ratio, COST_RATIO_DIV])
+	t.check(int(small.terrain_steps) > 0 and t_ratio < tile_ratio / COST_RATIO_DIV,
+			"땅 색 갱신 한 프레임 시간이 칸 수에 비례하지 않음: %.2f배 < 칸 수 비 %.1f / %.0f" % [t_ratio, tile_ratio, COST_RATIO_DIV])
+	# 나눠 돌아도 결국 지도 전체가 지금 세계를 그린다: 화면 없이 몇 틱 더 진행한 뒤 프레임만 돌리면(새 바퀴가 모든 덩어리를 돎)
+	# 처음부터 묶은 MapView 와 모든 칸의 땅 색·풀포기 배율·보이는 수가 같다
+	big_w.step_n(UiConfig.integer("map.plant_refresh_ticks") + UiConfig.integer("map.terrain_refresh_ticks"))
+	for f in 4 * int(big.chunks) + UiConfig.integer("map.plant_min_frames") + UiConfig.integer("map.terrain_min_frames"):
+		mv.update_view(1.0)
+	var ref := MapView.new()
+	ref.bind(big_w)
+	var diff := 0
+	for c in big_w.w * big_w.h:
+		if mv.terrain_tile_color(c) != ref.terrain_tile_color(c) or mv.plant_scale_at(c).y != ref.plant_scale_at(c).y:
+			diff += 1
+	t.check(diff == 0 and int(mv.view_stats().plants) == int(ref.view_stats().plants),
+			"덩어리로 나눠 돈 갱신이 새로 묶은 것과 같음(다른 칸 %d, 보이는 풀포기 %d / %d)" % [diff, int(mv.view_stats().plants), int(ref.view_stats().plants)])
+	ref.free()
+
+
+# ── 고르기는 깊이를 본다: 겹친 칸의 앞 개체·낮은 고각의 큰 개체 머리(검토 I53) ──
+
+## 그린 k 번째 개체의 몸 가운데 축 위, 바닥에서 몸 높이 × frac 인 점(월드).
+func _body_point(mv: MapView, k: int, frac: float) -> Vector3:
+	var p := mv.slime_instance_position(k)
+	var h := SlimeGeo.slime_mesh().get_aabb().size.y * mv.slime_instance_scale(k).y
+	return Vector3(p.x, p.y + h * frac, p.z)
+
+
+## 카메라를 target 쪽으로 방위 yaw·가장 낮은 고각·PICK_DIST 에 두고 그린다.
+func _low_camera(mv: MapView, target: Vector3, yaw: float) -> void:
+	var cam := mv.get_camera()
+	cam.set("target", Vector3(target.x, 0.0, target.z))
+	cam.set("yaw", yaw)
+	cam.set("pitch", deg_to_rad(UiConfig.num("camera.pitch_min_deg")))
+	cam.set("distance", PICK_DIST)
+	cam.call("apply")
+	mv.update_view(1.0)
+
+
+func _check_pick_depth(t, mv: MapView) -> void:
+	var w: SimWorld = t.make_world({}, 3)
+	var tile := _empty_tile(w)
+	var iso := -1
+	if tile != -1:
+		# 개체 0·1 을 빈 풀밭 칸 하나에 겹쳐 세우고(크기 1), 떨어진 개체 하나는 가장 큰 크기로
+		for k in 2:
+			w.s_x[k] = tile % w.w
+			w.s_y[k] = tile / w.w
+			w.s_size[k] = 1.0
+		for i in range(2, w.population()):
+			if absi(w.s_x[i] - tile % w.w) + absi(w.s_y[i] - tile / w.w) >= 6:
+				var alone := true
+				for k in w.population():
+					if k != i and absi(w.s_x[k] - w.s_x[i]) + absi(w.s_y[k] - w.s_y[i]) < 3:
+						alone = false
+						break
+				if alone:
+					iso = i
+					break
+	if tile == -1 or iso == -1:
+		t.check(false, "깊이 고르기 검사용 칸·개체 (%d, %d)" % [tile, iso])
+		return
+	w.s_size[iso] = BIG_SIZE
+	mv.bind(w)
+	var cam := mv.get_camera()
+	# ① 겹친 칸: 카메라를 앞 개체(0) 쪽, 가장 낮은 고각에 두고 앞 개체 몸 위쪽을 누름 → 앞 개체(고치기 전: 뒤 개체)
+	var f := mv.slime_instance_position(0)
+	var b := mv.slime_instance_position(1)
+	_low_camera(mv, (f + b) * 0.5, atan2(f.x - b.x, f.z - b.z))
+	var got := mv.pick_slime(cam.unproject_position(_body_point(mv, 0, PICK_TOP_K)))
+	# 반대쪽에서 보면 앞뒤가 바뀜
+	_low_camera(mv, (f + b) * 0.5, atan2(b.x - f.x, b.z - f.z))
+	var got2 := mv.pick_slime(cam.unproject_position(_body_point(mv, 1, PICK_TOP_K)))
+	t.check(got == w.s_id[0] and got2 == w.s_id[1],
+			"겹친 칸: 앞 개체 몸 위쪽을 누르면 앞 개체(#%d → %d, #%d → %d)" % [w.s_id[0], got, w.s_id[1], got2])
+	# ② 가장 낮은 고각에서 큰 개체(크기 %.1f)의 머리를 누름 → 그 개체(고치기 전: 반경 밖이라 -1 = 선택 해제)
+	_low_camera(mv, mv.slime_instance_position(iso), 0.0)
+	var head := mv.pick_slime(cam.unproject_position(_body_point(mv, iso, PICK_HEAD_K)))
+	t.check(head == w.s_id[iso], "고각 %.0f° 에서 큰 개체(크기 %.1f) 머리 → 그 개체 (#%d → %d)" % [
+			UiConfig.num("camera.pitch_min_deg"), BIG_SIZE, w.s_id[iso], head])
+	# ③ 몸 옆 빈 곳(몸에는 안 맞지만 pick_radius 안)을 눌러도 그 개체 — 물러서는 고르기는 그대로
+	var p := mv.slime_instance_position(iso)
+	var side := Vector3(p.x + UiConfig.num("map.pick_radius") * 0.9 * UiConfig.num("map.tile_size"), p.y, p.z)
+	var center_plane := SlimeGeo.slime_mesh().get_aabb().size.y * 0.5 * mv.display_scale()
+	var near := mv.pick_slime(cam.unproject_position(Vector3(side.x, center_plane, side.z)))
+	t.check(near == w.s_id[iso], "몸 옆(고르기 반경 안)을 눌러도 그 개체 (#%d → %d)" % [w.s_id[iso], near])
+	mv.fit_map()
+
+
+# ── 저장고 칸: 움집 안에 묻히지 않게 문 앞(문 방향, 보통 +Z)에 ──
+
+## Stores MultiMesh 의 k 번째 인스턴스 문 방향(메시 정면 -Z 를 돌린 땅 위 방향 x, z). 버퍼는 행 우선 3×4.
+func _store_door(mv: MapView, k: int) -> Vector2:
+	var mi := mv.get_node_or_null("Stores") as MultiMeshInstance3D
+	if mi == null or k >= mi.multimesh.instance_count:
+		return Vector2.ZERO
+	var buf := mi.multimesh.buffer
+	var stride := buf.size() / mi.multimesh.instance_count
+	return Vector2(-buf[k * stride + 2], -buf[k * stride + 10])
+
 
 func _check_store_doorstep(t, mv: MapView, w: SimWorld) -> void:
 	if w.store_tiles.is_empty() or w.population() < 3:
@@ -757,7 +994,8 @@ func _check_store_doorstep(t, mv: MapView, w: SimWorld) -> void:
 		w.s_y[k] = sy
 	mv.bind(w)
 	var tl := UiConfig.num("map.tile_size")
-	var ok := true
+	var door := _store_door(mv, 0)
+	var ok := door.length() > 0.5
 	var n := 0
 	for i in w.population():
 		if w.s_x[i] != sx or w.s_y[i] != sy:
@@ -766,13 +1004,55 @@ func _check_store_doorstep(t, mv: MapView, w: SimWorld) -> void:
 		var p := mv.slime_instance_position(i)
 		var dx := p.x - (float(sx) + 0.5) * tl
 		var dz := p.z - (float(sy) + 0.5) * tl
-		if Vector2(dx, dz).length() < STORE_EAVE * tl - EPS or dz <= 0.0:
+		if Vector2(dx, dz).length() < STORE_EAVE * tl - EPS or Vector2(dx, dz).dot(door) <= 0.0:
 			ok = false
-	t.check(ok and n >= 2, "저장고 칸의 %d마리는 움집 처마(%.2f칸) 밖 문 앞(+Z)에 그려짐" % [n, STORE_EAVE])
+	t.check(ok and n >= 2, "저장고 칸의 %d마리는 움집 처마(%.2f칸) 밖 문 앞(문 방향 %s)에 그려짐" % [n, STORE_EAVE, door])
 	var cam := mv.get_camera()
 	var center_y := SlimeGeo.slime_mesh().get_aabb().size.y * 0.5 * mv.display_scale()
 	var q := mv.slime_instance_position(0)
 	t.check(mv.pick_slime(cam.unproject_position(Vector3(q.x, center_y, q.z))) == w.s_id[0], "문 앞에 그린 개체를 누르면 그 개체")
+
+
+# ── 남쪽이 바위·물이거나 지도 끝인 저장고: 문 앞 자리는 지나갈 수 있는 이웃 쪽(검토 I54) ──
+
+## 검사용 세계에서만 store_tiles 를 바꿔(화면은 store_tiles 만 읽음) 남쪽이 막힌 저장고 둘을 만든다:
+## A = 남쪽 이웃이 물·바위이고 동쪽은 지나갈 수 있는 칸, B = 맨 아래 줄(남쪽 = 지도 밖) 칸.
+## 각 저장고 칸에 개체를 세우고, 그린 몸 가운데가 지도 안·지나갈 수 있는 칸 위인지, 처마 밖인지, 문이 그쪽을 보는지 본다.
+func _check_store_blocked(t, mv: MapView) -> void:
+	var w: SimWorld = t.make_world({}, 3)
+	var a := -1
+	var b := -1
+	for y in range(1, w.h - 1):
+		for x in range(0, w.w - 1):
+			var c := y * w.w + x
+			if a == -1 and SimGrid.passable(w.tiles[c]) and not SimGrid.passable(w.tiles[c + w.w]) and SimGrid.passable(w.tiles[c + 1]):
+				a = c
+	for x in w.w:
+		var c := (w.h - 1) * w.w + x
+		if b == -1 and SimGrid.passable(w.tiles[c]):
+			b = c
+	if a == -1 or b == -1 or w.population() < 4:
+		t.check(false, "남쪽이 막힌 저장고 검사용 칸 (%d, %d)" % [a, b])
+		return
+	w.store_tiles = PackedInt32Array([a, b])
+	for k in 3:
+		var c := a if k < 2 else b
+		w.s_x[k] = c % w.w
+		w.s_y[k] = c / w.w
+	mv.bind(w)
+	var tl := UiConfig.num("map.tile_size")
+	var bad := PackedStringArray()
+	for k in 3:
+		var c := a if k < 2 else b
+		var p := mv.slime_instance_position(k)
+		var off := Vector2(p.x - (float(c % w.w) + 0.5) * tl, p.z - (float(c / w.w) + 0.5) * tl)
+		var tx := floori(p.x / tl)
+		var tz := floori(p.z / tl)
+		var inside := tx >= 0 and tz >= 0 and tx < w.w and tz < w.h
+		var door := _store_door(mv, 0 if k < 2 else 1)
+		if not inside or not SimGrid.passable(w.tiles[tz * w.w + tx]) or off.length() < STORE_EAVE * tl - EPS or off.dot(door) <= 0.0:
+			bad.append("#%d 칸(%d,%d) → 몸 가운데 (%.2f, %.2f)" % [k, c % w.w, c / w.w, p.x, p.z])
+	t.check(bad.is_empty(), "남쪽이 막힌 저장고(바위·물 / 지도 끝): 문 앞 개체가 지도 안 지나갈 수 있는 칸 위, 문이 그쪽 %s" % [bad])
 
 
 # ── 밭 칸: 슬라임·그림자·선택 고리가 흙판 위 ──
