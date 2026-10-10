@@ -81,6 +81,8 @@ OUT/
   seed1/  …                실행기 결과(summary.json, timeseries.csv, chronicle.csv, final.snapshot.json) + run.log
 ```
 
+씨앗 폴더의 실행기 결과 파일(`timeseries.csv`·`chronicle.csv`·`lineage.csv`·`summary.json`·스냅숏)의 열 뜻·구간 값과 누적 값·틱 기준(진행 중인 틱 번호와 진행한 뒤 틱)·`death_cause` 같은 코드는 [`DESIGN-v0.1.md`](DESIGN-v0.1.md) 8.3·8.4 가 정본입니다. 아래는 `analyze.py` 가 만드는 표입니다.
+
 `summary.csv`·`cells.csv`·`runs.csv` 는 **BOM 붙은 UTF-8** 입니다 — 한국어 Windows 엑셀이 두 번 클릭으로 열어도 `civ_stage_name`(농사)·`result` 의 한글이 깨지지 않습니다(BOM 이 없으면 엑셀은 시스템 코드 페이지 cp949 로 읽음). pandas(`pd.read_csv`)·파이썬 `csv`(`encoding="utf-8-sig"`)·LibreOffice 는 그대로 읽고, R 은 `read.csv(파일, fileEncoding = "UTF-8-BOM")`. 실행기·실험실이 쓰는 `timeseries.csv`·`chronicle.csv`·`lineage.csv` 도 BOM 붙은 UTF-8 입니다(같은 규칙 — 엑셀 두 번 클릭, pandas 는 그대로, R 은 위와 같이. `summary.json`·스냅숏 같은 JSON 에는 BOM 을 붙이지 않음). `analyze.py` 는 BOM 이 있어도 없어도 읽습니다.
 
 **`summary.csv`** (BOM 붙은 UTF-8, 쉼표, 영문 열 이름, 빈 값 `NaN`):
@@ -89,11 +91,11 @@ OUT/
 |---|---|
 | `cell`, `seed`, `preset`, `overrides`, `generations_target` | 묶음, 씨앗, 예설정, 실제 덮어쓰기(`키=값;…`), 목표 세대. 스냅숏에서 이어 돌린 실행(실험실에서 스냅숏을 연 실험도)은 예설정을 알 수 없어 `preset` 이 비고 `overrides` 도 비며, 루트 바로 아래면 묶음 이름이 `snapshot` |
 | `end_reason` | `generations`(목표 도달) · `extinction` · `max_ticks` |
-| `ticks`, `mean_generation`, `population`, `peak_population`, `births`, `deaths` | 끝날 때 값(`summary.json`). 단 **멸종한 실행의 `mean_generation`** 은 빈 개체의 평균(0)이 아니라 살아 있던 마지막 시계열 줄(멸종 최대 20틱 전)의 평균 세대(`final_mean_size` 와 같은 방식, 시계열이 없으면 NaN) |
+| `ticks`, `mean_generation`, `population`, `peak_population`, `births`, `deaths` | 끝날 때 값(`summary.json` — `births`·`deaths` 는 누적 `total_births`·`total_deaths`). 단 **멸종한 실행의 `mean_generation`** 은 빈 개체의 평균(0)이 아니라 살아 있던 마지막 시계열 줄(멸종 최대 20틱 전)의 평균 세대(`final_mean_size` 와 같은 방식, 시계열이 없으면 NaN) |
 | `civ_stage`, `civ_stage_name` | 끝날 때 문명 단계 0~3(없음·채집·저장·농사) |
 | `extinct_tick`, `storehouses`, `farms` | 멸종 틱(-1 없음), 저장고·밭 수 |
-| `disc_tick_forage` · `disc_gen_forage` (`_store`, `_farm`) | 채집(저장·농사) **발견 틱(-1)·발견 세대(NaN = 발견 못 함)** |
-| `final_mean_size`, `final_mean_sense` | 살아 있던 마지막 기록의 평균 크기·감지 반경 |
+| `disc_tick_forage` · `disc_gen_forage` (`_store`, `_farm`) | 채집(저장·농사) **발견 틱(-1)·발견 세대(NaN = 발견 못 함)**. 발견 틱은 발견한 틱 번호(진행 중인 틱 — 시계열에는 다음 줄부터 보임, DESIGN 8.4) |
+| `final_mean_size`, `final_mean_sense` | 살아 있던 마지막 기록의 평균 크기·감지 반경(`timeseries.csv` 의 `mean_sense` — 반올림한 반경의 평균이라 `lineage.csv` 의 `sense` 유전자 평균과 다름) |
 | `run_seconds`, `history_hash`, `path` | 실행기 시간, 역사 해시(64자), 실행 폴더(상대 경로) |
 
 **`cells.csv`**: `runs`, `extinct`·`extinction_rate`, `reached_<단계>`·`reach_rate_<단계>`(끝 단계가 그 이상인 실행 수·비율), `disc_gen_<단계>_n/_median/_q1/_q3/_iqr`(도달한 실행만), `mean_generation_median`, `ticks_median`, `population_median`, `peak_population_median`, `final_mean_size_median`, `final_mean_sense_median`, `run_seconds_median`, `run_seconds_total`.
@@ -106,13 +108,13 @@ OUT/
 |---|---|
 | `population.png` | 개체 수 대 틱. 멸종한 실행은 끝에 ×. 상한(`population.cap`, 기본 250)에 붙은 구간은 먹이가 아니라 상한이 개체 수를 정함 |
 | `mean_gen.png` | 평균 세대 대 틱. 기울기 = 세대 교체 속도 |
-| `traits.png` | 평균 크기(왼쪽)·평균 감지 반경(오른쪽) 대 평균 세대. 거의 변하지 않을 때 잡음이 커 보이지 않게 세로 범위를 최소 0.2·1.0 으로 둠 |
+| `traits.png` | 평균 크기(왼쪽)·평균 감지 반경(오른쪽, 반올림한 칸 수의 평균) 대 평균 세대. 개체 0 인 줄(평균 열이 0.0)은 뺌. 거의 변하지 않을 때 잡음이 커 보이지 않게 세로 범위를 최소 0.2·1.0 으로 둠 |
 | `civ_stage.png` | 문명 단계 계단선 대 평균 세대. 겹치지 않게 실행마다 세로로 조금씩 띄움. 멸종한 실행은 끝에 × |
 | `discovery.png` | 단계(채집·저장·농사)마다 한 칸, 세로 = 묶음. 점 = 실행, 회색 상자 = 사분위 범위(실행 3개 이상), 검은 선 = 중앙값, 오른쪽 = 도달 수/전체 |
 
 ## 발견 세대는 이렇게 계산합니다
 
-1. 실행의 `chronicle.csv` 에서 `kind = discovery` 인 줄을 찾습니다. 시뮬레이션이 발견 순간에 `mean_gen`(그 틱에 살아 있는 개체들의 평균 세대, 0.01 단위로 반올림)을 함께 적습니다.
+1. 실행의 `chronicle.csv` 에서 `kind = discovery` 인 줄을 찾습니다. 시뮬레이션이 발견 순간에 `mean_gen`(평균 세대, 0.01 단위로 반올림)을 함께 적습니다 — 채집·농사는 그 틱을 진행한 뒤 살아 있는 개체, 저장은 진행 전 개체의 평균입니다(행동 도중에 열리므로, DESIGN 8.4 "틱 기준").
 2. 단계는 문장 머리 `채집 발견 — …`·`저장 발견 — …`·`농사 발견 — …` 로 가립니다. 머리가 다르면(문구가 바뀐 경우) `summary.json` 의 `discovery_ticks` 와 **같은 틱**의 사건으로 맞춥니다.
 3. 연대기가 없거나 사건이 빠졌는데 `summary.json` 에 발견 틱이 있으면, `timeseries.csv` 의 평균 세대를 그 틱으로 선형 보간합니다(근사).
 4. 발견하지 못한 단계는 틱 -1, 세대 `NaN`. 묶음 통계(중앙값·사분위)는 **도달한 실행만**으로 계산하고, 도달 비율을 따로 적습니다.
@@ -121,7 +123,7 @@ OUT/
 
 ## 주의
 
-- **시간:** 기본 설정에서 실행 하나가 평균 약 250틱/초, 세대당 약 110틱 → **세대당 약 0.45초**(1,000세대 ≈ 7.4분, `docs/TEST-REPORT.md`). 전체 ≈ 묶음 수 × 씨앗 수 × 세대 × 0.45초 ÷ `--jobs`. CPU 코어보다 `--jobs` 를 크게 주면 빨라지지 않습니다. `fast_civ` 100세대 씨앗 12개는 4코어에서 `--jobs 3` 으로 약 3분 20초(실행 하나 24~58초).
+- **시간:** 기본 설정에서 실행 하나가 세대당 약 110틱이고, 속도는 기계에 따라 평균 약 150~250틱/초 → **세대당 약 0.45~0.73초**(1,000세대 ≈ 7.4분(2단계 기계)~12.2분(검토 고침 날 4코어 공유 기계) — `docs/TEST-REPORT.md`, `docs/DESIGN-v0.1.md` 13절). 전체 ≈ 묶음 수 × 씨앗 수 × 세대 × 세대당 시간 ÷ `--jobs`. CPU 코어보다 `--jobs` 를 크게 주면 빨라지지 않습니다. 아래 예시의 `run`(`fast_civ` 100세대 씨앗 8개)은 그 공유 기계에서 `--jobs 3` 으로 114초(실행 하나 3.3~61.3초 — 일찍 멸종한 씨앗 1·7 은 짧음), `sweep`(12개 × 60세대)은 84초였습니다.
 - **`run_seconds`** 는 동시에 돌던 다른 실행과 CPU 를 나눈 시간입니다. 성능 비교에는 `--jobs 1` 로.
 - **결정성:** 같은 씨앗·같은 설정·같은 코드면 역사 해시가 같습니다(병렬로 돌려도). 같은 결과 폴더로 `report` 를 다시 만들면 `summary.csv`·`cells.csv`·`report.md` 는 바이트까지 같습니다(검사함. `summary.csv`·`cells.csv` 는 pandas 2.2 와 3.0 사이에서도 같음을 확인). 실행을 다시 돌리면 `run_seconds` 만 달라집니다. 해시가 다르면 설정이나 코드가 다른 것입니다.
 - **중도 절단:** 목표 세대에서 멈추므로, 그보다 늦게 올 발견은 "도달 못 함"으로 셉니다. 늦은 단계를 비교할 때는 목표 세대를 넉넉히.
@@ -142,9 +144,11 @@ python3 tools/analyze.py sweep --param mutation.rate=0.02,0.05,0.1 --seeds 1-4 -
 for k in run sweep; do cp results/example-$k/{report.md,summary.csv,cells.csv,*.png} docs/analysis/example/$k/; done
 ```
 
-- [`run/report.md`](analysis/example/run/report.md) — `fast_civ`(조정 기록 [`TUNING-fast_civ.md`](TUNING-fast_civ.md)) 씨앗 8개 × 100세대. 8개 모두 농사까지 도달, 멸종 없음. 발견 세대 중앙값 채집 6.4 · 저장 7.8 · 농사 16.4(씨앗별 농사 49.0 · 12.7 · 74.3 · 20.0 · 12.8 · 12.5 · 2.0 · 23.9). 씨앗 1 의 농사(3,321틱, 49.0세대)는 규칙 검사 S15(`test_farm_reachable`)가 같은 씨앗으로 다시 얻는 값입니다(결정성).
-- [`sweep/report.md`](analysis/example/sweep/report.md) — 돌연변이율 0.02·0.05·0.1 × 씨앗 4개 × 60세대. 멸종 없음, 농사 도달 3/4 · 3/4 · 2/4(60세대에서 멈추므로 늦은 씨앗은 "도달 못 함" — 중도 절단). 0.05(기본값과 같음) 칸은 위 `run` 의 씨앗 1~4 와 60세대까지 같은 역사입니다(발견 세대가 같음). 0.1 에서 씨앗 1 은 채집이 59.3세대에야 열립니다(0.05 에서 33.9). 씨앗 4개라 칸 사이 차이는 아직 결론이 아닙니다.
-- 읽을거리: 조정한 `fast_civ` 에서도 씨앗 7 은 채집·저장·농사를 모두 **2세대 안에** 엽니다(첫 세대 무작위 두뇌의 배부른 줍기 시도가 371회로 임계 280 을 바로 넘음). 반대로 씨앗 1·3 은 채집 23~34세대, 농사 49~74세대입니다. 같은 설정에서도 씨앗 사이 퍼짐이 이렇게 크므로 씨앗을 넉넉히 쓰세요(분포와 그 까닭은 [`TUNING-fast_civ.md`](TUNING-fast_civ.md)).
+(마지막 줄은 bash 의 복사입니다. Windows 에서는 두 폴더의 `report.md`·`summary.csv`·`cells.csv`·`*.png` 를 탐색기로 같은 자리에 복사하면 됩니다 — 실행 명령의 Windows 꼴은 [Windows](#windows) 절.)
+
+- [`run/report.md`](analysis/example/run/report.md) — `fast_civ`(조정 기록 [`TUNING-fast_civ.md`](TUNING-fast_civ.md)) 씨앗 8개 × 100세대. 8개 모두 농사까지 도달하고, 2개는 농사를 연 뒤 멸종(씨앗 1 은 3,693틱, 씨앗 7 은 1,153틱). 발견 세대 중앙값 [사분위] 채집 10.4 [3.1–22.7] · 저장 12.1 [3.6–24.7] · 농사 18.9 [8.6–30.6](씨앗별 농사 28.5 · 9.9 · 55.5 · 23.6 · 14.1 · 36.8 · 1.9 · 4.8). 씨앗 1 의 농사(2,040틱, 28.5세대)는 규칙 검사 S15(`test_farm_reachable`)가 같은 씨앗으로 다시 얻는 값입니다(결정성).
+- [`sweep/report.md`](analysis/example/sweep/report.md) — 돌연변이율 0.02·0.05·0.1 × 씨앗 4개 × 60세대. 멸종 1/4 · 1/4 · 0/4(0.02 의 씨앗 1 은 아무 발견 없이 618틱에, 0.05 의 씨앗 1 은 농사를 연 뒤 3,693틱에), 농사 도달 3/4 · 4/4 · 4/4(60세대에서 멈추므로 늦은 씨앗은 "도달 못 함"이 될 수 있음 — 중도 절단), 농사 세대 중앙값 16.7 · 26.1 · 20.1. 0.05(기본값과 같음) 칸은 위 `run` 의 씨앗 1~4 와 60세대까지 같은 역사입니다(채집 21.70 · 3.31 · 25.89 · 13.97세대로 같음). 0.1 에서 씨앗 2 는 첫 세대 폭발로 채집이 0.33세대에 열리고, 씨앗 1 의 채집은 18.5세대(0.05 에서 21.7)입니다. 씨앗 4개라 칸 사이 차이는 아직 결론이 아닙니다.
+- 읽을거리: 조정한 `fast_civ` 에서도 씨앗 7 은 채집·저장·농사를 모두 **2세대 안에**(0.23 · 0.34 · 1.89세대) 엽니다 — 첫 1세대(약 190틱) 동안 무작위 두뇌의 배부른 줍기 시도가 약 390회로 임계 280 을 바로 넘음(임계를 끈 실행으로 잰 값). 그리고 1,153틱에 멸종합니다. 반대로 씨앗 1·3·6 은 채집 21.7~27.7세대, 농사 28.5~55.5세대입니다. 같은 설정에서도 씨앗 사이 퍼짐이 이렇게 크므로 씨앗을 넉넉히 쓰세요(분포와 그 까닭은 [`TUNING-fast_civ.md`](TUNING-fast_civ.md)).
 
 ![발견 세대 — 돌연변이율 격자](analysis/example/sweep/discovery.png)
 
