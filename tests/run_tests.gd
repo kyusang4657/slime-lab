@@ -61,6 +61,13 @@ const PERF_MAX_RATIO := 1750.0
 const PERF_REF_LEN := 256
 const PERF_REF_REPS := 2000
 const PERF_ROUNDS := 8
+## 상대 성능(DESIGN-v0.2 12.5, test_performance_relative): 씨앗·데우기 틱·번갈아 돌리는 덩어리 틱. 0단계 한도 = 켬 = 끔(같은 설정)의
+## 비가 [1 / 이 값, 이 값] 안. 0단계에 이 컨테이너에서 20번 잰 비: 0.903~1.093(중앙값 1.011, 표준편차 0.048 — max(비, 1/비) 1.107)이라
+## 같은 일의 잡음이 약 ±10% — 여유를 더해 1.25.
+const PERF_REL_SEED := 2
+const PERF_REL_WARMUP := 800
+const PERF_REL_CHUNK := 50
+const PERF_REL_SAME_MAX := 1.25
 ## 연결 요소 계산(test_components_fast)의 상한: 같은 크기 지도를 한 번 훑는 거리장(BFS) 시간의 이 배수(지금 약 0.9배, 예전
 ## 계산은 요소 수 × 칸 수라 수천 배).
 const COMPONENTS_MAX_RATIO := 10.0
@@ -87,7 +94,7 @@ func _init() -> void:
 		"test_energy_ledger", "test_death_causes", "test_reproduction", "test_population_cap",
 		"test_discovery_forage", "test_discovery_store", "test_storehouse_rules", "test_farm_rules",
 		"test_determinism", "test_snapshot_roundtrip", "test_snapshot_files", "test_runner",
-		"test_extinction_no_resources", "test_memory_units", "test_performance", "test_farm_reachable",
+		"test_extinction_no_resources", "test_memory_units", "test_performance", "test_performance_relative", "test_farm_reachable",
 		"test_time_after_step", "test_event_copies", "test_extinction_mean_gen",
 		"test_config_rules", "test_presets_file", "test_night_threshold", "test_components_fast", "test_snapshot_corrupt",
 		"test_recorder_files", "test_tick_basis",
@@ -95,7 +102,8 @@ func _init() -> void:
 		"test_child_energy_cap", "test_store_built_in_act", "test_spoil_lifetime", "test_growth_interval",
 		"test_farm_abandon_any_growth", "test_light_curve", "test_store_not_on_farm", "test_action_names", "test_harsh_winter",
 		"test_farm_rule_values", "test_civ_rule_values", "test_runner_guards",
-		"test_v01_golden",
+		"test_v01_golden", "test_act_counts", "test_eaten_ledger", "test_snapshot_v02_roundtrip", "test_snapshot_v01_fixture",
+		"test_v02_config", "test_chance_baseline",
 	]
 	# --only 의 이름은 모두 있는 검사여야 한다(J15): 오타 난 이름을 말없이 빼고 '0개·0 failed·종료 코드 0' 으로 끝나지 않게
 	var unknown := PackedStringArray()
@@ -1282,6 +1290,47 @@ func test_performance() -> void:
 	done()
 
 
+## 상대 성능(DESIGN-v0.2 12.5): 같은 프로세스에서 두 세계(씨앗 PERF_REL_SEED, PERF_REL_WARMUP 틱 뒤)를 PERF_REL_CHUNK 틱씩 번갈아
+## PERF_ROUNDS 바퀴(400틱씩) 돌려 개체·틱당 비용의 비(켬 ÷ 끔)를 잰다. 바퀴마다 먼저 도는 쪽을 바꿔 순서 치우침을 줄인다. 두 설정이
+## 같으면 끔 세계는 켬 세계의 스냅숏 사본(데우기 한 번 — 같은 일을 하므로 비는 잡음만). 결과: {ratio, on_us, off_us, on_pop, off_pop}.
+func perf_relative(on_sets: Dictionary, off_sets: Dictionary, preset: String = "default") -> Dictionary:
+	var won := world(on_sets, PERF_REL_SEED, preset)
+	won.step_n(PERF_REL_WARMUP)
+	var woff: SimWorld
+	if SimConfig.deep_equal(on_sets, off_sets):
+		woff = SimSnapshot.from_text(SimSnapshot.to_text(won)).world
+	else:
+		woff = world(off_sets, PERF_REL_SEED, preset)
+		woff.step_n(PERF_REL_WARMUP)
+	var ws: Array[SimWorld] = [won, woff]
+	var us := PackedInt64Array([0, 0])
+	var st := PackedInt64Array([0, 0])
+	for r in PERF_ROUNDS:
+		for k in 2:
+			var j := (k + r) % 2
+			var w: SimWorld = ws[j]
+			var t0 := Time.get_ticks_usec()
+			for t in PERF_REL_CHUNK:
+				st[j] += w.population()
+				w.step()
+			us[j] += Time.get_ticks_usec() - t0
+	var on_us := float(us[0]) / float(maxi(st[0], 1))
+	var off_us := float(us[1]) / float(maxi(st[1], 1))
+	var ticks := float(PERF_ROUNDS * PERF_REL_CHUNK)
+	return {ratio = on_us / maxf(off_us, 1e-9), on_us = on_us, off_us = off_us, on_pop = float(st[0]) / ticks, off_pop = float(st[1]) / ticks}
+
+
+## 상대 성능 틀(DESIGN-v0.2 12.5·14.1 범위 8): 0단계는 켬 = 끔(같은 기본 설정)이라 비는 잡음만 — [1 / 한도, 한도] 안이어야 한다.
+## 1단계부터는 같은 함수로 켬(그 단계 장치)·끔(기본)을 견주고 12.5 표의 한도를 쓴다.
+func test_performance_relative() -> void:
+	var r := perf_relative({}, {})
+	print("  상대 성능(켬 = 끔, 기본·씨앗 %d): 비 %.3f (켬 %.2fµs · 끔 %.2fµs, 평균 개체 %.0f·%.0f)" % [PERF_REL_SEED, r.ratio, r.on_us, r.off_us,
+			r.on_pop, r.off_pop])
+	check(r.on_pop > 0.0 and r.on_pop == r.off_pop and r.ratio <= PERF_REL_SAME_MAX and r.ratio >= 1.0 / PERF_REL_SAME_MAX,
+			"켬 = 끔 세계의 개체·틱당 비용 비 %.3f 가 [1/%.2f, %.2f] 안(같은 일 — 평균 개체 %.0f)" % [r.ratio, PERF_REL_SAME_MAX, PERF_REL_SAME_MAX, r.on_pop])
+	done()
+
+
 ## 기준 일 한 덩어리(PERF_REF_REPS × PERF_REF_LEN 번 곱셈·덧셈 + softsign — 두뇌 순전파 모양)에 걸린 µs.
 func _perf_ref_chunk(g: PackedFloat32Array, x: PackedFloat64Array) -> int:
 	var t0 := Time.get_ticks_usec()
@@ -1715,6 +1764,16 @@ func test_snapshot_corrupt() -> void:
 		"rng.world 숫자": func(d): d.rng.world = 5.0,
 		"rng.life 배열": func(d): d.rng.life = [1],
 		"rng.world null": func(d): d.rng.world = null,
+		# v0.2 에서 더한 키(DESIGN-v0.2 9.1): 없으면 채우지만, 있으면 꼴·길이·범위를 검사
+		"slimes.last_eff 길이 1": func(d): d.slimes.last_eff = SimSnapshot.b64(PackedByteArray([1])),
+		"slimes.last_eff 값 2": func(d): d.slimes.last_eff = SimSnapshot.b64(_filled_bytes(wd.population(), 2)),
+		"slimes.eaten 숫자": func(d): d.slimes.eaten = 3.0,
+		"lineage.eaten 짧음": func(d): d.lineage.eaten = SimSnapshot.b64(PackedFloat64Array([1.0])),
+		"lineage.eaten NaN": func(d): d.lineage.eaten = SimSnapshot.b64(_nan_tail(wd.lin_pa.size())),
+		"stats.period_act 길이 7": func(d): d.stats.period_act = SimSnapshot.b64(PackedInt32Array([0, 0, 0, 0, 0, 0, 0])),
+		"stats.period_eff > period_act": func(d): d.stats.period_eff = SimSnapshot.b64(PackedInt32Array([999999, 0, 0, 0, 0, 0, 0, 0])),
+		"stats.led_eaten_open 짧은 16진": func(d): d.stats.led_eaten_open = "00",
+		"stats.led_eaten_open NaN": func(d): d.stats.led_eaten_open = SimSnapshot.f64_hex(NAN),
 	}
 	var reason := {"format 숫자": "형식", "format 사전": "형식", "rng.world 숫자": "rng.world", "rng.life 배열": "rng.life", "rng.world null": "rng.world"}
 	var leaked: Array[String] = []
@@ -1759,6 +1818,21 @@ func test_snapshot_corrupt() -> void:
 		ro.world.step_n(150)
 		check(ro.world.history_hash == w2.history_hash, "옛 스냅숏에서 이어 돌린 해시 = 끊김 없이 돌린 해시")
 	done()
+
+
+static func _filled_bytes(n: int, v: int) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.resize(n)
+	b.fill(v)
+	return b
+
+
+## 길이 n 의 실수 배열(마지막만 NaN).
+static func _nan_tail(n: int) -> PackedFloat64Array:
+	var a := PackedFloat64Array()
+	a.resize(n)
+	a[n - 1] = NAN
+	return a
 
 
 ## 결과 파일의 틱 기준(DESIGN 8.4 "틱 기준" — 검토 J26): 매 틱 기록한 시계열을 계통 기록으로 다시 세고, 사건의 tick·mean_gen 이
@@ -2601,6 +2675,373 @@ func test_v01_golden() -> void:
 		var sha2 := csv_of(rec2.rows, V01_TIMESERIES_COLUMNS).sha256_text()
 		check(fw.history_hash == V01_FIXTURE_GOLDEN[0] and sha2 == V01_FIXTURE_GOLDEN[1],
 				"v0.1.0 픽스처에서 %d틱 이어 돌린 해시 %s·22열 SHA-256 %s = 금 값" % [V01_FIXTURE_TICKS, fw.history_hash.substr(0, 12), sha2.substr(0, 12)])
+	done()
+
+
+## 행동 셈을 볼 흐름(DESIGN-v0.2 14.1 검사 기준 2): [덮어쓰기, 씨앗, 예설정, 틱]. 둘째는 판단 3틱(되풀이 틱)·argmax·혼자 분열,
+## 셋째는 채집·저장·농사를 모두 여는 흐름(263틱에 농사).
+const ACT_FLOWS := [
+	[{}, 3, "default", 600],
+	[{"brain.policy": "argmax", "brain.think_every": 3, "repro.asexual_when_alone": true}, 7, "default", 270],
+	[{}, 2, "demo_fast", 1000],
+]
+
+
+## 손 장면 하나: 개체 i 가 이번 틱에 판단 없이 act 를 한 번 했을 때의 [s_last_eff, 이번 틱 period_act[act], period_eff[act]].
+func eff_once(wd: SimWorld, i: int, act: int) -> Array:
+	wd.period_act.fill(0)
+	wd.period_eff.fill(0)
+	act_once(wd, i, act, wd.tick + 1)
+	return [wd.s_last_eff[i], wd.period_act[act], wd.period_eff[act]]
+
+
+## 행동 셈 act/eff(DESIGN-v0.2 11.1·14.1 검사 기준 2): 기록 줄마다 Σ act = 구간 동안 ③ 에 들어간 개체 수의 합(매 틱 진행 전
+## population() 합 — 판단 3틱 세계의 되풀이 포함), eff ≤ act, 돌기·쉬기는 eff = act, 채집 전 eff_gather = 0, 농사 전 eff_plant = 0.
+## 개체마다도: 진행 전후 상태로 다시 센 효과(옮김·먹은 양·운반 변화) = s_last_eff. 손 장면으로 효과가 아닌 경우(가득 찬 저장고·벽·배부름·
+## 운반 가득·발견 전)를 하나씩.
+func test_act_counts() -> void:
+	check(",".join(SimRecorder.TIMESERIES_COLUMNS) == ",".join(V01_TIMESERIES_COLUMNS + SimRecorder.ACT_COLUMNS + SimRecorder.EFF_COLUMNS)
+			and SimRecorder.ACT_COLUMNS.size() == SimBrain.BASE_OUTPUTS and SimRecorder.EFF_COLUMNS.size() == SimBrain.BASE_OUTPUTS,
+			"timeseries.csv 열 = v0.1 22열 + act_* 8 + eff_* 8(행동 번호 순서)")
+	var always := [SimBrain.ACT_LEFT, SimBrain.ACT_RIGHT, SimBrain.ACT_REST]
+	var seed_cost := float(cfg_with().farm.seed_cost)
+	check(seed_cost > 0.0, "기본 씨앗 비용 > 0(심기 효과를 운반 감소로 다시 셀 수 있음)")
+	for f in ACT_FLOWS:
+		var wd := world(f[0], f[1], f[2])
+		var every := int(wd.cfg.record.every)
+		wd.sample()
+		var pop_sum := 0
+		var rows := 0
+		var bad := PackedStringArray()
+		var per_bad := PackedStringArray()
+		var totals := PackedInt32Array()
+		totals.resize(SimBrain.BASE_OUTPUTS * 2)
+		var think_skips := 0
+		while wd.tick < int(f[3]):
+			# 진행 전 개체 상태(id → [x, y, 먹은 양, 운반])
+			var before := {}
+			for i in wd.population():
+				before[wd.s_id[i]] = [wd.s_x[i], wd.s_y[i], wd.s_eaten[i], wd.s_carry[i]]
+				if (wd.tick + wd.s_id[i]) % wd._think_every != 0:
+					think_skips += 1
+			pop_sum += wd.population()
+			wd.step()
+			for i in wd.population():
+				var id := wd.s_id[i]
+				if not before.has(id):
+					if wd.s_last_eff[i] != 0:
+						per_bad.append("갓 태어난 #%d 의 효과 표시 %d" % [id, wd.s_last_eff[i]])
+					continue
+				var b: Array = before[id]
+				var a := wd.s_last_action[i]
+				var want := 1
+				match a:
+					SimBrain.ACT_FORWARD:
+						want = 1 if wd.s_x[i] != b[0] or wd.s_y[i] != b[1] else 0
+					SimBrain.ACT_EAT:
+						want = 1 if wd.s_eaten[i] > b[2] else 0
+					SimBrain.ACT_GATHER:
+						want = 1 if wd.s_carry[i] > b[3] else 0
+					SimBrain.ACT_DROP, SimBrain.ACT_PLANT:
+						want = 1 if wd.s_carry[i] < b[3] else 0
+				if wd.s_last_eff[i] != want and per_bad.size() < 5:
+					per_bad.append("틱 %d #%d 행동 %d 효과 %d(다시 센 값 %d)" % [wd.tick - 1, id, a, wd.s_last_eff[i], want])
+			if wd.tick % every != 0 and wd.tick < int(f[3]):
+				continue
+			var r := wd.sample()
+			rows += 1
+			var s_act := 0
+			for a in SimBrain.BASE_OUTPUTS:
+				var na: int = r[SimRecorder.ACT_COLUMNS[a]]
+				var ne: int = r[SimRecorder.EFF_COLUMNS[a]]
+				s_act += na
+				totals[a] += na
+				totals[SimBrain.BASE_OUTPUTS + a] += ne
+				if ne > na or (always.has(a) and ne != na):
+					bad.append("틱 %d 행동 %d: 고름 %d 효과 %d" % [r.tick, a, na, ne])
+			if s_act != pop_sum:
+				bad.append("틱 %d: Σ act %d ≠ 진행 전 개체 수 합 %d" % [r.tick, s_act, pop_sum])
+			if int(r.civ_stage) < SimWorld.STAGE_FORAGE and int(r.eff_gather) != 0:
+				bad.append("틱 %d: 채집 전 eff_gather %d" % [r.tick, r.eff_gather])
+			if int(r.civ_stage) < SimWorld.STAGE_FARM and int(r.eff_plant) != 0:
+				bad.append("틱 %d: 농사 전 eff_plant %d" % [r.tick, r.eff_plant])
+			pop_sum = 0
+		check(rows > 0 and bad.is_empty(), "%s·씨앗 %d %s: 기록 줄 %d개의 Σ act = 진행 전 개체 수 합, eff ≤ act, 돌기·쉬기 eff = act, 발견 전 줍기·심기 효과 0(%s)" % [
+				f[2], f[1], str(f[0]), rows, "; ".join(bad.slice(0, 4))])
+		check(per_bad.is_empty(), "%s·씨앗 %d: 개체마다 효과 표시 = 진행 전후로 다시 센 효과(%s)" % [f[2], f[1], "; ".join(per_bad)])
+		if wd._think_every > 1:
+			check(think_skips > 0, "판단 %d틱 세계: 판단하지 않은 틱의 되풀이도 셈(되풀이 %d번)" % [wd._think_every, think_skips])
+		if wd.stage == SimWorld.STAGE_FARM:
+			check(totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_GATHER] > 0 and totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_DROP] > 0
+					and totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_PLANT] > 0 and totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_EAT] > 0,
+					"%s·씨앗 %d(농사): 줍기·내려놓기·심기·먹기 효과가 셈에 잡힘(효과 %s)" % [f[2], f[1], str(totals.slice(SimBrain.BASE_OUTPUTS))])
+	# 손 장면: 효과가 아닌 경우·효과인 경우
+	var wd2 := empty_world()
+	var p := grass_spot(wd2)
+	var c := p.y * wd2.w + p.x
+	var i := wd2.index_of_id(add_slime(wd2, p, 1.0, 100, 1))
+	wd2.s_max_age[i] = 1000000
+	var res := {}
+	wd2.food[c] = 5.0
+	res["발견 전 줍기"] = eff_once(wd2, i, SimBrain.ACT_GATHER)
+	var fa0 := wd2.forage_attempts
+	wd2.s_energy[i] = wd2.s_emax[i]
+	res["배부른 먹기"] = eff_once(wd2, i, SimBrain.ACT_EAT)
+	wd2.s_energy[i] = 0.5 * wd2.s_emax[i]
+	res["배고픈 먹기"] = eff_once(wd2, i, SimBrain.ACT_EAT)
+	wd2.stage = SimWorld.STAGE_FORAGE
+	wd2.food[c] = 5.0
+	wd2.s_carry[i] = 0.0
+	res["채집 뒤 줍기"] = eff_once(wd2, i, SimBrain.ACT_GATHER)
+	wd2.s_carry[i] = float(wd2.cfg.carry.max) * wd2.s_size[i]
+	wd2.food[c] = 5.0
+	res["운반 가득 줍기"] = eff_once(wd2, i, SimBrain.ACT_GATHER)
+	res["농사 전 심기"] = eff_once(wd2, i, SimBrain.ACT_PLANT)
+	wd2.s_carry[i] = 2.0
+	res["바닥에 내려놓기"] = eff_once(wd2, i, SimBrain.ACT_DROP)
+	res["빈손 내려놓기"] = eff_once(wd2, i, SimBrain.ACT_DROP)
+	# 저장고 장면은 따로(한 세계에 개체가 하나여야 이번 틱 셈이 그 개체의 것)
+	var w3 := empty_world()
+	var p3 := grass_spot(w3)
+	var st := w3.index_of_id(add_slime(w3, p3, 1.0, 100, 1))
+	with_store(w3, p3, SimWorld.STAGE_STORE)
+	w3.store_food[0] = float(w3.cfg.store.capacity)
+	w3.s_carry[st] = 3.0
+	res["가득 찬 저장고에 내려놓기"] = eff_once(w3, st, SimBrain.ACT_DROP)
+	w3.store_food[0] = 0.0
+	res["빈 저장고에 내려놓기"] = eff_once(w3, st, SimBrain.ACT_DROP)
+	var front := (p.y + SimGrid.DY[1]) * wd2.w + p.x + SimGrid.DX[1]
+	wd2.s_head[i] = 1
+	wd2.tiles[front] = SimGrid.TILE_ROCK
+	res["바위 쪽 앞으로"] = eff_once(wd2, i, SimBrain.ACT_FORWARD)
+	wd2.tiles[front] = SimGrid.TILE_GRASS
+	res["풀밭 쪽 앞으로"] = eff_once(wd2, i, SimBrain.ACT_FORWARD)
+	res["쉬기"] = eff_once(wd2, i, SimBrain.ACT_REST)
+	res["왼쪽 돌기"] = eff_once(wd2, i, SimBrain.ACT_LEFT)
+	var want := {"발견 전 줍기": 0, "배부른 먹기": 0, "배고픈 먹기": 1, "채집 뒤 줍기": 1, "운반 가득 줍기": 0, "농사 전 심기": 0,
+		"바닥에 내려놓기": 1, "빈손 내려놓기": 0, "가득 찬 저장고에 내려놓기": 0, "빈 저장고에 내려놓기": 1, "바위 쪽 앞으로": 0, "풀밭 쪽 앞으로": 1, "쉬기": 1, "왼쪽 돌기": 1}
+	var wrong := PackedStringArray()
+	for k: String in want:
+		var got: Array = res[k]
+		if got[0] != want[k] or got[1] != 1 or got[2] != want[k]:
+			wrong.append("%s: 표시 %d·고름 %d·효과 %d(기대 효과 %d)" % [k, got[0], got[1], got[2], want[k]])
+	check(wrong.is_empty() and fa0 == 1, "손 장면 %d개의 효과 판정(발견 전 줍기는 시도 %d회로만): %s" % [want.size(), fa0, "; ".join(wrong)])
+	var r2 := wd2.sample()
+	var zero := true
+	for a in SimBrain.BASE_OUTPUTS:
+		zero = zero and wd2.period_act[a] == 0 and wd2.period_eff[a] == 0
+	check(zero and int(r2.act_left) == 1 and int(r2.eff_left) == 1 and int(r2.act_rest) == 0, "sample() 이 구간 행동 셈(마지막 장면의 왼쪽 돌기 1)을 줄에 싣고 0 으로 되돌림")
+	done()
+
+
+## 먹은 양 장부(DESIGN-v0.2 12.2): Σ 죽은 개체 lin_eaten + Σ 살아 있는 s_eaten = led_eaten − led_eaten_open(상대 오차 1e-9).
+static func eaten_gap(wd: SimWorld) -> float:
+	var s := 0.0
+	for id in wd.lin_eaten.size():
+		if wd.lin_death[id] >= 0:
+			s += wd.lin_eaten[id]
+	for v in wd.s_eaten:
+		s += v
+	return absf(s - (wd.led_eaten - wd.led_eaten_open)) / maxf(1.0, absf(wd.led_eaten))
+
+
+## 평생 먹은 양(14.1 범위 3): 장부가 매 기록 틱에 맞고(채집 전 흐름과 저장고·운반·밭이 있는 흐름), 살아 있는 개체의 lin_eaten 은 0,
+## lineage.csv 의 eaten 은 죽은 개체 = lin_eaten · 살아 있는 개체 = s_eaten.
+func test_eaten_ledger() -> void:
+	var wd := world({}, 9)
+	var worst := 0.0
+	var alive_lin := 0
+	for k in 600:
+		wd.step()
+		if k % 20 == 0:
+			worst = maxf(worst, eaten_gap(wd))
+	for i in wd.population():
+		if wd.lin_eaten[wd.s_id[i]] != 0.0:
+			alive_lin += 1
+	check(wd.led_eaten > 0.0 and wd.led_eaten_open == 0.0 and worst < 1e-9 and wd.total_deaths > 0,
+			"기본·씨앗 9·600틱: 먹은 양 장부 상대 오차 %s(led_eaten %.1f, 사망 %d)" % [String.num_scientific(worst), wd.led_eaten, wd.total_deaths])
+	check(alive_lin == 0, "살아 있는 개체의 lin_eaten 은 0(죽을 때 씀 — 0 아닌 개체 %d)" % alive_lin)
+	var fa: SimWorld = farm_runs()[0].world
+	check(fa.stage == SimWorld.STAGE_FARM and fa.store_tiles.size() > 0 and eaten_gap(fa) < 1e-9,
+			"%s·씨앗 %d·%d틱(저장고·운반·밭): 먹은 양 장부 상대 오차 %s" % [FARM_RUN_PRESET, FARM_RUN_SEED, FARM_RUN_TICKS, String.num_scientific(eaten_gap(fa))])
+	var lines := SimRecorder.lineage_csv(fa).split("\n", false)
+	var col := SimRecorder.LINEAGE_COLUMNS.find("eaten")
+	var off := PackedStringArray()
+	var col_sum := 0.0
+	for id in fa.lin_pa.size():
+		var i := fa.index_of_id(id)
+		var want := fa.s_eaten[i] if i != -1 else fa.lin_eaten[id]
+		var cell := lines[id + 1].split(",")[col]
+		col_sum += cell.to_float()
+		if cell != SimRecorder.fmt(want) and off.size() < 3:
+			off.append("#%d %s ≠ %s" % [id, cell, SimRecorder.fmt(want)])
+	check(col == SimRecorder.LINEAGE_COLUMNS.size() - 1 and off.is_empty(), "lineage.csv 끝 열 eaten = 죽은 개체 lin_eaten·살아 있는 개체 s_eaten(%s)" % ", ".join(off))
+	check(absf(col_sum - (fa.led_eaten - fa.led_eaten_open)) < 1e-6 * float(fa.lin_pa.size()) + 1e-9,
+			"lineage.csv eaten 열의 합 %.3f = 먹은 양 장부 %.3f(소수 6자리 반올림 안)" % [col_sum, fa.led_eaten - fa.led_eaten_open])
+	done()
+
+
+## 왕복(14.1 검사 기준 3): 500틱(기록 줄 틱)·510틱(구간 한가운데 — 행동 셈이 쌓인 채) 스냅숏에서 이어 돌린 1,000틱 = 곧장 1,000틱 —
+## 새 열이 든 timeseries.csv(그 틱 뒤 줄)·eaten 이 든 lineage.csv·전체 상태 글·역사 해시까지.
+func test_snapshot_v02_roundtrip() -> void:
+	var wd := world({}, 21)
+	var rec := SimRecorder.new()
+	rec.record(wd)
+	var snaps := {}
+	var every := int(wd.cfg.record.every)
+	while wd.tick < 1000:
+		wd.step()
+		if wd.tick % every == 0:
+			rec.record(wd)
+		if wd.tick == 500 or wd.tick == 510:
+			snaps[wd.tick] = SimSnapshot.to_text(wd)
+	var mid = JSON.parse_string(snaps[510])
+	var mid_act := Marshalls.base64_to_raw(str(mid.stats.get("period_act", ""))).to_int32_array()
+	var mid_sum := 0
+	for v in mid_act:
+		mid_sum += v
+	check(mid_sum > 0 and mid.slimes.has("last_eff") and mid.slimes.has("eaten") and mid.lineage.has("eaten") and mid.stats.has("led_eaten_open"),
+			"510틱 스냅숏에 v0.2 키와 구간 중간의 행동 셈(합 %d)이 담김" % mid_sum)
+	for t: int in snaps:
+		var r := SimSnapshot.from_text(snaps[t])
+		check(r.error == "" and r.world != null, "%d틱 스냅숏 열기: %s" % [t, str(r.error)])
+		if r.world == null:
+			continue
+		var w2: SimWorld = r.world
+		var rec2 := SimRecorder.new()
+		while w2.tick < 1000:
+			w2.step()
+			if w2.tick % every == 0:
+				rec2.record(w2)
+		var want: Array = []
+		for row in rec.rows:
+			if int(row.tick) > t:
+				want.append(row)
+		var a := csv_of(want, SimRecorder.TIMESERIES_COLUMNS)
+		var b := csv_of(rec2.rows, SimRecorder.TIMESERIES_COLUMNS)
+		check(want.size() > 0 and a == b, "%d틱 → 열기 → 1,000틱의 timeseries.csv(%d열·%d줄) = 곧장 1,000틱" % [t, SimRecorder.TIMESERIES_COLUMNS.size(), want.size()])
+		check(SimRecorder.lineage_csv(w2) == SimRecorder.lineage_csv(wd) and SimSnapshot.to_text(w2) == SimSnapshot.to_text(wd)
+				and w2.history_hash == wd.history_hash, "%d틱 → 열기 → 1,000틱의 lineage.csv(eaten 포함)·전체 상태·해시 = 곧장 1,000틱" % t)
+	done()
+
+
+## v0.1.0 픽스처(14.1 검사 기준 4): 옛 형식(v0.2 키·repro.inherit 없음)이 열리고 9.1 의 '옛 파일에 없으면' 값으로 채워짐, 이어 돌린
+## 세계의 먹은 양 장부가 맞음, 다시 저장하면 새 키가 들어가 왕복. 시험용 새 절을 기본값에 넣어도 SECTIONS_ADDED 로 열림(9.2) —
+## 그 절을 지운 v0.2 스냅숏도.
+func test_snapshot_v01_fixture() -> void:
+	var text := FileAccess.get_file_as_string(V01_FIXTURE)
+	var d = JSON.parse_string(text)
+	check(typeof(d) == TYPE_DICTIONARY and str(d.app_version) == "0.1.0" and not d.config.repro.has("inherit") and not d.slimes.has("last_eff")
+			and not d.slimes.has("eaten") and not d.lineage.has("eaten") and not d.stats.has("period_act") and not d.stats.has("led_eaten_open"),
+			"픽스처는 v0.1.0 형식(repro.inherit·v0.2 키 없음)")
+	var r := SimSnapshot.from_dict(d)
+	check(r.error == "" and r.world != null, "v0.1.0 픽스처 열기: " + str(r.error))
+	if r.world == null:
+		done()
+		return
+	var w: SimWorld = r.world
+	var zeros := true
+	for v in w.s_last_eff:
+		zeros = zeros and v == 0
+	for v in w.s_eaten:
+		zeros = zeros and v == 0.0
+	for v in w.lin_eaten:
+		zeros = zeros and v == 0.0
+	for a in SimBrain.BASE_OUTPUTS:
+		zeros = zeros and w.period_act[a] == 0 and w.period_eff[a] == 0
+	check(str(w.cfg.repro.inherit) == SimWorld.INHERIT_GENOME and zeros and w.s_last_eff.size() == w.population() and w.lin_eaten.size() == w.lin_pa.size()
+			and SimSnapshot.f64_hex(w.led_eaten_open) == str(d.stats.led_eaten) and w.led_eaten > 0.0,
+			"옛 파일에 없는 키: repro.inherit = genome, last_eff·eaten·lineage eaten·행동 셈 = 0, led_eaten_open = 연 틱의 led_eaten(%.1f)" % w.led_eaten)
+	w.step_n(300)
+	check(eaten_gap(w) < 1e-9 and w.led_eaten > w.led_eaten_open, "픽스처에서 300틱 이어 돌린 세계의 먹은 양 장부 상대 오차 %s(연 뒤 먹은 양 %.1f)" % [
+			String.num_scientific(eaten_gap(w)), w.led_eaten - w.led_eaten_open])
+	var t2 := SimSnapshot.to_text(w)
+	var r2 := SimSnapshot.from_text(t2)
+	check(r2.world != null and SimSnapshot.to_text(r2.world) == t2 and str(JSON.parse_string(t2).config.repro.inherit) == "genome",
+			"이어 돌린 세계를 다시 저장하면 v0.2 키·repro.inherit 가 들어가고 글자 그대로 왕복")
+	# 시험용 새 절: 기본값에 절을 더하면 그 절이 없는 옛 파일은 SECTIONS_ADDED 없이는 거부, 있으면 기본값 절로 채워 열림
+	SimConfig.defaults()
+	SimConfig._defaults_cache["probe_section"] = {"probe_on": false}
+	SimSnapshot._sections_added = []
+	var e_without := str(SimSnapshot.from_text(text).error)
+	SimSnapshot._sections_added = ["probe_section"]
+	var r3 := SimSnapshot.from_text(text)
+	var w4 := world({}, 3)
+	w4.step_n(50)
+	var d4 = JSON.parse_string(SimSnapshot.to_text(w4))
+	var had := (d4.config as Dictionary).has("probe_section")
+	d4.config.erase("probe_section")
+	var r4 := SimSnapshot.from_dict(d4)
+	SimConfig._defaults_cache.erase("probe_section")
+	SimSnapshot._sections_added = SimSnapshot.SECTIONS_ADDED
+	check(e_without.contains("probe_section"), "새 절을 SECTIONS_ADDED 에 넣지 않으면 옛 파일 거부(설정 키가 없음): " + e_without)
+	check(r3.world != null and SimConfig.deep_equal(r3.world.cfg.get("probe_section"), {"probe_on": false}), "새 절이 SECTIONS_ADDED 에 있으면 기본값 절로 채워 엶: " + str(r3.error))
+	if r3.world != null:
+		r3.world.step_n(V01_FIXTURE_TICKS)
+		check(r3.world.history_hash == V01_FIXTURE_GOLDEN[0], "새 절을 채워 연 픽스처도 %d틱 이어 돌린 해시 = 금 값" % V01_FIXTURE_TICKS)
+	check(had and r4.error == "" and r4.world != null, "새 절을 지운 v0.2 스냅숏도 열림: " + str(r4.error))
+	check(SimConfig.validate(SimConfig.defaults()) == "" and not SimConfig.defaults().has("probe_section"), "시험용 절을 치운 뒤 기본값 그대로")
+	done()
+
+
+## v0.2 0단계 설정(14.1 범위 4·5, 검사 기준 5): 정수 원소 규칙(INT_ELEMS)이 1.5 를 거부, repro.inherit 의 고를 값·옛 설정 키·예설정.
+func test_v02_config() -> void:
+	var rule := ["probe.table", 0, 15, SimConfig.INT_ELEMS]
+	var e15 := SimConfig.check_array_rule([1.0, 1.5], rule)
+	check(e15.contains("probe.table") and e15.contains("정수"), "정수 원소 규칙이 1.5 를 거부: " + e15)
+	check(SimConfig.check_array_rule([0.0, 15.0, 7], rule) == "", "정수 원소(0·15·7)는 받음")
+	check(SimConfig.check_array_rule([16.0], rule).contains("범위") and SimConfig.check_array_rule(["a"], rule).contains("수여야"), "정수 원소 규칙도 범위·수 검사")
+	check(SimConfig.check_array_rule([1.5], ["probe.table", 0, 15]) == "", "넷째 칸이 없는 배열 규칙은 소수를 받음(seasons.growth 처럼)")
+	check(SimConfig.CHOICES["repro.inherit"] == [SimWorld.INHERIT_GENOME, SimWorld.INHERIT_RANDOM] and str(cfg_with().repro.inherit) == SimWorld.INHERIT_GENOME,
+			"repro.inherit 고를 값 = SimWorld.INHERIT_*, 기본 genome")
+	for bad in ["Random", "", "lamarck", 1.0]:
+		check(str(SimConfig.build("default", {"repro.inherit": bad}).error) != "", "repro.inherit = %s 거부" % str(bad))
+	check(SimSnapshot.CONFIG_KEYS_ADDED.has("repro.inherit"), "repro.inherit 는 옛 설정용 CONFIG_KEYS_ADDED 에 있음")
+	var cb := SimConfig.build("chance_baseline", {})
+	check(cb.error == "" and str(cb.config.repro.inherit) == SimWorld.INHERIT_RANDOM, "예설정 chance_baseline = repro.inherit random")
+	done()
+
+
+## 우연 기준(DESIGN-v0.2 11.3·14.1 검사 기준 6): random 이면 자식 유전체 = 같은 rng_life 상태에서 SimBrain.random_genome 이 뽑을 값
+## (부모 교차와 다름, 크기·감지 = traits.*_init, 색은 균등 뽑기), 혼자 분열도. 같은 씨앗 두 번 같은 해시, genome 이면 금 값(test_v01_golden).
+func test_chance_baseline() -> void:
+	for asexual: bool in [false, true]:
+		var wd := empty_world({"mutation.rate": 0.0, "repro.inherit": "random", "repro.asexual_when_alone": asexual})
+		var p := grass_spot(wd)
+		add_slime(wd, p, 0.9, 100)
+		if not asexual:
+			add_slime(wd, p + Vector2i(1, 0), 0.9, 100)
+		var t := wd._to
+		for i in wd.population():
+			wd.s_genome[i * wd._G + t + SimBrain.TRAIT_SIZE] = float(wd.cfg.traits.size_max)
+			wd.s_genome[i * wd._G + t + SimBrain.TRAIT_SENSE] = float(wd.cfg.traits.sense_max)
+		var probe := SimRng.new()
+		probe.set_state_string(wd.rng_life.get_state_string())
+		var want := SimBrain.random_genome(wd.cfg, wd.L, probe)
+		var n0 := wd.population()
+		wd.s_dead.fill(0)
+		wd._reproduce()
+		var k := wd.index_of_id(n0)
+		var gc := wd.s_genome.slice(k * wd._G, (k + 1) * wd._G) if k != -1 else PackedFloat32Array()
+		var from_parents := true
+		for gi in wd._G:
+			var any_parent := false
+			for pi in n0:
+				if gc.size() == wd._G and gc[gi] == wd.s_genome[pi * wd._G + gi]:
+					any_parent = true
+			from_parents = from_parents and any_parent
+		check(k != -1 and gc == want and not from_parents, "%s: 자식 유전체 = 같은 난수 상태의 random_genome(부모 교차와 다름)" % ("혼자 분열" if asexual else "짝"))
+		check(k != -1 and gc[t + SimBrain.TRAIT_SIZE] == float(wd.cfg.traits.size_init) and gc[t + SimBrain.TRAIT_SENSE] == float(wd.cfg.traits.sense_init)
+				and wd.lin_pa[n0] == 0 and wd.lin_pb[n0] == (SimWorld.NO_PARENT if asexual else 1) and wd.lin_gen[n0] == 1,
+				"%s: 자식 크기·감지 = traits.*_init(부모는 최대값), 부모·세대 기록은 그대로" % ("혼자 분열" if asexual else "짝"))
+	var a := world({}, 3, "chance_baseline")
+	a.step_n(600)
+	var b := world({}, 3, "chance_baseline")
+	b.step_n(600)
+	var g := world({}, 3)
+	g.step_n(600)
+	check(a.total_births > 0 and a.history_hash == b.history_hash and SimSnapshot.to_text(a) == SimSnapshot.to_text(b) and a.history_hash != g.history_hash,
+			"chance_baseline·씨앗 3·600틱: 같은 씨앗 두 번 같은 해시·전체 상태(출생 %d), genome 세계와 다른 해시" % a.total_births)
 	done()
 
 

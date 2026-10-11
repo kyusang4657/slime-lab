@@ -50,13 +50,17 @@ const RULES := [
 	["hash.every", 1, 1000000], ["record.every", 1, 1000000], ["record.generation_milestone", 0, 1000000],
 	["run.max_ticks", 1, TICK_MAX],
 ]
-## 배열 잎 키: 원소마다 [키, 하한, 상한](원소는 수, 길이는 기본값과 같아야 함).
+## 배열 규칙의 넷째 칸: 원소가 정수여야 함(DESIGN-v0.2 9.2 — 재료 성질·기법 표처럼 정수 표인 배열. 이름표 범위 글에 "정수",
+## tools/test_sim_labels.py 가 대조). 원소마다 수인지·범위·정수를 SimConfig.check_array_rule 이 본다.
+const INT_ELEMS := "정수"
+## 배열 잎 키: 원소마다 [키, 하한, 상한(, INT_ELEMS)](원소는 수, 길이는 기본값과 같아야 함).
 const ARRAY_RULES := [
 	["seasons.growth", 0.0, 100.0],
 ]
-## 글자 잎 키: 고를 수 있는 값(SimBrain.POLICY_* 와 같음 — 검사).
+## 글자 잎 키: 고를 수 있는 값(SimBrain.POLICY_*·SimWorld.INHERIT_* 와 같음 — 검사).
 const CHOICES := {
 	"brain.policy": ["sample", "argmax"],
+	"repro.inherit": ["genome", "random"],
 }
 
 static var _defaults_cache: Dictionary = {}
@@ -217,6 +221,21 @@ static func range_text(r: Array) -> String:
 	return "%s~%s" % [lo, hi]
 
 
+## 배열 잎 키 하나의 원소 검사(규칙 r = [키, 하한, 상한(, INT_ELEMS)]): 원소가 수이고 유한하며 범위 안, INT_ELEMS 면 정수.
+## 문제가 없으면 "". validate 가 ARRAY_RULES 마다 부르고, 검사는 아직 기본값에 없는 정수 표 규칙으로도 직접 부른다.
+static func check_array_rule(arr: Array, r: Array) -> String:
+	var key: String = r[0]
+	var ints: bool = r.size() > 3 and r[3] == INT_ELEMS
+	for x in arr:
+		if typeof(x) != TYPE_FLOAT and typeof(x) != TYPE_INT:
+			return "설정 %s 의 원소는 수여야 합니다: %s" % [key, str(x)]
+		if not is_finite(float(x)) or x < r[1] or x > r[2]:
+			return "설정 %s 의 원소 %s: 범위 %s 밖입니다" % [key, num_text(x, false), range_text(r)]
+		if ints and float(x) != floorf(float(x)):
+			return "설정 %s 의 원소 %s: 정수여야 합니다" % [key, num_text(x, false)]
+	return ""
+
+
 ## 구조·범위·정수·고를 값·관계 검사. 문제가 없으면 "".
 static func validate(cfg: Dictionary) -> String:
 	if not _load_defaults():
@@ -238,12 +257,9 @@ static func validate(cfg: Dictionary) -> String:
 		if below or v > r[2]:
 			return "설정 %s = %s: 범위 %s 밖입니다" % [key, num_text(v, as_int), range_text(r)]
 	for r in ARRAY_RULES:
-		var key2: String = r[0]
-		for x in get_value(cfg, key2):
-			if typeof(x) != TYPE_FLOAT and typeof(x) != TYPE_INT:
-				return "설정 %s 의 원소는 수여야 합니다: %s" % [key2, str(x)]
-			if not is_finite(float(x)) or x < r[1] or x > r[2]:
-				return "설정 %s 의 원소 %s: 범위 %s 밖입니다" % [key2, num_text(x, false), range_text(r)]
+		var ae := check_array_rule(get_value(cfg, r[0]), r)
+		if ae != "":
+			return ae
 	for key3: String in CHOICES:
 		var c = get_value(cfg, key3)
 		if not (CHOICES[key3] as Array).has(c):

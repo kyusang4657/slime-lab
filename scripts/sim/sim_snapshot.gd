@@ -1,6 +1,6 @@
 class_name SimSnapshot
 extends RefCounted
-## 세계 스냅숏(저장·복원). 형식: docs/DESIGN-v0.1.md 8.3.
+## 세계 스냅숏(저장·복원). 형식: docs/DESIGN-v0.1.md 8.3, v0.2 에서 더한 키는 docs/DESIGN-v0.2.md 9.1(*_ADDED 상수).
 ## 메타·설정은 사람이 읽는 JSON(설정 값은 SimConfig.validate 가 JSON 왕복을 보장), 배열은 리틀엔디언 base64, 실수 단일 값은 float64 비트 16진 문자열.
 ## (Godot 4.4.1 의 JSON.stringify 는 full_precision 을 켜도 실수를 비트 단위로 왕복하지 못한다 — TEST-REPORT 참고.)
 ##
@@ -57,16 +57,18 @@ static func to_dict(wd: SimWorld) -> Dictionary:
 			count = wd.s_id.size(), id = b64(wd.s_id), x = b64(wd.s_x), y = b64(wd.s_y), head = b64(wd.s_head),
 			age = b64(wd.s_age), gen = b64(wd.s_gen), max_age = b64(wd.s_max_age), last_repro = b64(wd.s_last_repro),
 			last_action = b64(wd.s_last_action), energy = b64(wd.s_energy), carry = b64(wd.s_carry),
-			mem = b64(wd.s_mem), genome = b64(wd.s_genome),
+			mem = b64(wd.s_mem), genome = b64(wd.s_genome), last_eff = b64(wd.s_last_eff), eaten = b64(wd.s_eaten),
 		},
 		lineage = {
 			count = wd.lin_pa.size(), pa = b64(wd.lin_pa), pb = b64(wd.lin_pb), gen = b64(wd.lin_gen),
 			birth = b64(wd.lin_birth), death = b64(wd.lin_death), cause = b64(wd.lin_cause),
 			children = b64(wd.lin_children), size = b64(wd.lin_size), sense = b64(wd.lin_sense), hue = b64(wd.lin_hue),
+			eaten = b64(wd.lin_eaten),
 		},
 		stats = {
 			led_initial = f64_hex(wd.led_initial), led_eaten = f64_hex(wd.led_eaten), led_spent = f64_hex(wd.led_spent),
 			led_repro_loss = f64_hex(wd.led_repro_loss), led_died = f64_hex(wd.led_died),
+			led_eaten_open = f64_hex(wd.led_eaten_open), period_act = b64(wd.period_act), period_eff = b64(wd.period_eff),
 			total_births = wd.total_births, total_deaths = wd.total_deaths, period_births = wd.period_births,
 			period_deaths = wd.period_deaths, peak_population = wd.peak_population, next_milestone = wd.next_milestone,
 			extinct_tick = wd.extinct_tick,
@@ -133,6 +135,18 @@ static func from_dict(d: Variant) -> Dictionary:
 	wd.s_carry = _bytes(s, "carry").to_float64_array()
 	wd.s_mem = _bytes(s, "mem").to_float64_array()
 	wd.s_genome = _bytes(s, "genome").to_float32_array()
+	# v0.2 에서 더한 키(SLIMES_B64_ADDED·LINEAGE_B64_ADDED·STATS_*_ADDED): 옛 파일에 없으면 DESIGN-v0.2 9.1 의 값으로 채움
+	var n0 := wd.s_id.size()
+	if s.has("last_eff"):
+		wd.s_last_eff = _bytes(s, "last_eff")
+	else:
+		wd.s_last_eff.resize(n0)
+		wd.s_last_eff.fill(0)
+	if s.has("eaten"):
+		wd.s_eaten = _bytes(s, "eaten").to_float64_array()
+	else:
+		wd.s_eaten.resize(n0)
+		wd.s_eaten.fill(0.0)
 	var ln: Dictionary = d.lineage
 	wd.lin_pa = _bytes(ln, "pa").to_int32_array()
 	wd.lin_pb = _bytes(ln, "pb").to_int32_array()
@@ -144,12 +158,23 @@ static func from_dict(d: Variant) -> Dictionary:
 	wd.lin_size = _bytes(ln, "size").to_float32_array()
 	wd.lin_sense = _bytes(ln, "sense").to_float32_array()
 	wd.lin_hue = _bytes(ln, "hue").to_float32_array()
+	if ln.has("eaten"):
+		wd.lin_eaten = _bytes(ln, "eaten").to_float64_array()
+	else:
+		wd.lin_eaten.resize(wd.lin_pa.size())
+		wd.lin_eaten.fill(0.0)
 	var st: Dictionary = d.stats
 	wd.led_initial = hex_f64(st.led_initial)
 	wd.led_eaten = hex_f64(st.led_eaten)
 	wd.led_spent = hex_f64(st.led_spent)
 	wd.led_repro_loss = hex_f64(st.led_repro_loss)
 	wd.led_died = hex_f64(st.led_died)
+	# 개체별 먹은 양이 없던 옛 파일: 연 틱부터 셈(그때까지 먹은 양은 장부의 시작점으로)
+	wd.led_eaten_open = hex_f64(st.led_eaten_open) if st.has("led_eaten_open") else wd.led_eaten
+	if st.has("period_act"):
+		wd.period_act = _bytes(st, "period_act").to_int32_array()
+	if st.has("period_eff"):
+		wd.period_eff = _bytes(st, "period_eff").to_int32_array()
 	wd.total_births = int(st.total_births)
 	wd.total_deaths = int(st.total_deaths)
 	wd.period_births = int(st.period_births)
@@ -199,8 +224,11 @@ static func from_text(text: String) -> Dictionary:
 	return from_dict(d)
 
 
-## 스냅숏 형식 1 을 만든 뒤에 더한 설정 키. 옛 스냅숏에 없으면 기본값(= 그 키가 생기기 전 코드의 동작)으로 채운다.
-const CONFIG_KEYS_ADDED: Array[String] = ["time.night_light_threshold"]
+## 스냅숏 형식 1 을 만든 뒤에 더한 설정 키(있는 절의 새 잎). 옛 스냅숏에 없으면 기본값(= 그 키가 생기기 전 코드의 동작)으로 채운다.
+const CONFIG_KEYS_ADDED: Array[String] = ["time.night_light_threshold", "repro.inherit"]
+## 형식 1 을 만든 뒤에 더한 설정 절(DESIGN-v0.2 8·9.2). 옛 스냅숏에 그 절이 통째로 없으면 기본값 절을 통째로 넣는다
+## (CONFIG_KEYS_ADDED 는 절이 있을 때만 잎을 채우므로). 0단계에는 아직 없음 — 1단계부터 learn 등.
+const SECTIONS_ADDED: Array[String] = []
 ## 하위 절의 키(값 종류: b64 = base64 글자, hex = float64 비트 16진 글자, int = 정수인 수).
 const MAP_B64: Array[String] = ["tiles", "fert", "base_fert", "food", "dropped", "drop_timer", "drop_list", "sat", "farm_visit", "farms"]
 const CIV_B64: Array[String] = ["drop_total_tile", "region_drop", "store_tiles", "store_food"]
@@ -212,16 +240,31 @@ const SLIMES_B64: Array[String] = ["id", "x", "y", "head", "age", "gen", "max_ag
 const LINEAGE_B64: Array[String] = ["pa", "pb", "gen", "birth", "death", "cause", "children", "size", "sense", "hue"]
 const STATS_HEX: Array[String] = ["led_initial", "led_eaten", "led_spent", "led_repro_loss", "led_died"]
 const STATS_INT: Array[String] = ["total_births", "total_deaths", "period_births", "period_deaths", "peak_population", "next_milestone", "extinct_tick"]
+## v0.2 에서 더한 키(DESIGN-v0.2 9.1). 있으면 꼴·길이를 검사하고, 옛 스냅숏에 없으면 9.1 표의 '옛 파일에 없으면' 값으로 채운다:
+## slimes.last_eff·eaten = 0, lineage.eaten = 0, stats.period_act·period_eff = 0 8개, stats.led_eaten_open = 연 틱의 led_eaten.
+const SLIMES_B64_ADDED: Array[String] = ["last_eff", "eaten"]
+const LINEAGE_B64_ADDED: Array[String] = ["eaten"]
+const STATS_B64_ADDED: Array[String] = ["period_act", "period_eff"]
+const STATS_HEX_ADDED: Array[String] = ["led_eaten_open"]
 ## 연대기 사건의 필수 키(글자·수)와, 있으면 수여야 하는 키.
 const EVENT_TEXT: Array[String] = ["kind", "text"]
 const EVENT_NUM: Array[String] = ["tick", "actor", "mean_gen"]
 const EVENT_OPT_NUM: Array[String] = ["stage", "tile"]
 
 
-## 설정 사본에 CONFIG_KEYS_ADDED 가운데 없는 키를 기본값으로 채운다(옛 스냅숏 열기).
+## SECTIONS_ADDED 를 검사가 바꿔 볼 수 있는 자리(시험용 새 절 — test_snapshot_v01_fixture). 평소에는 SECTIONS_ADDED 그대로.
+static var _sections_added: Array = SECTIONS_ADDED
+
+
+## 설정 사본을 옛 스냅숏용으로 채운다: SECTIONS_ADDED 가운데 통째로 없는 절은 기본값 절 그대로, 그다음 CONFIG_KEYS_ADDED 가운데
+## 없는 잎 키(절이 있을 때)는 기본값으로. 예전에는 잎만 채워 새 절을 기본값에 넣는 순간 옛 스냅숏이 모두 "설정 키가 없습니다"로
+## 거부됐을 것(DESIGN-v0.2 9.2).
 static func with_added_keys(config: Dictionary) -> Dictionary:
 	var out := config.duplicate(true)
 	var defs := SimConfig.defaults()
+	for sec_name in _sections_added:
+		if not out.has(sec_name) and typeof(defs.get(sec_name)) == TYPE_DICTIONARY:
+			out[sec_name] = (defs[sec_name] as Dictionary).duplicate(true)
 	for key in CONFIG_KEYS_ADDED:
 		var parts := key.split(".")
 		var sec = out.get(parts[0])
@@ -262,6 +305,13 @@ static func validate(d: Variant) -> String:
 		e = _check_keys(d.lineage, "lineage", LINEAGE_B64, [], [])
 	if e == "":
 		e = _check_keys(d.stats, "stats", [], STATS_INT, STATS_HEX)
+	# v0.2 에서 더한 키: 있을 때만 꼴을 봄(길이는 validate_world)
+	if e == "":
+		e = _check_keys(d.slimes, "slimes", _present(d.slimes, SLIMES_B64_ADDED), [], [])
+	if e == "":
+		e = _check_keys(d.lineage, "lineage", _present(d.lineage, LINEAGE_B64_ADDED), [], [])
+	if e == "":
+		e = _check_keys(d.stats, "stats", _present(d.stats, STATS_B64_ADDED), [], _present(d.stats, STATS_HEX_ADDED))
 	if e != "":
 		return e
 	for k in CIV_INT_ADDED:
@@ -303,6 +353,15 @@ static func _check_keys(sec: Dictionary, name: String, b64_keys: Array, int_keys
 		if not is_finite(hex_f64(v)):
 			return "%s.%s 가 유한한 수가 아닙니다" % [name, k]
 	return ""
+
+
+## keys 가운데 sec 에 있는 것만.
+static func _present(sec: Dictionary, keys: Array[String]) -> Array:
+	var out := []
+	for k in keys:
+		if sec.has(k):
+			out.append(k)
+	return out
 
 
 static func _is_num(v: Variant) -> bool:
@@ -354,8 +413,20 @@ static func validate_world(wd: SimWorld) -> String:
 		return "기억 배열 길이가 맞지 않습니다"
 	if not _finite(wd.s_genome) or not _finite(wd.s_mem) or not _finite(wd.s_carry):
 		return "유전체·기억·운반 값에 유한하지 않은 수가 있습니다"
+	if wd.s_last_eff.size() != n or wd.s_eaten.size() != n:
+		return "슬라임 배열 길이가 맞지 않습니다(last_eff·eaten)"
+	for v in wd.s_last_eff:
+		if v > 1:
+			return "개체의 효과 표시(last_eff)가 0·1 이 아닙니다"
+	if not _finite(wd.s_eaten) or not _finite(wd.lin_eaten):
+		return "먹은 양(eaten)에 유한하지 않은 수가 있습니다"
+	if wd.period_act.size() != SimBrain.BASE_OUTPUTS or wd.period_eff.size() != SimBrain.BASE_OUTPUTS:
+		return "행동 셈(period_act·period_eff)은 행동 %d개의 배열이어야 합니다" % SimBrain.BASE_OUTPUTS
+	for a in SimBrain.BASE_OUTPUTS:
+		if wd.period_act[a] < 0 or wd.period_eff[a] < 0 or wd.period_eff[a] > wd.period_act[a]:
+			return "행동 셈이 잘못되었습니다(행동 %d: 고름 %d, 효과 %d)" % [a, wd.period_act[a], wd.period_eff[a]]
 	var lc := wd.lin_pa.size()
-	for arr in [wd.lin_pb, wd.lin_gen, wd.lin_birth, wd.lin_death, wd.lin_cause, wd.lin_children, wd.lin_size, wd.lin_sense, wd.lin_hue]:
+	for arr in [wd.lin_pb, wd.lin_gen, wd.lin_birth, wd.lin_death, wd.lin_cause, wd.lin_children, wd.lin_size, wd.lin_sense, wd.lin_hue, wd.lin_eaten]:
 		if arr.size() != lc:
 			return "계통 배열 길이가 맞지 않습니다"
 	for id in lc:
@@ -386,7 +457,7 @@ static func validate_world(wd: SimWorld) -> String:
 		return "문명 단계가 잘못되었습니다"
 	if wd.tick < 0:
 		return "틱이 음수입니다"
-	for v in [wd.led_initial, wd.led_eaten, wd.led_spent, wd.led_repro_loss, wd.led_died, wd.store_drops_total]:
+	for v in [wd.led_initial, wd.led_eaten, wd.led_spent, wd.led_repro_loss, wd.led_died, wd.store_drops_total, wd.led_eaten_open]:
 		if not is_finite(v):
 			return "장부 값이 유한한 수가 아닙니다"
 	return ""

@@ -1,7 +1,7 @@
 class_name SimWorld
 extends RefCounted
 ## 슬라임 세계 한 개. Node·렌더링·입력·파일 대화상자 없이 규칙만 담는다(화면은 읽기만 한다).
-## 설계: docs/DESIGN-v0.1.md. 화면이 쓰는 질의 목록: docs/SIM-API.md.
+## 설계: docs/DESIGN-v0.1.md(v0.2 에서 더한 관찰·우연 기준은 docs/DESIGN-v0.2.md). 화면이 쓰는 질의 목록: docs/SIM-API.md.
 ##
 ## 한 틱 순서: ① 빛·계절, 버려진 밭 → 풀밭(매 틱) ② (plants.update_every 마다) 식물 성장·누적 합 표 ③ 슬라임마다(id 오름차순)
 ## 감지 → 판단 → 행동 → 대사 ④ 번식 ⑤ 사망 정리 ⑥ 바닥 먹이 썩음·싹 ⑦ 채집·농사 발견 판정 ⑧ 기록·해시.
@@ -28,6 +28,10 @@ const TURN_BACK_SIGN := 1.0
 const LIFE_SEED_SALT := 0x5bd1e995
 ## 연대기에 적는 평균 세대의 반올림 단위(JSON 왕복에서 글자가 바뀌지 않게).
 const EVENT_GEN_STEP := 0.01
+## repro.inherit 의 고를 값(SimConfig.CHOICES 와 같음 — 검사): 자식 두뇌 = 부모 교차·돌연변이(v0.1) / 새 무작위 유전체(우연 기준,
+## DESIGN-v0.2 11.3).
+const INHERIT_GENOME := "genome"
+const INHERIT_RANDOM := "random"
 
 var cfg: Dictionary = {}
 var L: Dictionary = {}
@@ -86,6 +90,10 @@ var s_energy := PackedFloat64Array()
 var s_carry := PackedFloat64Array()
 var s_mem := PackedFloat64Array()
 var s_genome := PackedFloat32Array()
+## 이번 틱 행동에 효과가 났는지(1/0 — DESIGN-v0.2 11.1, 갓 태어난 개체는 0). 관찰용이라 역사에 닿지 않음.
+var s_last_eff := PackedByteArray()
+## 태어난 뒤 먹은 에너지(장부 led_eaten 과 같은 값을 개체마다 — DESIGN-v0.2 12.2).
+var s_eaten := PackedFloat64Array()
 # ── 슬라임(유전체에서 계산, 저장 안 함) ──
 var s_size := PackedFloat64Array()
 var s_sense := PackedInt32Array()
@@ -103,6 +111,8 @@ var lin_children := PackedInt32Array()
 var lin_size := PackedFloat32Array()
 var lin_sense := PackedFloat32Array()
 var lin_hue := PackedFloat32Array()
+## 평생 먹은 에너지(⑤ 에서 죽을 때 s_eaten 을 옮겨 씀 — 살아 있는 개체는 0, lineage.csv 의 eaten 은 s_eaten).
+var lin_eaten := PackedFloat64Array()
 
 # ── 장부·통계 ──
 var led_initial := 0.0
@@ -110,10 +120,16 @@ var led_eaten := 0.0
 var led_spent := 0.0
 var led_repro_loss := 0.0
 var led_died := 0.0
+## 먹은 양 장부의 시작점: 이 세계에서 개체별로 세기 시작할 때의 led_eaten(setup = 0, 개체별 셈이 없던 옛 스냅숏을 연 세계 = 연 때의 값).
+## 죽은 개체 lin_eaten 합 + 살아 있는 s_eaten 합 = led_eaten − led_eaten_open(DESIGN-v0.2 12.2).
+var led_eaten_open := 0.0
 var total_births := 0
 var total_deaths := 0
 var period_births := 0
 var period_deaths := 0
+## 구간(앞 기록 줄 뒤) 행동별 고른 횟수·효과가 난 횟수(행동 번호 SimBrain.ACT_* 가 첨자, DESIGN-v0.2 11.1). sample() 이 0 으로 되돌림.
+var period_act := PackedInt32Array()
+var period_eff := PackedInt32Array()
 var peak_population := 0
 var next_milestone := 0
 var extinct_tick := -1
@@ -159,6 +175,7 @@ var _forage_frac := 0.0
 var _store_cap := 0.0
 var _sample_policy := true
 var _sharpness := 1
+var _inherit_random := false
 
 
 # ════════════════════════════ 만들기 ════════════════════════════
@@ -236,7 +253,12 @@ func _load_config(config: Dictionary) -> void:
 	_store_cap = float(cfg.store.capacity)
 	_sample_policy = str(cfg.brain.policy) == SimBrain.POLICY_SAMPLE
 	_sharpness = int(cfg.brain.sharpness)
+	_inherit_random = str(cfg.repro.inherit) == INHERIT_RANDOM
 	_wts.resize(SimBrain.BASE_OUTPUTS)
+	period_act.resize(SimBrain.BASE_OUTPUTS)
+	period_act.fill(0)
+	period_eff.resize(SimBrain.BASE_OUTPUTS)
+	period_eff.fill(0)
 	_in.resize(_n_in)
 	_hid.resize(_n_hid)
 	_out.resize(_n_out)
@@ -311,6 +333,8 @@ func _spawn(x: int, y: int, head: int, g: PackedFloat32Array, energy: float, gen
 	for k in _n_mem:
 		s_mem.append(0.0)
 	s_genome.append_array(g)
+	s_last_eff.append(0)
+	s_eaten.append(0.0)
 	_append_derived(g)
 	s_dead.append(0)
 	count_grid[y * w + x] += 1
@@ -324,6 +348,7 @@ func _spawn(x: int, y: int, head: int, g: PackedFloat32Array, energy: float, gen
 	lin_size.append(g[_to + SimBrain.TRAIT_SIZE])
 	lin_sense.append(g[_to + SimBrain.TRAIT_SENSE])
 	lin_hue.append(g[_to + SimBrain.TRAIT_HUE])
+	lin_eaten.append(0.0)
 	return id
 
 
@@ -529,6 +554,8 @@ func _act(i: int) -> void:
 		action = _think(i, x, y, c, hd, emax)
 		s_last_action[i] = action
 	var cost := _metab_base * size + _metab_sense * float(s_sense[i])
+	# 효과(DESIGN-v0.2 11.1): 돌기·쉬기는 늘, 나머지는 실제로 무언가 바뀐 때만(관찰용 — 역사·난수에 닿지 않음)
+	var eff := false
 	match action:
 		SimBrain.ACT_FORWARD:
 			var nx: int = x + SimGrid.DX[hd]
@@ -541,27 +568,37 @@ func _act(i: int) -> void:
 					s_x[i] = nx
 					s_y[i] = ny
 					cost += _metab_move * size
+					eff = true
 					if tiles[nc] == SimGrid.TILE_FARM:
 						farm_visit[nc] = tick
 		SimBrain.ACT_LEFT:
 			s_head[i] = SimGrid.left_of(hd)
+			eff = true
 		SimBrain.ACT_RIGHT:
 			s_head[i] = SimGrid.right_of(hd)
+			eff = true
 		SimBrain.ACT_EAT:
-			_eat(i, c, size, emax)
+			eff = _eat(i, c, size, emax) > 0.0
 		SimBrain.ACT_REST:
 			cost *= _rest
+			eff = true
 		SimBrain.ACT_GATHER:
 			if stage >= STAGE_FORAGE:
-				_gather(i, c, size)
+				eff = _gather(i, c, size) > 0.0
 			elif food[c] + dropped[c] > 0.0 and s_energy[i] >= _forage_frac * emax:
 				forage_attempts += 1
 		SimBrain.ACT_DROP:
 			if s_carry[i] > 0.0:
-				_drop(i, c)
+				eff = _drop(i, c) > 0.0
 		SimBrain.ACT_PLANT:
 			if stage >= STAGE_FARM:
-				_plant(i, x, y, hd)
+				eff = _plant(i, x, y, hd)
+	period_act[action] += 1
+	if eff:
+		period_eff[action] += 1
+		s_last_eff[i] = 1
+	else:
+		s_last_eff[i] = 0
 	s_energy[i] -= cost
 	led_spent += cost
 	s_age[i] += 1
@@ -700,11 +737,12 @@ func _dist_at(x: int, y: int) -> int:
 	return store_dist[y * w + x]
 
 
-## 먹기: 저장고 칸이면 저장분, 아니면 식물 → 바닥 먹이 → 운반분 순서. 배가 차는 만큼만 먹는다.
-func _eat(i: int, c: int, size: float, emax: float) -> void:
+## 먹기: 저장고 칸이면 저장분, 아니면 식물 → 바닥 먹이 → 운반분 순서. 배가 차는 만큼만 먹는다. 얻은 에너지를 돌려준다
+## (장부 led_eaten 과 개체의 s_eaten 에 같은 값을 더함).
+func _eat(i: int, c: int, size: float, emax: float) -> float:
 	var room := (emax - s_energy[i]) / _eff
 	if room <= 0.0:
-		return
+		return 0.0
 	var want := minf(_bite * size, room)
 	var got := 0.0
 	var st := store_at[c]
@@ -723,40 +761,48 @@ func _eat(i: int, c: int, size: float, emax: float) -> void:
 		var t3 := minf(want - got, s_carry[i])
 		s_carry[i] -= t3
 		got += t3
-	s_energy[i] += got * _eff
-	led_eaten += got * _eff
+	var e := got * _eff
+	s_energy[i] += e
+	led_eaten += e
+	s_eaten[i] += e
+	return e
 
 
-func _gather(i: int, c: int, size: float) -> void:
+## 줍기(채집 발견 뒤): 바닥 먹이 → 식물 순서로 운반 상한까지. 주운 양을 돌려준다.
+func _gather(i: int, c: int, size: float) -> float:
 	var room := _carry_max * size - s_carry[i]
 	if room <= 0.0:
-		return
+		return 0.0
 	var want := minf(_bite * size, room)
 	var t1 := minf(want, dropped[c])
 	dropped[c] -= t1
 	var t2 := minf(want - t1, food[c])
 	food[c] -= t2
 	s_carry[i] += t1 + t2
+	return t1 + t2
 
 
-func _drop(i: int, c: int) -> void:
+## 내려놓기: 저장고 칸이면 용량까지 저장분으로, 아니면 운반분 전부를 바닥 먹이로. 운반에서 나간 양을 돌려준다
+## (저장고가 가득하면 0).
+func _drop(i: int, c: int) -> float:
 	var amount := s_carry[i]
 	var st := store_at[c]
 	if st != NO_STORE:
 		var put := minf(amount, _store_cap - store_food[st])
 		store_food[st] += put
 		s_carry[i] -= put
-		return
+		return put
 	s_carry[i] = 0.0
 	_put_dropped(c, amount)
 	if stage < STAGE_FORAGE:
-		return
+		return amount
 	store_drops_total += amount
 	drop_total_tile[c] += amount
 	var rs := int(cfg.discovery.region_size)
 	var r := (c / w / rs) * regions_x + (c % w) / rs
 	region_drop[r] += amount
 	_check_store_region(r)
+	return amount
 
 
 ## 죽은 개체의 운반분을 칸에 내려놓는다: 저장고 칸이면 용량까지 저장분으로, 남은 몫(과 저장고가 아닌 칸)은 바닥 먹이.
@@ -780,17 +826,18 @@ func _put_dropped(c: int, amount: float) -> void:
 		drop_list.append(c)
 
 
-func _plant(i: int, x: int, y: int, hd: int) -> void:
+## 심기(농사 발견 뒤): 앞 칸이 저장고에서 farm.radius 안 풀밭이고 씨앗 비용만큼 운반하고 있으면 밭. 밭이 생겼는지 돌려준다.
+func _plant(i: int, x: int, y: int, hd: int) -> bool:
 	var seed_cost := float(cfg.farm.seed_cost)
 	if s_carry[i] < seed_cost:
-		return
+		return false
 	var nx: int = x + SimGrid.DX[hd]
 	var ny: int = y + SimGrid.DY[hd]
 	if nx < 0 or ny < 0 or nx >= w or ny >= h:
-		return
+		return false
 	var nc := ny * w + nx
 	if tiles[nc] != SimGrid.TILE_GRASS or store_at[nc] != NO_STORE or store_dist[nc] > int(cfg.farm.radius):
-		return
+		return false
 	s_carry[i] -= seed_cost
 	tiles[nc] = SimGrid.TILE_FARM
 	fert[nc] = 1.0
@@ -800,6 +847,7 @@ func _plant(i: int, x: int, y: int, hd: int) -> void:
 	if first_farm_tick == -1:
 		first_farm_tick = tick
 		_event("first_farm", s_id[i], "첫 밭 — #%d, (%d, %d) 에 심음" % [s_id[i], nx, ny])
+	return true
 
 
 # ── 번식 ──
@@ -864,10 +912,15 @@ func _reproduce() -> void:
 		s_last_repro[b] = tick
 		_mated[i] = 1
 		_mated[b] = 1
-		var ga := s_genome.slice(i * _G, (i + 1) * _G)
-		var gb := s_genome.slice(b * _G, (b + 1) * _G)
-		var g := SimBrain.crossover(L, ga, gb, rng_life)
-		SimBrain.mutate(cfg, L, g, rng_life)
+		var g: PackedFloat32Array
+		if _inherit_random:
+			# 우연 기준(DESIGN-v0.2 11.3): 부모와 상관없는 새 무작위 유전체(rng_life — 이 경우에만 교차·돌연변이 대신 뽑음)
+			g = SimBrain.random_genome(cfg, L, rng_life)
+		else:
+			var ga := s_genome.slice(i * _G, (i + 1) * _G)
+			var gb := s_genome.slice(b * _G, (b + 1) * _G)
+			g = SimBrain.crossover(L, ga, gb, rng_life)
+			SimBrain.mutate(cfg, L, g, rng_life)
 		# 자식 에너지는 자식의 최대 에너지까지(넘친 몫은 효율 손실과 함께 사라짐 — 장부 led_repro_loss)
 		var e_child := minf((ca + cb) * teff, float(cfg.body.energy_per_size) * float(g[_to + SimBrain.TRAIT_SIZE]))
 		led_repro_loss += (ca + cb) * (1.0 - teff) + ((ca + cb) * teff - e_child)
@@ -902,6 +955,7 @@ func _remove_dead() -> void:
 			var id := s_id[i]
 			lin_death[id] = tick
 			lin_cause[id] = s_dead[i]
+			lin_eaten[id] = s_eaten[i]
 			var c := s_y[i] * w + s_x[i]
 			count_grid[c] -= 1
 			if s_carry[i] > 0.0:
@@ -925,6 +979,8 @@ func _remove_dead() -> void:
 			s_size[k] = s_size[i]
 			s_sense[k] = s_sense[i]
 			s_emax[k] = s_emax[i]
+			s_last_eff[k] = s_last_eff[i]
+			s_eaten[k] = s_eaten[i]
 			s_dead[k] = 0
 			for m in _n_mem:
 				s_mem[k * _n_mem + m] = s_mem[i * _n_mem + m]
@@ -943,6 +999,8 @@ func _remove_dead() -> void:
 	s_carry.resize(k)
 	s_size.resize(k)
 	s_emax.resize(k)
+	s_last_eff.resize(k)
+	s_eaten.resize(k)
 	s_dead.resize(k)
 	s_mem.resize(k * _n_mem)
 	s_genome = genome
@@ -1246,7 +1304,7 @@ func children_of(id: int, limit: int) -> PackedInt32Array:
 	return out
 
 
-## 시계열 한 줄(기록기가 CSV 로 씀). 호출하면 기간 출생·사망 수를 0 으로 되돌린다.
+## 시계열 한 줄(기록기가 CSV 로 씀). 호출하면 기간 출생·사망 수와 행동 셈(period_act·period_eff)을 0 으로 되돌린다.
 func sample() -> Dictionary:
 	var stored := sum_of(store_food)
 	var row := {
@@ -1258,8 +1316,14 @@ func sample() -> Dictionary:
 		civ_stage = stage, storehouses = store_tiles.size(), farms = farms.size(),
 		forage_attempts = forage_attempts, store_drops = store_drops_total, farm_sprouts = farm_sprouts,
 	}
+	# v0.2 열(DESIGN-v0.2 9.3 — v0.1 열 뒤): 구간 행동별 고른 횟수·효과 횟수
+	for a in SimBrain.BASE_OUTPUTS:
+		row[SimRecorder.ACT_COLUMNS[a]] = period_act[a]
+		row[SimRecorder.EFF_COLUMNS[a]] = period_eff[a]
 	period_births = 0
 	period_deaths = 0
+	period_act.fill(0)
+	period_eff.fill(0)
 	return row
 
 

@@ -4,13 +4,21 @@ extends RefCounted
 ## CSV: BOM 붙은 UTF-8(한국어 Windows 엑셀이 두 번 클릭으로 열어도 한글이 깨지지 않게), 쉼표, 영문 snake_case 열 이름,
 ## 소수점 ".". BOM 은 파일에 쓸 때만 붙인다(timeseries_csv() 같은 글에는 없음 — Godot 의 파일 읽기는 BOM 을 건너뜀).
 
+## 시계열 열: v0.1 22열(순서·값·뜻 그대로) 뒤에 v0.2 열을 단계마다 끝에 붙인다(DESIGN-v0.2 9.3). 0단계 = ACT_COLUMNS·EFF_COLUMNS
+## (이 목록은 v0.1 22열 + ACT_COLUMNS + EFF_COLUMNS 를 그대로 이은 것 — 검사 test_act_counts).
 const TIMESERIES_COLUMNS: Array[String] = [
 	"tick", "day", "season", "light", "population", "births", "deaths", "mean_gen", "mean_energy",
 	"mean_size", "mean_sense", "mean_age", "food_total", "dropped_total", "stored_total", "carry_total",
 	"civ_stage", "storehouses", "farms", "forage_attempts", "store_drops", "farm_sprouts",
+	"act_forward", "act_left", "act_right", "act_eat", "act_rest", "act_gather", "act_drop", "act_plant",
+	"eff_forward", "eff_left", "eff_right", "eff_eat", "eff_rest", "eff_gather", "eff_drop", "eff_plant",
 ]
+## 구간 행동별 고른 횟수·효과가 난 횟수 열(행동 번호 SimBrain.ACT_* 순서 — SimWorld.period_act·period_eff, DESIGN-v0.2 11.1).
+const ACT_COLUMNS: Array[String] = ["act_forward", "act_left", "act_right", "act_eat", "act_rest", "act_gather", "act_drop", "act_plant"]
+const EFF_COLUMNS: Array[String] = ["eff_forward", "eff_left", "eff_right", "eff_eat", "eff_rest", "eff_gather", "eff_drop", "eff_plant"]
 const CHRONICLE_COLUMNS: Array[String] = ["tick", "mean_gen", "kind", "actor_id", "text"]
-const LINEAGE_COLUMNS: Array[String] = ["id", "parent_a", "parent_b", "gen", "birth_tick", "death_tick", "death_cause", "children", "size", "sense", "hue"]
+## 계통 열: v0.1 11열 뒤에 v0.2 열(DESIGN-v0.2 9.4). eaten = 평생 먹은 에너지(죽은 개체는 죽을 때, 살아 있는 개체는 쓸 때의 값).
+const LINEAGE_COLUMNS: Array[String] = ["id", "parent_a", "parent_b", "gen", "birth_tick", "death_tick", "death_cause", "children", "size", "sense", "hue", "eaten"]
 ## CSV 실수 소수 자릿수
 const DECIMALS := 6
 ## UTF-8 BOM(EF BB BF).
@@ -55,10 +63,14 @@ static func chronicle_csv(world: SimWorld) -> String:
 
 static func lineage_csv(world: SimWorld) -> String:
 	var lines := PackedStringArray([",".join(LINEAGE_COLUMNS)])
+	# 평생 먹은 양: 죽은 개체는 lin_eaten, 살아 있는 개체는 지금의 s_eaten
+	var eaten := world.lin_eaten.duplicate()
+	for i in world.s_id.size():
+		eaten[world.s_id[i]] = world.s_eaten[i]
 	for id in world.lin_pa.size():
 		lines.append(",".join([str(id), str(world.lin_pa[id]), str(world.lin_pb[id]), str(world.lin_gen[id]),
 				str(world.lin_birth[id]), str(world.lin_death[id]), str(world.lin_cause[id]), str(world.lin_children[id]),
-				fmt(float(world.lin_size[id])), fmt(float(world.lin_sense[id])), fmt(float(world.lin_hue[id]))]))
+				fmt(float(world.lin_size[id])), fmt(float(world.lin_sense[id])), fmt(float(world.lin_hue[id])), fmt(eaten[id])]))
 	return "\n".join(lines) + "\n"
 
 

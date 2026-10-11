@@ -259,7 +259,7 @@ func _snapshot(t, lab: LabMain) -> void:
 	t.check(pp.open_snapshot_from(TMP.path_join("cmp-B.json")) == "" and not lab.is_comparing() and lab.world.history_hash == hb and lab.world.tick == tb
 			and lab.world.seed_value == 2, "B 스냅숏을 열면 혼자 모드로 B 의 세계(틱 %d, 해시 같음)" % tb)
 	var dopen := WorldCompare.diff(fp_b, lab.world, WorldCompare.OPENED_IGNORE)
-	t.check(dopen == "", "연 B 세계 = 저장한 B 세계(스냅숏 모든 절 — 열 때 첫 기록 줄이 가져간 기간 출생·사망 수만 빼고) %s" % dopen)
+	t.check(dopen == "", "연 B 세계 = 저장한 B 세계(스냅숏 모든 절 — 열 때 첫 기록 줄이 가져간 기간 출생·사망 수·행동 셈만 빼고) %s" % dopen)
 	t.check(not pp.is_compare_mode() and pp.status_text() == ParamPanel.TEXT_SAME, "스냅숏을 열면 비교 모드 끔·\"%s\"" % ParamPanel.TEXT_SAME)
 	t.check(lab.graph_panel.series_points(0, 0) == 1 and lab.graph_panel.legend_texts().size() == 1, "그래프는 연 스냅숏의 첫 줄부터(범례 하나)")
 	t.check(lab.chronicle_panel.item_count() == mini(lab.world.chronicle.size(), lab.chronicle_panel.max_items) and lab.chronicle_panel.item_count() > 0,

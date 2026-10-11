@@ -86,8 +86,15 @@ def validate_rules() -> dict[str, tuple[float, float, bool, bool]]:
 
 
 def array_rules() -> dict[str, tuple[float, float, bool, bool]]:
-    """SimConfig.ARRAY_RULES — 배열 잎 키 원소의 [키, 하한, 상한]."""
+    """SimConfig.ARRAY_RULES — 배열 잎 키 원소의 [키, 하한, 상한(, INT_ELEMS)]."""
     return _rules("ARRAY_RULES")
+
+
+def int_elem_keys(block: str | None = None) -> set[str]:
+    """ARRAY_RULES 가운데 넷째 칸이 INT_ELEMS(원소가 정수 — DESIGN-v0.2 9.2)인 배열 키."""
+    if block is None:
+        block = _block(_sim_config_text(), "ARRAY_RULES")
+    return {m.group(1) for m in RULE_RE.finditer(block) if m.group(4) == "INT_ELEMS"}
 
 
 def choices() -> dict[str, list[str]]:
@@ -133,7 +140,7 @@ def render_doc() -> str:
         "- 규칙의 자세한 식은 [`DESIGN-v0.1.md`](DESIGN-v0.1.md) 1~7절, 발견(`discovery.*`) 임계를 고른 기록은"
         " [`TUNING-fast_civ.md`](TUNING-fast_civ.md).",
         "- 정수 키는 파일에 소수점 없이 적힌 키입니다(소수는 거부 — 검사, 패널도 정수만 받음). 틱 단위 키의 상한 1e9 ="
-        " `SimConfig.TICK_MAX`(틱 값을 32비트 정수 배열에 담음). 배열·글자 키(`seasons.growth`·`brain.policy`)는 패널에서 보기만 합니다.",
+        " `SimConfig.TICK_MAX`(틱 값을 32비트 정수 배열에 담음). 배열·글자 키(`seasons.growth`·`brain.policy`·`repro.inherit`)는 패널에서 보기만 합니다.",
         "",
     ]
     by_sec: dict[str, list[tuple[str, str, object]]] = {}
@@ -184,6 +191,7 @@ class TestSimLabels(unittest.TestCase):
 
     def test_every_range_is_checked(self) -> None:
         rules, arrays, chs = validate_rules(), array_rules(), choices()
+        int_elems = int_elem_keys()
         self.assertGreater(len(rules), 50, "validate 규칙을 찾지 못함(정규식 확인)")
         self.assertEqual(sorted(k for k in self.keys if "(검사)" not in str(self.labels.get(k, {}).get("range", ""))), [],
                          "범위가 검사되지 않는 키(이름표에 (검사) 없음)")
@@ -211,6 +219,8 @@ class TestSimLabels(unittest.TestCase):
                 lo, hi, _, _ = arrays[key]
                 if lo not in nums or hi not in nums or float(len(v)) not in nums:
                     bad.append(f"{key}: 원소 {len(v)}개 [{lo}, {hi}] ≠ \"{rng}\"")
+                if ("정수" in rng) != (key in int_elems):
+                    bad.append(f"{key}: 정수 원소 규칙(INT_ELEMS) {'있음' if key in int_elems else '없음'} ≠ \"{rng}\"")
             elif isinstance(v, str):
                 if key not in chs:
                     bad.append(f"{key}: SimConfig.CHOICES 에 없음")
@@ -227,6 +237,7 @@ class TestSimLabels(unittest.TestCase):
     def test_defaults_and_presets_inside_rules(self) -> None:
         """기본값과 예설정 값이 규칙 안(정수 키는 정수) — 규칙이 기본 실험을 막지 않게."""
         rules, arrays, chs = validate_rules(), array_rules(), choices()
+        int_elems = int_elem_keys()
         flat = {f"{s}.{k}": v for s, k, v in leaves(self.defaults)}
         cases = [("기본", flat)]
         for name, p in load(PRESETS).items():
@@ -238,7 +249,7 @@ class TestSimLabels(unittest.TestCase):
                 if key in rules and not isinstance(v, bool):
                     if not in_rule(float(v), rules[key]) or (isinstance(flat[key], int) and float(v) != int(v)):
                         bad.append(f"{name}: {key} = {v}")
-                elif key in arrays and not all(in_rule(float(x), arrays[key]) for x in v):
+                elif key in arrays and not all(in_rule(float(x), arrays[key]) and (key not in int_elems or float(x) == int(x)) for x in v):
                     bad.append(f"{name}: {key} = {v}")
                 elif key in chs and v not in chs[key]:
                     bad.append(f"{name}: {key} = {v}")
@@ -252,6 +263,10 @@ class TestSimLabels(unittest.TestCase):
         self.assertEqual(rules.get("life.max_age", (0, 0))[1], 1e9, "TICK_MAX 상수를 풂")
         self.assertEqual(choices().get("brain.policy"), ["sample", "argmax"])
         self.assertEqual(array_rules().get("seasons.growth", (0, 0))[:2], (0.0, 100.0))
+        # 정수 원소 규칙(DESIGN-v0.2 9.2): 넷째 칸 INT_ELEMS 를 읽음(0단계에는 그런 키가 아직 없어 꾸민 블록으로)
+        probe = '[\n\t["seasons.growth", 0.0, 100.0],\n\t["material.base_props", 0, 15, INT_ELEMS],\n'
+        self.assertEqual(int_elem_keys(probe), {"material.base_props"})
+        self.assertNotIn("seasons.growth", int_elem_keys())
 
     def test_section_names(self) -> None:
         sections = self.labels.get("_sections", {})

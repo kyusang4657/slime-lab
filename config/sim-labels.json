@@ -48,6 +48,7 @@
 	"repro.cooldown": {"name": "번식 쉬는 시간", "unit": "틱", "range": "0~1e9 (검사)", "help": "번식한 뒤 이 틱 동안은 다시 번식하지 않음(0 이어도 한 틱에 한 번만 짝지음)"},
 	"repro.mate_radius": {"name": "짝 찾기 반경", "unit": "칸", "range": "0~100000 (검사)", "help": "이 반경(정사각형) 안에서 번식 조건을 갖춘 개체 가운데 id 가 가장 작은 개체와 짝지음"},
 	"repro.asexual_when_alone": {"name": "혼자면 분열", "unit": "참·거짓", "range": "true / false (검사)", "help": "켜면 짝이 없을 때도 번식 조건만 맞으면(에너지가 가득할 필요 없음) 혼자 분열 — 자기 유전체를 베껴 돌연변이, 비용은 자기 몫만. 계통 기록(lineage.csv)의 둘째 부모 parent_b 는 -1"},
+	"repro.inherit": {"name": "자식 두뇌", "unit": "글자", "range": "\"genome\" / \"random\" (검사)", "help": "genome = 부모 둘(혼자 분열이면 자기)의 유전체를 교차·돌연변이(v0.1 그대로), random = 부모와 상관없는 새 무작위 유전체(가중치 균등 뽑기, 크기·감지 = traits.*_init, 색 균등) — 유전이 없는 우연 기준(예설정 chance_baseline, DESIGN-v0.2 11.3). 자식 에너지·위치·부모 기록은 같음. 패널에서는 보기만 함"},
 	"population.initial": {"name": "초기 개체 수", "unit": "마리", "range": "0~100000 (검사)", "help": "처음에 지나갈 수 있는 칸에 흩어 놓는 개체 수(패널에서는 개체 상한 이하만). 처음부터 개체가 없으면(0, 또는 지나갈 칸이 없음) 틱 0 에 멸종으로 기록"},
 	"population.cap": {"name": "개체 상한", "unit": "마리", "range": "1~100000 (검사)", "help": "살아 있는 개체가 이 수에 이르면 번식하지 않음(폭주 방지·성능)"},
 	"population.initial_age_spread": {"name": "초기 나이 흩어짐", "unit": "틱", "range": "0~1e9 (검사)", "help": "초기 개체의 나이를 0 ~ 이 값에서 고름(한꺼번에 늙어 죽지 않게)"},

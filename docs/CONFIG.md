@@ -6,7 +6,7 @@
 
 - **범위**는 모두 "(검사)" = `SimConfig.validate` 가 막는 범위입니다(밖이면 실험을 만들지 않고 패널은 그 줄 아래 오류). 규칙은 `scripts/sim/sim_config.gd` 의 `RULES`·`ARRAY_RULES`·`CHOICES` 와 관계 검사(크기·감지 초기값, 해 뜨고 지는 시간, 수명 흔들림)이고 `tools/test_sim_labels.py` 가 이 표의 범위 글과 대조합니다. "0 초과" 는 0 을 뺀 범위(나눗수로 쓰이는 값).
 - 규칙의 자세한 식은 [`DESIGN-v0.1.md`](DESIGN-v0.1.md) 1~7절, 발견(`discovery.*`) 임계를 고른 기록은 [`TUNING-fast_civ.md`](TUNING-fast_civ.md).
-- 정수 키는 파일에 소수점 없이 적힌 키입니다(소수는 거부 — 검사, 패널도 정수만 받음). 틱 단위 키의 상한 1e9 = `SimConfig.TICK_MAX`(틱 값을 32비트 정수 배열에 담음). 배열·글자 키(`seasons.growth`·`brain.policy`)는 패널에서 보기만 합니다.
+- 정수 키는 파일에 소수점 없이 적힌 키입니다(소수는 거부 — 검사, 패널도 정수만 받음). 틱 단위 키의 상한 1e9 = `SimConfig.TICK_MAX`(틱 값을 32비트 정수 배열에 담음). 배열·글자 키(`seasons.growth`·`brain.policy`·`repro.inherit`)는 패널에서 보기만 합니다.
 
 ## 지도 · `map`
 
@@ -104,6 +104,7 @@
 | `repro.cooldown` | 번식 쉬는 시간 | `10` | 틱 | 0~1e9 (검사) | 번식한 뒤 이 틱 동안은 다시 번식하지 않음(0 이어도 한 틱에 한 번만 짝지음) |
 | `repro.mate_radius` | 짝 찾기 반경 | `2` | 칸 | 0~100000 (검사) | 이 반경(정사각형) 안에서 번식 조건을 갖춘 개체 가운데 id 가 가장 작은 개체와 짝지음 |
 | `repro.asexual_when_alone` | 혼자면 분열 | `false` | 참·거짓 | true / false (검사) | 켜면 짝이 없을 때도 번식 조건만 맞으면(에너지가 가득할 필요 없음) 혼자 분열 — 자기 유전체를 베껴 돌연변이, 비용은 자기 몫만. 계통 기록(lineage.csv)의 둘째 부모 parent_b 는 -1 |
+| `repro.inherit` | 자식 두뇌 | `"genome"` | 글자 | "genome" / "random" (검사) | genome = 부모 둘(혼자 분열이면 자기)의 유전체를 교차·돌연변이(v0.1 그대로), random = 부모와 상관없는 새 무작위 유전체(가중치 균등 뽑기, 크기·감지 = traits.*_init, 색 균등) — 유전이 없는 우연 기준(예설정 chance_baseline, DESIGN-v0.2 11.3). 자식 에너지·위치·부모 기록은 같음. 패널에서는 보기만 함 |
 
 ## 개체군 · `population`
 
@@ -219,3 +220,4 @@
 | `fast_civ` | 빠른 문명 | `discovery.forage_threshold` = `280`, `discovery.store_threshold` = `30.0`, `discovery.region_size` = `16`, `discovery.farm_radius` = `16`, `discovery.farm_threshold` = `15` | 연구용: 씨앗 12개 중 11개는 발견이 진화 도중에 열림(씨앗 7 은 첫 세대 폭발로 2세대 안에 채집·저장·농사), 씨앗 1~12 모두 100세대 안에 농사(중앙값 14.3세대 — 규칙 고침 뒤 다시 잼, 씨앗 1·7 은 농사 뒤 멸종). 근거·씨앗별 결과는 docs/TUNING-fast_civ.md |
 | `demo_fast` | 시연·검사용(아주 빠른 발견) | `discovery.forage_threshold` = `120`, `discovery.store_threshold` = `30.0`, `discovery.farm_threshold` = `8` | 예전 fast_civ 값. 씨앗 1~12 의 농사 중앙값 2.3세대(대부분 첫 세대 폭발), 씨앗 1 은 13.2세대(1,037틱) — 그래프·연대기 캡처는 씨앗 1, 농사 장면 캡처(ui_driver·map_capture·perf_capture)는 씨앗 11 |
 | `no_resources` | 자원 없음 | `resources.scale` = `0.0`, `plants.initial_fill` = `0.0` | — |
+| `chance_baseline` | 우연 기준(유전 없음) | `repro.inherit` = `"random"` | 연구용 대조: 자식이 부모와 상관없는 새 무작위 두뇌를 받아 진화가 없음(docs/DESIGN-v0.2.md 11.3). 문명 지표(행동 비율 등)는 같은 틱의 이 기준과의 차이로 봄. 오래 살아남는지는 미측정(0단계 기준선 보고에서 잼) |

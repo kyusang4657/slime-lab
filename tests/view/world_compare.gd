@@ -4,8 +4,8 @@ extends RefCounted
 ## (검토 I89: 화면 동작이 세계의 에너지·유전체를 바꿔도 "세계 그대로" 검사가 통과했음). 대신 스냅숏의 모든 절
 ## (SimSnapshot.to_dict — 개체·지도·문명·계통·통계·난수 상태·설정·연대기·역사 해시)을 글로 굳혀 견준다.
 ##
-## 스냅숏을 열면 첫 기록 줄(SimWorld.sample)이 기간 출생·사망 수를 0 으로 가져가므로, 연 세계를 저장한 세계와 견줄 때는
-## OPENED_IGNORE 를 넘긴다.
+## 스냅숏을 열면 첫 기록 줄(SimWorld.sample)이 기간 출생·사망 수와 행동 셈(v0.2 의 period_act·period_eff)을 0 으로 가져가므로,
+## 연 세계를 저장한 세계와 견줄 때는 OPENED_IGNORE 를 넘긴다.
 ##
 ## 쓰는 법(화면 동작 앞뒤의 같은 세계):
 ##   const WorldCompare := preload("res://tests/view/world_compare.gd")
@@ -17,8 +17,8 @@ extends RefCounted
 
 ## 다른 절 이름을 이만큼까지 적는다
 const MAX_LISTED := 8
-## 연 스냅숏의 세계에서 다를 수 있는 절(열 때 기록한 첫 줄이 기간 카운터를 비움)
-const OPENED_IGNORE := ["stats.period_births", "stats.period_deaths"]
+## 연 스냅숏의 세계에서 다를 수 있는 절(열 때 기록한 첫 줄이 기간 카운터를 비움 — 출생·사망 수와 행동 셈)
+const OPENED_IGNORE := ["stats.period_births", "stats.period_deaths", "stats.period_act", "stats.period_eff"]
 
 
 ## 세계의 지문: 스냅숏 절마다(한 단계 아래 키까지) JSON 글. 사전·배열은 깊이 굳히므로 뒤에 세계가 바뀌어도 그대로.

@@ -49,5 +49,12 @@
 			"resources.scale": 0.0,
 			"plants.initial_fill": 0.0
 		}
+	},
+	"chance_baseline": {
+		"label": "우연 기준(유전 없음)",
+		"_comment": "연구용 대조: 자식이 부모와 상관없는 새 무작위 두뇌를 받아 진화가 없음(docs/DESIGN-v0.2.md 11.3). 문명 지표(행동 비율 등)는 같은 틱의 이 기준과의 차이로 봄. 오래 살아남는지는 미측정(0단계 기준선 보고에서 잼)",
+		"set": {
+			"repro.inherit": "random"
+		}
 	}
 }
