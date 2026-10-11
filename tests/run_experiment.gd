@@ -2,12 +2,17 @@ extends SceneTree
 ## 헤드리스 실험 실행기.
 ##   godot --headless --path . --script res://tests/run_experiment.gd -- --seed=42 --generations=1000 --out=results/seed42
 ## Windows 는 콘솔에 RESULT 줄이 보이는 Godot_v4.4.1-stable_win64_console.exe 로 같은 인자(docs/ANALYSIS.md "Windows").
-## 선택: --preset=이름  --set=키=값(여러 번)  --max-ticks=N  --no-lineage  --snapshot-every=N  --resume=스냅숏.json  --quiet
+## 선택: --preset=이름  --set=키=값(여러 번)  --max-ticks=N  --no-lineage  --snapshot-every=N  --resume=스냅숏.json
+##       --fork-set=키=값(여러 번, --resume 과만)  --quiet
 ## 인자 규칙(어기면 인자 오류): --seed 는 64비트 정수, --generations 는 0 보다 큰 유한한 수, --max-ticks 는 1~SimConfig.TICK_MAX(1e9),
 ## --snapshot-every 는 0(끔)~SimConfig.TICK_MAX 의 정수(1e5·10k 처럼 글자가 섞이면 거부). 상대 경로는 프로젝트 폴더(--path) 기준.
 ## --resume: 설정·씨앗은 스냅숏의 것을 쓴다 — --seed·--preset·--set 과 함께 주면 인자 오류. 이어 돌린 summary.json 은
 ## preset = ""·overrides = {}(스냅숏에는 예설정 이름이 없음 — 실험실에서 스냅숏을 연 실험과 같음, 실제 설정은 config),
 ## resumed_from = 실제로 읽은 파일, resume_status = "loaded"(본 파일) · "backup"(본 파일이 깨져 .bak 에서 — 경고 줄을 찍음).
+## --fork-set=절.키=값(여러 번, 반사실 재생 — DESIGN-v0.2 11.4): --resume 과만 쓴다(없이 주면 인자 오류). 스냅숏을 연 뒤 설정 키만
+## 바꿔 이어 돌린다. 바꾼 설정으로 스냅숏 검사(설정 범위·관계, 유전체·기억·지도 배열 길이)를 다시 지나야 하므로 배치를 바꾸는 키
+## (brain.hidden·brain.memory_units·map.width 등)·모르는 키·범위 밖 값은 종료 코드 2(결과 폴더를 보기 전에). summary.json 의
+## forked = {키: 값}(바꾸지 않았으면 {}). 세계를 만들 때만 읽는 키(population.initial 등)는 바꿔도 이어 돌린 역사에 닿지 않는다.
 ## 이어 돌릴 스냅숏이 --out 폴더 바로 안에 있으면 거부(그 폴더를 비우며 지우게 되므로). 경로 글자만이 아니라, 지울 파일 가운데
 ## 크기·내용이 그 스냅숏과 같은 것이 있어도 거부한다(링크·대소문자만 다른 경로로 같은 폴더를 가리킨 경우 — 검토 최종 확인).
 ## 결과 폴더(--out): 없거나 비었으면 그대로 쓴다. 실행기가 쓰는 파일(OUT_FILES·snapshot-<틱>.json, 그리고 그 .tmp·.bak·.broken)만
@@ -47,7 +52,7 @@ func _init() -> void:
 
 static func parse_args(args: PackedStringArray) -> Dictionary:
 	var a := {seed = 1, generations = 100.0, out = "", preset = "default", sets = {}, max_ticks = -1,
-		lineage = true, snapshot_every = 0, resume = "", quiet = false}
+		lineage = true, snapshot_every = 0, resume = "", quiet = false, fork_sets = {}}
 	# 이어 돌리기와 함께 줄 수 없는 인자(설정·씨앗은 스냅숏의 것을 씀)
 	var cond: Array[String] = []
 	for s in args:
@@ -90,12 +95,20 @@ static func parse_args(args: PackedStringArray) -> Dictionary:
 				return {error = "--set 은 키=값 형식이어야 합니다: %s" % s}
 			a.sets[kv.substr(0, eq)] = SimConfig.parse_value(kv.substr(eq + 1))
 			_add_once(cond, "--set")
+		elif s.begins_with("--fork-set="):
+			var fkv := s.substr(11)
+			var feq := fkv.find("=")
+			if feq <= 0:
+				return {error = "--fork-set 은 키=값 형식이어야 합니다: %s" % s}
+			a.fork_sets[fkv.substr(0, feq)] = SimConfig.parse_value(fkv.substr(feq + 1))
 		else:
 			return {error = "알 수 없는 인자: %s" % s}
 	if a.out == "":
 		return {error = "--out=결과폴더 가 필요합니다"}
 	if a.resume != "" and not cond.is_empty():
 		return {error = "--resume 은 스냅숏의 설정·씨앗으로 이어 돌립니다 — %s 와 함께 줄 수 없습니다" % "·".join(cond)}
+	if a.resume == "" and not a.fork_sets.is_empty():
+		return {error = "--fork-set 은 --resume 과만 씁니다(스냅숏을 연 뒤 설정 키만 바꿔 이어 돌림 — 처음부터 돌릴 때는 --set)"}
 	return a
 
 
@@ -139,6 +152,12 @@ static func run(a: Dictionary) -> int:
 			resumed_from = a.resume + ".bak"
 			printerr("경고: %s 이(가) 깨져(%s) 백업 %s 에서 이어 돌립니다 — 백업은 같은 이름으로 앞서 저장한 다른 실험일 수 있습니다(summary.json 의 resume_status = backup)"
 					% [a.resume, lr.error, resumed_from])
+		if not a.fork_sets.is_empty():
+			var fk := fork_world(wd, a.fork_sets)
+			if fk.world == null:
+				printerr(fk.error)
+				return 2
+			wd = fk.world
 		var same := same_file_in(out_dir, resumed_from)
 		if same != "":
 			printerr("이어 돌릴 스냅숏이 결과 폴더 안에 있습니다(%s = 결과 폴더의 %s) — 결과 폴더를 비우며 지우게 되므로 다른 --out 을 주세요"
@@ -212,7 +231,8 @@ static func run(a: Dictionary) -> int:
 	# 이어 돌렸으면 예설정·덮어쓰기는 알 수 없음(""·{} — 실제 설정은 config). write_failed = summary.json 보다 먼저 못 쓴 파일.
 	var extra := {end_reason = reason, run_seconds = secs, generations_target = a.generations,
 		preset = "" if a.resume != "" else a.preset, overrides = {} if a.resume != "" else a.sets,
-		resumed_from = resumed_from, resume_status = resume_status, max_ticks = max_ticks, write_failed = Array(failed)}
+		resumed_from = resumed_from, resume_status = resume_status, max_ticks = max_ticks, write_failed = Array(failed),
+		forked = a.get("fork_sets", {})}
 	failed.append_array(rec.write_all(out_dir, wd, extra, a.lineage))
 	if a.get("silent", false):
 		return 0 if failed.is_empty() else 3
@@ -221,6 +241,24 @@ static func run(a: Dictionary) -> int:
 		str(wd.seed_value), wd.mean_generation(), wd.tick, wd.population(), wd.stage, SimWorld.STAGE_NAMES[wd.stage],
 		wd.history_hash.substr(0, 12), secs, reason, "" if failed.is_empty() else " write_failed=" + ",".join(failed)])
 	return 0 if failed.is_empty() else 3
+
+
+## 반사실 재생(--fork-set): 세계 wd 의 스냅숏 글에서 설정 키만 sets 로 바꿔 다시 연다(저장 → 열기와 같은 길 — 바꾸지 않은
+## 키·값이면 wd 와 같은 세계). 모르는 키·종류가 다른 값은 SimConfig.set_value 가, 범위·관계(설정 오류)·배열 길이는
+## SimSnapshot.from_dict 의 검사가 거른다. 결과: {world, error}(error 가 "" 이면 성공, 아니면 실행기가 찍을 오류 문장).
+static func fork_world(wd: SimWorld, sets: Dictionary) -> Dictionary:
+	var d = JSON.parse_string(SimSnapshot.to_text(wd))
+	for k in sets:
+		var e := SimConfig.set_value(d.config, k, sets[k])
+		if e != "":
+			return {world = null, error = "--fork-set 오류: " + e}
+	var r := SimSnapshot.from_dict(d)
+	if r.world == null:
+		var why := "--fork-set 으로 바꾼 설정으로 스냅숏을 열 수 없습니다: " + str(r.error)
+		if not str(r.error).begins_with("설정 오류"):
+			why += " — 저장된 배열의 길이(유전체 배치·기억·지도 크기)를 바꾸는 키는 반사실 재생에 쓸 수 없습니다"
+		return {world = null, error = why}
+	return r
 
 
 ## 절대 경로(res://·user:// 는 풀고, 상대 경로는 작업 폴더 = --path 의 프로젝트 폴더 기준), 끝 "/" 없이 정리.

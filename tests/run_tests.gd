@@ -1211,9 +1211,33 @@ func test_runner() -> void:
 	var sm = JSON.parse_string(FileAccess.get_file_as_string(dir.path_join("summary.json")))
 	check(sm.end_reason == "generations" and sm.mean_generation >= 3.0 and sm.config.mutation.rate == 0.07, "요약: 끝난 이유·세대·실제 설정")
 	check(int(sm.get("max_ticks", -1)) == int(sm.config.run.max_ticks), "요약: 실제로 쓴 틱 상한(max_ticks %s)" % str(sm.get("max_ticks")))
+	# 열 목록(DESIGN-v0.2 9.5 — 분석 도구가 손 사본 대신 읽음)과 반사실 재생에서 바꾼 키(처음부터 돌리면 {})
+	check(PackedStringArray(sm.get("timeseries_columns", [])) == PackedStringArray(SimRecorder.TIMESERIES_COLUMNS)
+			and PackedStringArray(sm.get("lineage_columns", [])) == PackedStringArray(SimRecorder.LINEAGE_COLUMNS),
+			"요약: timeseries_columns·lineage_columns = SimRecorder 의 열")
+	check(typeof(sm.get("forked")) == TYPE_DICTIONARY and sm.forked.is_empty(), "요약: forked = {}(반사실 재생이 아님)")
 	var bad_cfg: Dictionary = runner.parse_args(PackedStringArray(["--out=" + dir, "--set=없는.키=1", "--quiet"]))
 	bad_cfg.silent = true
 	check(runner.run(bad_cfg) == 2, "설정 오류 코드 2")
+	# --fork-set(반사실 재생, DESIGN-v0.2 11.4): --resume 과만, 키=값 꼴, 값은 --set 과 같은 해석
+	check(runner.parse_args(PackedStringArray(["--out=x", "--fork-set=mutation.rate=0.2"])).get("error", "").contains("--resume"),
+			"--fork-set 은 --resume 없이 주면 인자 오류")
+	check(runner.parse_args(PackedStringArray(["--out=x", "--resume=s.json", "--fork-set=mutation.rate"])).has("error"),
+			"--fork-set 은 키=값 꼴")
+	var fa: Dictionary = runner.parse_args(PackedStringArray(["--out=x", "--resume=s.json", "--fork-set=mutation.rate=0.2",
+			"--fork-set=brain.policy=argmax"]))
+	check(not fa.has("error") and fa.fork_sets == {"mutation.rate": 0.2, "brain.policy": "argmax"}, "--fork-set 해석(여러 번)")
+	# fork_world: 바꾸지 않으면 같은 세계(스냅숏 글), 바꾼 키만 다르고 원래 세계는 그대로, 저장된 배열 길이를 바꾸는 키는 오류
+	var fw := world({}, 3)
+	fw.step_n(30)
+	var fk0: Dictionary = runner.fork_world(fw, {})
+	check(fk0.world != null and SimSnapshot.to_text(fk0.world) == SimSnapshot.to_text(fw), "fork_world 에 바꿀 키가 없으면 같은 세계")
+	var fk1: Dictionary = runner.fork_world(fw, {"mutation.rate": 0.2})
+	check(fk1.world != null and fk1.world.cfg.mutation.rate == 0.2 and fw.cfg.mutation.rate != 0.2 and fk1.world.tick == fw.tick
+			and fk1.world.history_hash == fw.history_hash, "fork_world: 바꾼 키만(같은 틱·해시에서 갈라짐, 원래 세계 설정은 그대로)")
+	for bad_key in [{"brain.hidden": 12}, {"없는.키": 1}, {"mutation.rate": -1}]:
+		var fkb: Dictionary = runner.fork_world(fw, bad_key)
+		check(fkb.world == null and str(fkb.error).begins_with("--fork-set"), "fork_world 거부 %s: %s" % [str(bad_key), str(fkb.error)])
 	remove_tree(dir)
 	check(not DirAccess.dir_exists_absolute(dir), "끝나면 임시 폴더를 지움(숨은 .gdignore 까지, %s)" % dir)
 	done()

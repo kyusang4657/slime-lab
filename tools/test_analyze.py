@@ -25,6 +25,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import analyze  # noqa: E402
 
@@ -38,11 +40,15 @@ CONFIG_MAX_TICKS = 2000000
 def write_fake_run(run_dir: Path, seed: int, disc: dict, *, civ: int, end_reason: str = "generations",
                    extinct_tick: int = -1, ticks: int = 400, final_gen: float = 8.0, preset: str = "default",
                    overrides: dict | None = None, odd_text: bool = False,
-                   generations_target: float | None = None, max_ticks: int | None = None, bom: bool = False) -> None:
+                   generations_target: float | None = None, max_ticks: int | None = None, bom: bool = False,
+                   columns: list[str] | None = None, rows_fn=None, lineage: list[dict] | None = None,
+                   summary_extra: dict | None = None, start_tick: int = 0) -> None:
     """실행기 결과 폴더 흉내(summary.json·timeseries.csv·chronicle.csv·final.snapshot.json — 끝까지 쓴 결과).
     disc = {"채집": (틱, 세대), ...} — 없는 단계는 발견 못 함.
     max_ticks 를 주면 실행기처럼 실제로 쓴 틱 상한과 설정의 run.max_ticks(기본 CONFIG_MAX_TICKS)를 남긴다.
-    bom 이면 CSV 를 BOM 붙은 UTF-8 로(실행기·실험실 CSV 의 새 형식)."""
+    bom 이면 CSV 를 BOM 붙은 UTF-8 로(실행기·실험실 CSV 의 새 형식).
+    columns = 시계열 열(기본 analyze.TIMESERIES_COLUMNS — v0.1 결과는 앞 22열), rows_fn(틱) = 그 줄에 덮어쓸 값 사전,
+    lineage = lineage.csv 줄(사전 — 빠진 열은 0), summary_extra = summary.json 에 더할 키, start_tick = 첫 줄의 틱(이어 돌린 결과)."""
     csv_enc = "utf-8-sig" if bom else "utf-8"
     run_dir.mkdir(parents=True, exist_ok=True)
     names = analyze.STAGE_NAMES_KO
@@ -60,6 +66,7 @@ def write_fake_run(run_dir: Path, seed: int, disc: dict, *, civ: int, end_reason
     if max_ticks is not None:
         summary["max_ticks"] = max_ticks
         summary["config"]["run"] = {"max_ticks": float(CONFIG_MAX_TICKS)}
+    summary.update(summary_extra or {})
     (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent="\t"), encoding="utf-8")
     # 연대기: 발견 사건 + 쉼표가 든 저장고 사건(따옴표 처리 확인)
     lines = [",".join(analyze.CHRONICLE_COLUMNS)]
@@ -74,18 +81,26 @@ def write_fake_run(run_dir: Path, seed: int, disc: dict, *, civ: int, end_reason
         lines.append(f"{extinct_tick},0.0,extinction,-1,멸종 — 마지막 개체가 사라짐")
     (run_dir / "chronicle.csv").write_text("\n".join(lines) + "\n", encoding=csv_enc)
     # 시계열: 20틱마다, 평균 세대는 틱에 비례, 크기는 조금씩 줄어듦
-    rows = [",".join(analyze.TIMESERIES_COLUMNS)]
-    for tick in range(0, ticks + 1, 20):
+    cols = columns or analyze.TIMESERIES_COLUMNS
+    rows = [",".join(cols)]
+    for tick in range(start_tick, ticks + 1, 20):
         extinct_now = end_reason == "extinction" and tick >= extinct_tick
         pop = 0 if extinct_now else 100 + (tick // 20) % 7
         gen = 0.0 if extinct_now else final_gen * tick / ticks
         stage = max([0] + [i for i, n in enumerate(names) if n in disc and disc[n][0] <= tick])
-        vals = {c: 0 for c in analyze.TIMESERIES_COLUMNS}
+        vals = {c: 0 for c in cols}
         vals.update({"tick": tick, "population": pop, "mean_gen": round(gen, 6),
                      "mean_size": 0.0 if extinct_now else round(1.0 - 0.001 * tick / 20, 6),
                      "mean_sense": 0.0 if extinct_now else 3.0, "civ_stage": stage})
-        rows.append(",".join(str(vals[c]) for c in analyze.TIMESERIES_COLUMNS))
+        if rows_fn is not None:
+            vals.update(rows_fn(tick))
+        rows.append(",".join(str(vals[c]) for c in cols))
     (run_dir / "timeseries.csv").write_text("\n".join(rows) + "\n", encoding=csv_enc)
+    if lineage is not None:
+        lines = [",".join(analyze.LINEAGE_COLUMNS)]
+        for r in lineage:
+            lines.append(",".join(str(r.get(c, 0)) for c in analyze.LINEAGE_COLUMNS))
+        (run_dir / "lineage.csv").write_text("\n".join(lines) + "\n", encoding=csv_enc)
     (run_dir / "final.snapshot.json").write_text('{"format": "slime-lab-snapshot"}', encoding="utf-8")
 
 
@@ -698,6 +713,332 @@ class TestRunCommands(TempDirCase):
             code = analyze.main(["run", "--out", str(self.tmp / "x"), "--repo", str(self.tmp)])
         self.assertEqual(code, 2)
         self.assertIn("project.godot", err.getvalue())
+
+
+# ── 손 사본(DESIGN-v0.2 14.1 범위 7) ──
+
+SIM_RECORDER = REPO / "scripts" / "sim" / "sim_recorder.gd"
+SIM_WORLD = REPO / "scripts" / "sim" / "sim_world.gd"
+SIM_BRAIN = REPO / "scripts" / "sim" / "sim_brain.gd"
+INFO_PANEL = REPO / "scripts" / "ui" / "info_panel.gd"
+
+
+def gd_list(path: Path, name: str) -> list[str]:
+    """`const 이름: Array[String] = [...]` 의 글자들(적힌 순서)."""
+    m = re.search(rf"const {name}: Array\[String\] = \[(.*?)\]", path.read_text(encoding="utf-8"), re.S)
+    if not m:
+        raise AssertionError(f"{path.name} 에 const {name} 목록이 없음")
+    return re.findall(r'"([^"]*)"', m.group(1))
+
+
+def gd_int(path: Path, name: str) -> int:
+    """`const 이름 := 정수`."""
+    m = re.search(rf"^const {name} := (-?\d+)$", path.read_text(encoding="utf-8"), re.M)
+    if not m:
+        raise AssertionError(f"{path.name} 에 const {name} 정수가 없음")
+    return int(m.group(1))
+
+
+class TestHandCopies(unittest.TestCase):
+    """analyze.py 가 시뮬레이션 상수를 옮겨 적은 목록 = 원본(sim_recorder.gd·sim_world.gd·sim_brain.gd·info_panel.gd).
+    단계마다 열이 늘면 analyze.py 도 함께 고쳐야 한다(고치지 않으면 여기서 실패 — 예전엔 견주는 곳이 없어 v0.2 열이 붙어도 몰랐음)."""
+
+    def test_timeseries_columns(self) -> None:
+        self.assertEqual(analyze.TIMESERIES_COLUMNS, gd_list(SIM_RECORDER, "TIMESERIES_COLUMNS"),
+                         "analyze.TIMESERIES_COLUMNS ≠ SimRecorder.TIMESERIES_COLUMNS")
+
+    def test_other_recorder_columns(self) -> None:
+        for name in ("ACT_COLUMNS", "EFF_COLUMNS", "LINEAGE_COLUMNS", "CHRONICLE_COLUMNS"):
+            self.assertEqual(getattr(analyze, name), gd_list(SIM_RECORDER, name), f"analyze.{name} ≠ SimRecorder.{name}")
+
+    def test_stage_names(self) -> None:
+        names = gd_list(SIM_WORLD, "STAGE_NAMES")
+        self.assertEqual(analyze.STAGE_NAMES_KO, names, "analyze.STAGE_NAMES_KO ≠ SimWorld.STAGE_NAMES")
+        self.assertEqual(len(analyze.STAGE_NAMES_EN), len(names))
+        want = [(gd_int(SIM_WORLD, f"STAGE_{k.upper()}"), k, names[gd_int(SIM_WORLD, f"STAGE_{k.upper()}")])
+                for k in ("forage", "store", "farm")]
+        self.assertEqual(analyze.STAGES, want, "analyze.STAGES ≠ SimWorld.STAGE_FORAGE·STORE·FARM 과 STAGE_NAMES")
+
+    def test_actions(self) -> None:
+        self.assertEqual(analyze.ACTION_NAMES_KO, gd_list(SIM_BRAIN, "ACTION_NAMES"))
+        # 행동 열의 순서 = SimBrain.ACT_* 번호
+        for i, col in enumerate(analyze.ACT_COLUMNS):
+            self.assertEqual(gd_int(SIM_BRAIN, "ACT_" + col[4:].upper()), i, col)
+        # 문명 행동이 열리는 단계: 줍기·심기 = InfoPanel.ACTION_STAGE(SimWorld._act 의 단계 문), 내려놓기 = 채집(운반이 생기는 단계)
+        text = INFO_PANEL.read_text(encoding="utf-8")
+        stage_of = {m.group(1).lower(): gd_int(SIM_WORLD, "STAGE_" + m.group(2))
+                    for m in re.finditer(r"SimBrain\.ACT_(\w+): SimWorld\.STAGE_(\w+)", text)}
+        self.assertEqual(sorted(stage_of), ["gather", "plant"])
+        got = dict(analyze.CIV_ACTIONS)
+        self.assertEqual({k: got[k] for k in stage_of}, stage_of, "analyze.CIV_ACTIONS ≠ InfoPanel.ACTION_STAGE")
+        self.assertEqual(got["drop"], gd_int(SIM_WORLD, "STAGE_FORAGE"))
+        self.assertTrue(all("act_" + k in analyze.ACT_COLUMNS for k in got))
+
+
+# ── 행동 셈·먹은 양·관문 A-1 미리 보기(DESIGN-v0.2 14.1 범위 7·10) ──
+
+def acts(gather=(0, 0), drop=(0, 0), plant=(0, 0), total=0) -> dict:
+    """시계열 한 줄의 행동 셈: 문명 행동 셋의 (고름, 효과), 나머지는 모든 행동 합이 total 이 되도록 쉬기(쉬기는 늘 효과)."""
+    v = {c: 0 for c in analyze.ACT_COLUMNS + analyze.EFF_COLUMNS}
+    for key, (a, e) in (("gather", gather), ("drop", drop), ("plant", plant)):
+        v["act_" + key], v["eff_" + key] = a, e
+    v["act_rest"] = v["eff_rest"] = total - gather[0] - drop[0] - plant[0] if total else 0
+    return v
+
+
+## 손으로 정한 시계열(틱 → 평균 세대·문명 단계·행동 셈). 구간 시작 = 앞 줄이므로
+##  - 세대 표: 틱 60 줄(시작 세대 8·채집) → 0~10, 틱 80·100 줄(시작 세대 12·16) → 10~20. 심기는 시작 단계가 농사인 틱 100 줄만.
+##  - 틱 표: 행동이 있는 모든 줄(틱 20~100)이 0~200.
+HAND_ROWS = {
+    0: {"mean_gen": 0, "civ_stage": 0, **acts()},
+    20: {"mean_gen": 4, "civ_stage": 0, **acts((10, 0), (5, 0), (5, 0), 100)},
+    40: {"mean_gen": 8, "civ_stage": 1, **acts((20, 8), (10, 5), (5, 0), 100)},
+    60: {"mean_gen": 12, "civ_stage": 1, **acts((30, 15), (10, 10), (10, 0), 100)},
+    80: {"mean_gen": 16, "civ_stage": 3, **acts((10, 5), (10, 5), (20, 10), 100)},
+    100: {"mean_gen": 18, "civ_stage": 3, **acts((0, 0), (0, 0), (40, 30), 100)},
+}
+
+
+def hand_ts() -> pd.DataFrame:
+    rows = []
+    for tick, v in HAND_ROWS.items():
+        r = {c: 0 for c in analyze.TIMESERIES_COLUMNS}
+        r.update({"tick": tick, "population": 100, **v})
+        rows.append(r)
+    return pd.DataFrame(rows, columns=analyze.TIMESERIES_COLUMNS)
+
+
+class TestActions(TempDirCase):
+    def test_bins_by_generation_after_opening(self) -> None:
+        got = {(b["bin_lo"], b["action"]): (b["rows"], b["act"], b["eff"], b["total"])
+               for b in analyze.action_bins(hand_ts(), "gen")}
+        self.assertEqual(got, {
+            (0, "gather"): (1, 30, 15, 100), (10, "gather"): (2, 10, 5, 200),
+            (0, "drop"): (1, 10, 10, 100), (10, "drop"): (2, 10, 5, 200),
+            (10, "plant"): (1, 40, 30, 100),
+        })
+
+    def test_bins_by_tick(self) -> None:
+        got = {(b["bin_lo"], b["bin_hi"], b["action"]): (b["rows"], b["act"], b["eff"], b["total"])
+               for b in analyze.action_bins(hand_ts(), "tick")}
+        self.assertEqual(got, {(0, 200, "gather"): (5, 70, 28, 500), (0, 200, "drop"): (5, 35, 20, 500),
+                               (0, 200, "plant"): (5, 80, 40, 500)})
+
+    def _run(self, name: str, **kw) -> Path:
+        root = self.tmp / name
+        write_fake_run(root / "x" / "seed1", 1, {"채집": (30, 6.0)}, civ=3, ticks=100,
+                       rows_fn=lambda tick: HAND_ROWS[tick], **kw)
+        return root
+
+    def test_report_table(self) -> None:
+        """보고서의 세대·틱 구간 표 = 손 계산(고름 % · 효과 %, 실행 1개), actions.csv 를 씀."""
+        root = self._run("acts")
+        with quiet():
+            self.assertEqual(analyze.report(root, root, plots=False), 0)
+        md = (root / "report.md").read_text(encoding="utf-8")
+        self.assertIn("| `x` | 0–10 | 30.00 · 15.00 (1) | 10.00 · 10.00 (1) | — |", md)
+        self.assertIn("| `x` | 10–20 | 5.00 · 2.50 (1) | 5.00 · 2.50 (1) | 40.00 · 30.00 (1) |", md)
+        self.assertIn("| `x` | 0–200 | 14.00 · 5.60 (1) | 7.00 · 4.00 (1) | 16.00 · 8.00 (1) |", md)
+        rows = read_csv_rows(root / "actions.csv")
+        self.assertEqual(list(rows[0]), analyze.ACTION_COLUMNS)
+        self.assertEqual(len(rows), 5 + 3)
+        r = [x for x in rows if x["basis"] == "gen" and x["action"] == "plant"][0]
+        self.assertEqual((r["bin_lo"], r["act"], r["eff"], r["success"]), ("10", "40", "30", "0.75"))
+
+    def test_summary_columns_come_first(self) -> None:
+        """열 목록은 summary.json 의 timeseries_columns 가 먼저(손 사본·CSV 머리보다): v0.1 22열이라 적힌 실행은 행동 셈을 읽지 않음."""
+        root = self._run("v01cols", summary_extra={"timeseries_columns": analyze.TIMESERIES_COLUMNS[:22]})
+        with quiet():
+            analyze.report(root, root, plots=False)
+        self.assertFalse((root / "actions.csv").exists())
+        root = self._run("v02cols", summary_extra={"timeseries_columns": analyze.TIMESERIES_COLUMNS})
+        with quiet():
+            analyze.report(root, root, plots=False)
+        self.assertTrue((root / "actions.csv").exists())
+
+    def test_v01_results_still_read(self) -> None:
+        """행동 셈 열이 없는 예전 결과(22열)도 보고서가 나오고, 행동 비율 절은 없다고만 적음."""
+        root = self.tmp / "old"
+        write_fake_run(root / "seed1", 1, {"채집": (100, 1.5)}, civ=1, columns=analyze.TIMESERIES_COLUMNS[:22])
+        with quiet():
+            self.assertEqual(analyze.report(root, root, plots=False), 0)
+        md = (root / "report.md").read_text(encoding="utf-8")
+        self.assertIn("행동 셈 열(`act_*`·`eff_*`)이 있는 실행이 없습니다", md)
+        self.assertFalse((root / "actions.csv").exists())
+        self.assertEqual(read_csv_rows(root / "summary.csv")[0]["window_births"], "NaN")
+
+
+def lineage_rows(window: int, extra_dead: list[tuple[int, float]]) -> list[dict]:
+    """처음 개체 2(부모 없음) + 틱 [200, 600) 출생 window 개 + 그 밖 출생 2(199·600). extra_dead = (세대, 먹은 양) 죽은 개체."""
+    rows = [{"id": 0, "parent_a": -1, "parent_b": -1, "gen": 0, "birth_tick": -5, "death_tick": 300, "eaten": 10.0},
+            {"id": 1, "parent_a": -1, "parent_b": -1, "gen": 0, "birth_tick": 0, "death_tick": -1, "eaten": 4.0}]
+    for k, tick in enumerate([199, 600] + [200 + (399 * i) // max(window - 1, 1) for i in range(window)]):
+        rows.append({"id": len(rows), "parent_a": 0, "parent_b": 1, "gen": 1, "birth_tick": tick, "death_tick": -1,
+                     "eaten": 2.0})
+    for gen, e in extra_dead:
+        rows.append({"id": len(rows), "parent_a": 0, "parent_b": 0, "gen": gen, "birth_tick": 700, "death_tick": 800,
+                     "eaten": e})
+    return rows
+
+
+class TestLineageReport(TempDirCase):
+    def test_eaten_and_gate_preview(self) -> None:
+        """lineage.csv 의 eaten → 개체 세대 구간별 먹은 양, 틱 [200, 600) 출생 → window_births·관문 A-1 판정 가능성."""
+        root = self.tmp / "lin"
+        # 씨앗 1: 1,200틱 살고 대상 출생 30 → 판정 가능. 씨앗 2: 500틱 멸종. 씨앗 3: 살았지만 대상 출생 3.
+        write_fake_run(root / "seed1", 1, {}, civ=0, ticks=1200, lineage=lineage_rows(30, [(12, 6.0), (15, 8.0)]))
+        write_fake_run(root / "seed2", 2, {}, civ=0, ticks=500, end_reason="extinction", extinct_tick=500,
+                       lineage=lineage_rows(31, []))
+        write_fake_run(root / "seed3", 3, {}, civ=0, ticks=1200, lineage=lineage_rows(3, []))
+        with quiet():
+            self.assertEqual(analyze.report(root, root, plots=False), 0)
+        rows = read_csv_rows(root / "summary.csv")
+        self.assertEqual([r["window_births"] for r in rows], ["30", "31", "3"])
+        self.assertEqual([analyze.gate_a_status(r) for _, r in analyze.build_summary(root)[0].iterrows()],
+                         ["ok", "extinct", "few"])
+        eaten = read_csv_rows(root / "eaten.csv")
+        self.assertEqual([(r["seed"], r["gen_lo"], r["dead"], r["eaten_median"]) for r in eaten],
+                         [("1", "0", "1", "10"), ("1", "10", "2", "7"), ("2", "0", "1", "10"), ("3", "0", "1", "10")])
+        md = (root / "report.md").read_text(encoding="utf-8")
+        self.assertIn("## 평생 먹은 양(죽은 개체)", md)
+        self.assertIn("| `default` | 10–20 | 7.0 (1 · 2) |", md)
+        self.assertIn("| `default` | 3 | 33% (1/3) | 33% (1/3) | 500–500 | 30 [3–31] |", md)
+
+    def test_no_lineage_no_sections(self) -> None:
+        root = self.tmp / "nolin"
+        write_fake_run(root / "seed1", 1, {}, civ=0)
+        with quiet():
+            analyze.report(root, root, plots=False)
+        md = (root / "report.md").read_text(encoding="utf-8")
+        self.assertNotIn("## 평생 먹은 양", md)
+        self.assertNotIn("## 관문 A-1", md)
+        self.assertFalse((root / "eaten.csv").exists())
+
+
+# ── 반사실 재생 ablate(가짜 subprocess — DESIGN-v0.2 11.4·14.1 범위 6) ──
+
+class FakeAblateRunner:
+    """subprocess.run 대신. 기준 실행(--seed): 400틱에 평균 세대에 닿은 결과(extinct_seeds 는 멸종).
+    갈래(--resume): 스냅숏 폴더의 기준 summary.json 틱(F)부터 --max-ticks 까지 20틱마다 줄 — 바꾼 갈래(--fork-set)는
+    줄마다 출생 3·줍기 20(효과 10), 그대로 갈래는 출생 2·줍기 10(효과 5), 모든 행동 100. lineage 의 대상 출생은 먹은 양 4(바꿈)·2."""
+
+    def __init__(self, extinct_seeds: tuple = ()):
+        self.calls: list[list[str]] = []
+        self.lock = threading.Lock()
+        self.extinct_seeds = extinct_seeds
+
+    def __call__(self, cmd, **kw):
+        with self.lock:
+            self.calls.append(list(cmd))
+        argv = cmd[cmd.index("--") + 1:]
+        args = dict(a[2:].split("=", 1) for a in argv if "=" in a and not a.startswith("--fork-set="))
+        forks = {}
+        for a in argv:
+            if a.startswith("--fork-set="):
+                k, _, v = a[len("--fork-set="):].partition("=")
+                forks[k] = json.loads(v)
+        out = Path(args["out"])
+        if "resume" not in args:
+            seed = int(args["seed"])
+            ext = seed in self.extinct_seeds
+            write_fake_run(out, seed, {}, civ=0, ticks=400, preset=args["preset"],
+                           generations_target=float(args["generations"]), max_ticks=CONFIG_MAX_TICKS,
+                           end_reason="extinction" if ext else "generations", extinct_tick=380 if ext else -1)
+            return subprocess.CompletedProcess(cmd, 0, f"RESULT: seed={seed} reason=generations\n", "")
+        base = json.loads((Path(args["resume"]).parent / "summary.json").read_text(encoding="utf-8"))
+        f, end, forked = int(base["tick"]), int(args["max-ticks"]), bool(forks)
+        births, gather = (3, (20, 10)) if forked else (2, (10, 5))
+        lin = [{"id": i, "parent_a": 0, "parent_b": 0, "gen": 1, "birth_tick": f + 5 * i, "death_tick": -1,
+                "eaten": 4.0 if forked else 2.0, "children": 1} for i in range(4)]
+        write_fake_run(out, int(base["seed"]), {}, civ=0, ticks=end, start_tick=f, generations_target=1e9,
+                       max_ticks=end, end_reason="max_ticks", lineage=lin,
+                       rows_fn=lambda tick: {"births": births if tick > f else 0,
+                                             **(acts(gather, total=100) if tick > f else acts())},
+                       summary_extra={"preset": "", "resumed_from": args["resume"], "forked": forks,
+                                      "history_hash": ("ff" if forked else "ee") + "0" * 62})
+        return subprocess.CompletedProcess(cmd, 0, "RESULT: reason=max_ticks\n", "")
+
+
+class TestAblate(TempDirCase):
+    def ablate(self, fake, *extra: str) -> int:
+        with mock.patch.object(analyze.subprocess, "run", fake), quiet():
+            return analyze.main(["ablate", "--runs", str(self.tmp / "base"), "--at-gen", "30", "--set", "learn_x.k=0",
+                                 "--ticks", "100", "--seeds", "1-3", "--godot", "/opt/godot", "--out",
+                                 str(self.tmp / "abl"), *extra])
+
+    def test_commands_and_table(self) -> None:
+        """① 기준 실행 = --generations G, ② 갈래 = 같은 스냅숏에서 --max-ticks F + N·세대 끝 조건 1e9, 바꾼 갈래에만 --fork-set,
+        ③ 표 = 손 계산. 기준 실행이 멸종한 씨앗은 빼고 까닭을 적음."""
+        fake = FakeAblateRunner(extinct_seeds=(3,))
+        self.assertEqual(self.ablate(fake), 0)
+        base = [c for c in fake.calls if any(a.startswith("--seed=") for a in c)]
+        branch = [c for c in fake.calls if any(a.startswith("--resume=") for a in c)]
+        self.assertEqual(len(base), 3)
+        self.assertTrue(all("--generations=30" in c and "--preset=default" in c and "--no-lineage" in c for c in base))
+        self.assertEqual(len(branch), 4)
+        snap1 = self.tmp / "base" / "seed1" / "final.snapshot.json"
+        same1 = [c for c in branch if f"--resume={snap1}" in c and not any(a.startswith("--fork-set=") for a in c)]
+        fork1 = [c for c in branch if f"--resume={snap1}" in c and "--fork-set=learn_x.k=0" in c]
+        self.assertEqual(len(same1), 1)
+        self.assertEqual(len(fork1), 1)
+        for c in same1 + fork1:
+            self.assertIn("--max-ticks=500", c)
+            self.assertIn("--generations=1000000000", c)
+            self.assertNotIn("--no-lineage", c)
+            self.assertFalse(any(a.startswith(("--seed=", "--preset=", "--set=")) for a in c), c)
+        rows = read_csv_rows(self.tmp / "abl" / "ablate.csv")
+        self.assertEqual(list(rows[0]), analyze.ABLATE_COLUMNS)
+        got = {(r["seed"], r["metric"]): (r["same"], r["fork"], r["diff"]) for r in rows}
+        self.assertEqual(sorted({s for s, _ in got}), ["1", "2"])
+        # 창 (400, 500] 의 5줄: 출생 2·3 씩, 줍기 10·20 % (효과 5·10 %), 대상 출생(4명)의 평균 먹은 양 2·4
+        self.assertEqual(got[("1", "births")], ("10", "15", "5"))
+        self.assertEqual(got[("1", "act_gather")], ("10", "20", "10"))
+        self.assertEqual(got[("2", "eff_gather")], ("5", "10", "5"))
+        self.assertEqual(got[("2", "target_eaten")], ("2", "4", "2"))
+        self.assertEqual(got[("1", "alive_ticks")], ("100", "100", "0"))
+        md = (self.tmp / "abl" / "ablate.md").read_text(encoding="utf-8")
+        self.assertIn("| 출생 | 2 | 10.00 | 15.00 | 5.00 [5.00–5.00] | 2 · 0 |", md)
+        self.assertIn("| 3 | 기준 실행이 평균 30세대 전에 끝남(멸종, 틱 400) |", md)
+        self.assertIn("| 1 | 400 | `ee0000000000` | `ff0000000000` |", md)
+
+    def test_rerun_is_same_table_and_skips(self) -> None:
+        """같은 명령을 다시 돌리면 실행 없이 같은 표(결정적). 바꾼 값이 다르면 그 갈래의 이전 결과를 덮어쓰지 않고 실패(mismatch)."""
+        self.assertEqual(self.ablate(FakeAblateRunner()), 0)
+        first = (self.tmp / "abl" / "ablate.md").read_bytes()
+        again = FakeAblateRunner()
+        self.assertEqual(self.ablate(again), 0)
+        self.assertEqual(again.calls, [])
+        self.assertEqual((self.tmp / "abl" / "ablate.md").read_bytes(), first)
+        other = FakeAblateRunner()
+        with mock.patch.object(analyze.subprocess, "run", other), quiet():
+            code = analyze.main(["ablate", "--runs", str(self.tmp / "base"), "--at-gen", "30", "--set", "learn_x.k=1",
+                                 "--ticks", "100", "--seeds", "1-3", "--godot", "g", "--out", str(self.tmp / "abl")])
+        self.assertEqual(code, 1)
+        self.assertEqual(other.calls, [])
+        runs = read_csv_rows(self.tmp / "abl" / "runs.csv")
+        self.assertEqual(sorted(r["status"] for r in runs if r["cell"] == analyze.ABLATE_FORK), ["mismatch"] * 3)
+
+    def test_args(self) -> None:
+        p = analyze.build_parser()
+        a = p.parse_args(["ablate", "--runs", "r", "--at-gen", "30", "--set", "learn.freeze=true", "--ticks", "340",
+                          "--set", "care.enabled=false", "--base-set", "brain.memory_units=2"])
+        self.assertEqual((a.at_gen, a.ticks, a.set, a.base_set),
+                         ("30", 340, [("learn.freeze", "true"), ("care.enabled", "false")], [("brain.memory_units", "2")]))
+        self.assertIsNone(a.out)
+        with quiet(), contextlib.redirect_stderr(io.StringIO()):
+            for bad in (["--at-gen", "30", "--ticks", "10"], ["--set", "a=1", "--ticks", "10"],
+                        ["--at-gen", "0", "--set", "a=1", "--ticks", "10"], ["--at-gen", "3", "--set", "a=1", "--ticks", "0"],
+                        ["--at-gen", "3", "--set", "a", "--ticks", "5"]):
+                with self.assertRaises(SystemExit, msg=str(bad)):
+                    p.parse_args(["ablate", "--runs", "r", *bad])
+
+    def test_default_out_is_beside_runs(self) -> None:
+        """--out 을 주지 않으면 <runs>-ablate/<키=값>__g<세대>__t<틱> — 기준 실행 폴더 밖(report 가 갈래를 기준 실행과 섞지 않게)."""
+        with mock.patch.object(analyze.subprocess, "run", FakeAblateRunner()), quiet():
+            analyze.main(["ablate", "--runs", str(self.tmp / "base"), "--at-gen", "30", "--set", "learn_x.k=0",
+                          "--ticks", "100", "--seeds", "1", "--godot", "g"])
+        self.assertTrue((self.tmp / "base-ablate" / "learn_x.k=0__g30__t100" / "ablate.md").is_file())
+        self.assertEqual(sorted(p.name for p in (self.tmp / "base").iterdir()), [".gdignore", "runs.csv", "seed1"])
 
 
 # ── 올린 예시 ──

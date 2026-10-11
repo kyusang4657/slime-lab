@@ -7,6 +7,7 @@
   python3 tools/analyze.py run    --seeds 1-8 --generations 100 --preset fast_civ --out results/batch
   python3 tools/analyze.py sweep  --param mutation.rate=0.02,0.1 --seeds 1-4 --generations 50 --out results/sweep
   python3 tools/analyze.py report results/batch [--out 보고서폴더]
+  python3 tools/analyze.py ablate --runs results/base --at-gen 30 --set mutation.rate=0.2 --ticks 340 --seeds 1-12
 
 Windows(cmd·PowerShell): python3 대신 py, 인자는 큰따옴표(cmd 는 작은따옴표를 벗기지 않음), 줄잇기는 cmd ^·PowerShell `,
 godot 은 콘솔 판으로: py tools\\analyze.py run --seeds 1-4 --godot "C:\\Godot\\Godot_v4.4.1-stable_win64_console.exe" --out results\\batch
@@ -41,19 +42,34 @@ import pandas as pd
 
 ## 헤드리스 실행기 스크립트
 RUNNER_SCRIPT = "res://tests/run_experiment.gd"
-## scripts/sim/sim_recorder.gd 의 TIMESERIES_COLUMNS 와 같은 순서
+## 손 사본: 아래 목록은 시뮬레이션 상수를 옮겨 적은 것이라 tools/test_analyze.py TestHandCopies 가 원본과 견준다(단계마다 열이
+## 늘면 함께 고침). 결과를 읽을 때 열 목록은 실행마다 summary.json 의 timeseries_columns·lineage_columns 를 먼저 쓴다(run_columns).
+## scripts/sim/sim_recorder.gd 의 TIMESERIES_COLUMNS 와 같은 순서(v0.1 22열 + v0.2 0단계 행동 셈 16열 — DESIGN-v0.2 9.3)
 TIMESERIES_COLUMNS = [
     "tick", "day", "season", "light", "population", "births", "deaths", "mean_gen", "mean_energy",
     "mean_size", "mean_sense", "mean_age", "food_total", "dropped_total", "stored_total", "carry_total",
     "civ_stage", "storehouses", "farms", "forage_attempts", "store_drops", "farm_sprouts",
+    "act_forward", "act_left", "act_right", "act_eat", "act_rest", "act_gather", "act_drop", "act_plant",
+    "eff_forward", "eff_left", "eff_right", "eff_eat", "eff_rest", "eff_gather", "eff_drop", "eff_plant",
 ]
+## sim_recorder.gd 의 ACT_COLUMNS·EFF_COLUMNS(구간 행동별 고른 횟수·효과가 난 횟수, 행동 번호 SimBrain.ACT_* 순서)
+ACT_COLUMNS = ["act_forward", "act_left", "act_right", "act_eat", "act_rest", "act_gather", "act_drop", "act_plant"]
+EFF_COLUMNS = ["eff_forward", "eff_left", "eff_right", "eff_eat", "eff_rest", "eff_gather", "eff_drop", "eff_plant"]
+## sim_recorder.gd 의 LINEAGE_COLUMNS(v0.1 11열 + eaten — DESIGN-v0.2 9.4)
+LINEAGE_COLUMNS = ["id", "parent_a", "parent_b", "gen", "birth_tick", "death_tick", "death_cause", "children", "size",
+                   "sense", "hue", "eaten"]
 ## scripts/sim/sim_recorder.gd 의 CHRONICLE_COLUMNS
 CHRONICLE_COLUMNS = ["tick", "mean_gen", "kind", "actor_id", "text"]
 ## SimWorld.STAGE_NAMES (0 없음 1 채집 2 저장 3 농사)
 STAGE_NAMES_KO = ["없음", "채집", "저장", "농사"]
 STAGE_NAMES_EN = ["none", "forage", "store", "farm"]
-## 발견 단계: (단계 번호, 열 이름 꼬리, 연대기·summary.json 의 한국어 이름)
+## 발견 단계: (단계 번호, 열 이름 꼬리, 연대기·summary.json 의 한국어 이름) — SimWorld.STAGE_FORAGE·STAGE_STORE·STAGE_FARM
 STAGES = [(1, "forage", "채집"), (2, "store", "저장"), (3, "farm", "농사")]
+## SimBrain.ACTION_NAMES(행동 번호 순서 — ACT_COLUMNS 의 꼬리와 같은 순서)
+ACTION_NAMES_KO = ["앞으로", "왼쪽 돌기", "오른쪽 돌기", "먹기", "쉬기", "줍기", "내려놓기", "심기"]
+## 문명 행동: (열 꼬리, 그 행동이 효과를 낼 수 있게 되는 문명 단계). 줍기·심기는 SimWorld._act 의 단계 문(InfoPanel.ACTION_STAGE 와
+## 같음), 내려놓기는 운반이 있어야 효과가 나는데 운반은 채집이 열린 뒤에만 생김.
+CIV_ACTIONS = [("gather", 1), ("drop", 1), ("plant", 3)]
 ## summary.json 의 끝난 이유 → 보고서 표기
 END_REASON_KO = {"generations": "세대 도달", "extinction": "멸종", "max_ticks": "틱 상한"}
 
@@ -63,12 +79,12 @@ SUMMARY_COLUMNS = [
     "population", "peak_population", "births", "deaths", "civ_stage", "civ_stage_name", "extinct_tick",
     "storehouses", "farms",
     "disc_tick_forage", "disc_gen_forage", "disc_tick_store", "disc_gen_store", "disc_tick_farm", "disc_gen_farm",
-    "final_mean_size", "final_mean_sense", "run_seconds", "history_hash", "path",
+    "final_mean_size", "final_mean_sense", "window_births", "run_seconds", "history_hash", "path",
 ]
 ## 정수로 써야 하는 summary.csv 열
 SUMMARY_INT_COLUMNS = [
     "seed", "ticks", "population", "peak_population", "births", "deaths", "civ_stage", "extinct_tick",
-    "storehouses", "farms", "disc_tick_forage", "disc_tick_store", "disc_tick_farm",
+    "storehouses", "farms", "disc_tick_forage", "disc_tick_store", "disc_tick_farm", "window_births",
 ]
 ## runs.csv 열
 RUNS_COLUMNS = ["cell", "seed", "status", "exit_code", "wall_seconds", "result", "out_dir", "command"]
@@ -87,6 +103,24 @@ RESULT_FILES = ["timeseries.csv", "chronicle.csv", "final.snapshot.json"]
 RERUN_STATUSES = ("failed", "timeout", "error")
 ## --generations 로 받는 수: 실행기(String.is_valid_float)와 파이썬 float 이 둘 다 읽는 꼴(부호 없는 10진수, 지수 표기)
 GENERATIONS_RE = re.compile(r"\+?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?")
+
+# ── 행동 셈(act/eff)·먹은 양·관문 A-1 미리 보기(DESIGN-v0.2 11.1·11.3·14.1 범위 10) ──
+
+## 행동 비율 표의 세대 구간 폭(구간 시작의 평균 세대로 0~10, 10~20, …)
+ACT_GEN_BIN = 10
+## 같은 틱 비교 표의 틱 구간 경계(우연 기준 세계는 수백 틱 만에 멸종할 수 있어 처음 1,000틱을 틱으로 견줌 — DESIGN-v0.2 11.3)
+ACT_TICK_EDGES = [0, 200, 400, 600, 800, 1000]
+## 먹은 양 표의 개체 세대 구간 폭(lineage.csv 의 gen)
+EATEN_GEN_BIN = 10
+## 관문 A-1(DESIGN-v0.2 14.3)의 대상 출생 틱 구간 [시작, 끝), 판정에 필요한 틱(그 전에 멸종하면 판정 불가), 씨앗마다 필요한 대상
+## 출생 수(GATE_A_MIN_BIRTHS). 0단계 기준선 보고가 우연 기준 세계에서 판정이 가능한지 미리 본다(판정 자체는 1단계 gate-a).
+GATE_A_BIRTH_WINDOW = (200, 600)
+GATE_A_TICKS = 1000
+GATE_A_MIN_BIRTHS = 30
+## 반사실 재생(ablate)의 두 갈래 폴더 이름(그대로 · 바꿈)과, 갈래 실행에 주는 평균 세대 끝 조건(세대가 먼저 끝내지 않게 큰 값 — 11.4)
+ABLATE_SAME = "same"
+ABLATE_FORK = "fork"
+ABLATE_GENERATIONS = "1000000000"
 
 # ── 그림 모양(색은 범주 팔레트를 고정 순서로, 바탕·글자·격자는 차분한 회색) ──
 
@@ -311,7 +345,8 @@ def natural_key(s: str) -> tuple:
 
 @dataclass
 class Job:
-    """실행기 한 번: 묶음·씨앗·결과 폴더·명령줄, 그리고 이어 돌리기 때 맞춰 볼 요청 설정."""
+    """실행기 한 번: 묶음·씨앗·결과 폴더·명령줄, 그리고 이어 돌리기 때 맞춰 볼 요청 설정.
+    resume·forks 는 반사실 재생(ablate)의 갈래: 이어 돌릴 스냅숏과 --fork-set 키=값."""
     cell: str
     seed: int
     out_dir: Path
@@ -320,6 +355,8 @@ class Job:
     generations: str = ""
     sets: list[tuple[str, str]] = field(default_factory=list)
     max_ticks: int | None = None
+    resume: str = ""
+    forks: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _same_value(text: str, v) -> bool:
@@ -344,11 +381,14 @@ def existing_mismatch(job: Job) -> str:
         diffs.append(f"preset {s.get('preset')} ≠ {job.preset}")
     if job.generations and not _same_value(job.generations, s.get("generations_target")):
         diffs.append(f"generations {s.get('generations_target')} ≠ {job.generations}")
-    want = dict(job.sets)  # 같은 키는 뒤의 값(실행기와 같은 규칙)
-    have = s.get("overrides", {}) or {}
-    for k in sorted(set(want) | set(have)):
-        if k not in want or k not in have or not _same_value(want[k], have[k]):
-            diffs.append(f"{k} {_json_scalar(have[k]) if k in have else '없음'} ≠ {want.get(k, '없음')}")
+    # 덮어쓰기(--set)와 반사실 재생의 바꾼 키(--fork-set → summary.json 의 forked, 예전 결과는 없음 = {})
+    for want, have in ((dict(job.sets), s.get("overrides", {}) or {}), (dict(job.forks), s.get("forked", {}) or {})):
+        # 같은 키는 뒤의 값(실행기와 같은 규칙)
+        for k in sorted(set(want) | set(have)):
+            if k not in want or k not in have or not _same_value(want[k], have[k]):
+                diffs.append(f"{k} {_json_scalar(have[k]) if k in have else '없음'} ≠ {want.get(k, '없음')}")
+    if job.resume and _norm_path(s.get("resumed_from", "")) != _norm_path(job.resume):
+        diffs.append(f"resumed_from {s.get('resumed_from') or '없음'} ≠ {job.resume}")
     # 틱 상한: 실행기가 summary.json 에 실제로 쓴 상한(max_ticks)과 이번 요청(--max-ticks, 없으면 설정의 run.max_ticks).
     # 예전 결과(max_ticks 기록 없음)는 설정값으로 본다. 다르면 잘린 실행이 섞이므로 mismatch.
     cfg_cap = ((s.get("config", {}) or {}).get("run", {}) or {}).get("max_ticks")
@@ -357,6 +397,11 @@ def existing_mismatch(job: Job) -> str:
     if have_cap is not None and want_cap is not None and float(have_cap) != float(want_cap):
         diffs.append(f"max_ticks {_json_scalar(have_cap)} ≠ {_json_scalar(want_cap)}")
     return ", ".join(diffs)
+
+
+def _norm_path(p) -> str:
+    """경로 비교용(절대·정리). 빈 값은 ""."""
+    return os.path.normcase(os.path.abspath(str(p))) if p else ""
 
 
 def default_repo() -> Path:
@@ -409,6 +454,20 @@ def build_command(godot: str, repo: Path, seed: int, generations: str, out_dir: 
         cmd.append(f"--set={k}={v}")
     if max_ticks is not None and max_ticks > 0:
         cmd.append(f"--max-ticks={max_ticks}")
+    if not lineage:
+        cmd.append("--no-lineage")
+    cmd.append("--quiet")
+    return cmd
+
+
+def build_resume_command(godot: str, repo: Path, snapshot: Path, max_ticks: int, out_dir: Path,
+                         forks: list[tuple[str, str]], lineage: bool) -> list[str]:
+    """반사실 재생 갈래의 실행기 명령줄(DESIGN-v0.2 11.4 의 2): 스냅숏에서 --max-ticks(절대 틱)까지, 세대 끝 조건은 큰 값.
+    --resume 은 --seed·--preset·--set 과 함께 줄 수 없으므로 그것들은 넣지 않는다. forks 가 있으면 --fork-set 으로."""
+    cmd = [godot, "--headless", "--path", str(repo), "--script", RUNNER_SCRIPT, "--",
+           f"--resume={snapshot}", f"--max-ticks={max_ticks}", f"--generations={ABLATE_GENERATIONS}", f"--out={out_dir}"]
+    for k, v in forks:
+        cmd.append(f"--fork-set={k}={v}")
     if not lineage:
         cmd.append("--no-lineage")
     cmd.append("--quiet")
@@ -629,6 +688,186 @@ def cmd_sweep(args) -> int:
     return 1 if failed else 0
 
 
+# ── 반사실 재생(ablate — DESIGN-v0.2 11.4) ──
+
+## ablate 가 견주는 지표: (키, 보고서 이름). 창 = 갈라진 틱 F 부터 F + N 앞까지(시계열은 틱 (F, F + N] 의 줄 — 구간 출생·사망·행동
+## 셈이 그 틱들 동안의 것, 계통은 틱 [F, F + N) 에 태어난 '대상' 개체).
+ABLATE_METRICS = [
+    ("births", "출생"), ("deaths", "사망"), ("pop_mean", "평균 개체 수"), ("pop_end", "끝 개체 수"),
+    ("alive_ticks", "산 틱"),
+    ("act_gather", "줍기 고름 %"), ("eff_gather", "줍기 효과 %"), ("act_drop", "내려놓기 고름 %"),
+    ("eff_drop", "내려놓기 효과 %"), ("act_plant", "심기 고름 %"), ("eff_plant", "심기 효과 %"),
+    ("target_eaten", "대상 평균 먹은 양"), ("target_children", "대상 평균 자식 수"),
+]
+## ablate.csv 열(씨앗·지표마다 한 줄)
+ABLATE_COLUMNS = ["seed", "fork_tick", "metric", "same", "fork", "diff"]
+
+
+def ablate_metrics(run_dir: Path, fork_tick: int, ticks: int) -> dict[str, float]:
+    """갈래 하나(결과 폴더)의 창 [F, F + N) 지표(ABLATE_METRICS). 없는 값은 NaN(멸종 뒤 행동 셈, lineage.csv 없음 등)."""
+    out = {k: float("nan") for k, _ in ABLATE_METRICS}
+    s = json.loads((run_dir / "summary.json").read_text(encoding="utf-8-sig"))
+    ts = read_timeseries(run_dir / "timeseries.csv")
+    end = fork_tick + ticks
+    ext = _int_or(s.get("extinct_tick"))
+    out["alive_ticks"] = float((ext if 0 <= ext < end else end) - fork_tick)
+    if ts is not None:
+        w = ts[(ts["tick"] > fork_tick) & (ts["tick"] <= end)]
+        if len(w):
+            out["births"] = float(w["births"].sum())
+            out["deaths"] = float(w["deaths"].sum())
+            out["pop_mean"] = float(w["population"].mean())
+            out["pop_end"] = float(w["population"].iloc[-1])
+            if all(c in w.columns for c in ACT_COLUMNS + EFF_COLUMNS):
+                total = float(w[ACT_COLUMNS].to_numpy(dtype=float).sum())
+                for key, _ in CIV_ACTIONS:
+                    if total > 0:
+                        out["act_" + key] = 100.0 * float(w["act_" + key].sum()) / total
+                        out["eff_" + key] = 100.0 * float(w["eff_" + key].sum()) / total
+    lin = read_lineage(run_dir / "lineage.csv")
+    if lin is not None:
+        tg = lin[(lin["parent_a"] >= 0) & (lin["birth_tick"] >= fork_tick) & (lin["birth_tick"] < end)]
+        if len(tg):
+            out["target_children"] = float(tg["children"].mean())
+            if "eaten" in tg.columns:
+                out["target_eaten"] = float(tg["eaten"].mean())
+    return out
+
+
+def ablate_table(pairs: list[tuple[int, int, dict, dict]]) -> tuple[pd.DataFrame, list[list[str]]]:
+    """씨앗마다 (씨앗, F, 그대로 지표, 바꿈 지표) → (ablate.csv 표, 보고서 줄). 보고서 줄은 지표마다: 씨앗 수(두 갈래 모두 값이
+    있는), 그대로·바꿈 중앙값, 차이(바꿈 − 그대로)의 중앙값 [Q1–Q3], 바꿈이 큰·작은 씨앗 수."""
+    rows = []
+    for seed, f, same, fork in pairs:
+        for key, _ in ABLATE_METRICS:
+            a, b = same[key], fork[key]
+            rows.append({"seed": seed, "fork_tick": f, "metric": key, "same": a, "fork": b,
+                         "diff": b - a if not (math.isnan(a) or math.isnan(b)) else float("nan")})
+    table = pd.DataFrame(rows, columns=ABLATE_COLUMNS)
+    md = []
+    for key, name in ABLATE_METRICS:
+        g = table[(table["metric"] == key) & table["diff"].notna()]
+        if not len(g):
+            md.append([name, "0", "—", "—", "—", "—"])
+            continue
+        q1, med, q3 = quartiles(g["diff"])
+        up = int((g["diff"] > 0).sum())
+        down = int((g["diff"] < 0).sum())
+        md.append([name, str(len(g)), _fmt(quartiles(g["same"])[1], 2), _fmt(quartiles(g["fork"])[1], 2),
+                   f"{_fmt(med, 2)} [{_fmt(q1, 2)}–{_fmt(q3, 2)}]", f"{up} · {down}"])
+    return table, md
+
+
+def cmd_ablate(args) -> int:
+    """ablate: 반사실 재생(DESIGN-v0.2 11.4 의 실행 순서). 씨앗마다
+      ① 기준 실행 --runs/seed<N>/ 을 평균 --at-gen 세대까지(같은 설정의 끝까지 쓴 결과가 있으면 그대로 씀) → final.snapshot.json, 그 틱 = F
+      ② 그 스냅숏에서 두 갈래를 F + --ticks 틱까지: OUT/same/seed<N>(그대로)·OUT/fork/seed<N>(--set 들을 --fork-set 으로)
+      ③ 창 [F, F + N) 의 지표(ABLATE_METRICS)를 견준 표 → OUT/ablate.csv·ablate.md(같은 명령을 다시 돌리면 같은 표).
+    기준 실행이 그 세대 전에 멸종했거나 틱 상한에 닿은 씨앗은 빼고 표에 적는다. 종료 코드: 0 성공, 1 실패한 실행이 있음, 2 인자·저장소 오류."""
+    repo = Path(args.repo).resolve()
+    err = _check_repo(repo)
+    if err:
+        print("오류: " + err, file=sys.stderr)
+        return 2
+    godot = resolve_godot(args.godot)
+    runs_root = Path(args.runs).resolve()
+    tag = cell_dirname(list(args.set)) + f"__g{args.at_gen}__t{args.ticks}"
+    out_root = Path(args.out).resolve() if args.out else runs_root.parent / f"{runs_root.name}-ablate" / tag
+    for d in (runs_root, out_root):
+        d.mkdir(parents=True, exist_ok=True)
+        ensure_gdignore(d)
+    # ① 기준 실행(analyze.py run 과 같은 폴더 꼴 — 이미 있으면 설정을 맞춰 보고 그대로 씀)
+    base = []
+    for seed in args.seeds:
+        d = runs_root / f"seed{seed}"
+        cmd = build_command(godot, repo, seed, args.at_gen, d, args.preset, args.base_set, False, None)
+        base.append(Job(ROOT_CELL, seed, d, cmd, args.preset, args.at_gen, list(args.base_set), None))
+    print(f"① 기준 실행: 평균 {args.at_gen}세대까지 → {runs_root}")
+    failed = run_jobs(base, runs_root, repo, args.jobs, args.timeout)
+    # ② 갈래
+    skipped: dict[int, str] = {}
+    fork_tick: dict[int, int] = {}
+    branches = []
+    for seed in args.seeds:
+        d = runs_root / f"seed{seed}"
+        why = incomplete_reason(d) if (d / "summary.json").is_file() else "기준 실행 결과 없음"
+        if not why and existing_mismatch(base[args.seeds.index(seed)]):
+            why = "기준 실행의 설정이 다름(runs.csv 의 mismatch)"
+        s = json.loads((d / "summary.json").read_text(encoding="utf-8-sig")) if not why else {}
+        if not why and s.get("end_reason") != "generations":
+            why = (f"기준 실행이 평균 {args.at_gen}세대 전에 끝남"
+                   f"({END_REASON_KO.get(str(s.get('end_reason')), s.get('end_reason'))}, 틱 {s.get('tick')})")
+        if why:
+            skipped[seed] = why
+            continue
+        f = int(s["tick"])
+        fork_tick[seed] = f
+        snap = d / "final.snapshot.json"
+        for branch, forks in ((ABLATE_SAME, []), (ABLATE_FORK, list(args.set))):
+            od = out_root / branch / f"seed{seed}"
+            cmd = build_resume_command(godot, repo, snap, f + args.ticks, od, forks, True)
+            branches.append(Job(branch, seed, od, cmd, "", ABLATE_GENERATIONS, [], f + args.ticks, str(snap), forks))
+    print(f"② 갈래: 그대로·바꿈({', '.join(f'{k}={v}' for k, v in args.set)}) × 씨앗 {len(fork_tick)}개, "
+          f"갈라진 틱부터 {args.ticks}틱 → {out_root}")
+    if branches:
+        failed += run_jobs(branches, out_root, repo, args.jobs, args.timeout)
+    # ③ 견주기(두 갈래가 모두 끝까지 쓴 씨앗만)
+    pairs = []
+    for seed in sorted(fork_tick):
+        dirs = [out_root / b / f"seed{seed}" for b in (ABLATE_SAME, ABLATE_FORK)]
+        bad = [incomplete_reason(x) if (x / "summary.json").is_file() else "결과 없음" for x in dirs]
+        if any(bad):
+            skipped[seed] = "갈래 실행 실패: " + "; ".join(f"{b}: {w}" for b, w in zip((ABLATE_SAME, ABLATE_FORK), bad) if w)
+            continue
+        pairs.append((seed, fork_tick[seed], ablate_metrics(dirs[0], fork_tick[seed], args.ticks),
+                      ablate_metrics(dirs[1], fork_tick[seed], args.ticks)))
+    table, md_rows = ablate_table(pairs)
+    write_csv(table, out_root / "ablate.csv")
+    write_ablate_md(out_root / "ablate.md", args, runs_root, pairs, md_rows, skipped, out_root)
+    print(f"표: {out_root / 'ablate.md'}  (씨앗 {len(pairs)}개, 뺀 씨앗 {len(skipped)}개)")
+    print(_md_table(["지표", "씨앗", "그대로", "바꿈", "차이 중앙값 [Q1–Q3]", "바꿈 > · < 그대로"], md_rows,
+                    ["l", "r", "r", "r", "r", "r"]))
+    if not pairs:
+        print("오류: 견줄 수 있는 씨앗이 없습니다", file=sys.stderr)
+        return 1
+    return 1 if failed else 0
+
+
+def write_ablate_md(path: Path, args, runs_root: Path, pairs: list, md_rows: list[list[str]], skipped: dict[int, str],
+                    out_root: Path) -> None:
+    """ablate.md: 조건, 지표 차이 표, 씨앗별 갈라진 틱과 두 갈래의 끝 해시, 뺀 씨앗, 읽는 법."""
+    sets = ", ".join(f"`{k}={v}`" for k, v in args.set)
+    base_sets = ", ".join(f"`{k}={v}`" for k, v in args.base_set) or "없음"
+    out = ["# 반사실 재생(ablate) 보고서", "",
+           f"- 기준 실행: `{runs_root.name}` — 예설정 `{args.preset}`, 덮어쓰기 {base_sets}, 평균 {args.at_gen}세대까지(끝 스냅숏의 틱 = F)",
+           f"- 바꾼 갈래(`{ABLATE_FORK}`): {sets} · 그대로 갈래(`{ABLATE_SAME}`): 바꾸지 않음 · 둘 다 F 부터 {args.ticks}틱",
+           f"- 씨앗 {', '.join(str(s) for s, *_ in pairs) or '없음'} (견준 {len(pairs)}개)",
+           "- 표: [`ablate.csv`](ablate.csv)(씨앗·지표마다 그대로·바꿈·차이). 갈래 결과는 이 폴더의 "
+           f"`{ABLATE_SAME}/`·`{ABLATE_FORK}/`(`analyze.py report` 로 보고서를 만들 수 있음).", "",
+           "## 지표 차이(바꿈 − 그대로)", ""]
+    out.append(_md_table(["지표", "씨앗", "그대로 중앙값", "바꿈 중앙값", "차이 중앙값 [Q1–Q3]", "바꿈 > · < 그대로(씨앗)"],
+                         md_rows, ["l", "r", "r", "r", "r", "r"]))
+    out += ["", "## 씨앗별 갈라진 틱", ""]
+    rows = []
+    for seed, f, _, _ in pairs:
+        h = []
+        for b in (ABLATE_SAME, ABLATE_FORK):
+            s = json.loads((out_root / b / f"seed{seed}" / "summary.json").read_text(encoding="utf-8-sig"))
+            h.append(f"`{str(s.get('history_hash', ''))[:12]}`")
+        rows.append([str(seed), f"{f:,}", *h])
+    out.append(_md_table(["씨앗", "F(틱)", "그대로 끝 해시", "바꿈 끝 해시"], rows, ["r", "r", "l", "l"]))
+    if skipped:
+        out += ["", "## 뺀 씨앗", ""]
+        out.append(_md_table(["씨앗", "까닭"], [[str(k), v] for k, v in sorted(skipped.items())], ["r", "l"]))
+    out += ["", "## 읽는 법", "",
+            "- 두 갈래는 같은 스냅숏(같은 세계·난수 상태)에서 설정 하나만 다르게 이어 돌린 쌍입니다(결정적 재생 — 같은 명령이면 같은 표). "
+            "차이에는 그 설정의 직접 효과와, 행동이 달라져 갈라진 출생·먹이 고갈 같은 생태 되먹임이 함께 들어 있습니다.",
+            "- 시계열 지표는 틱 (F, F + N] 의 줄(구간 출생·사망·행동 셈이 그 틱들 동안의 것), 대상 = 틱 [F, F + N) 에 태어난 개체"
+            "(살아 있는 개체의 먹은 양·자식 수는 끝 틱까지의 값 — 수명이 창보다 길면 잘림).",
+            "- 차이의 사분위는 numpy 기본(선형 보간)입니다. 씨앗이 적으면 거칠게 읽어야 합니다.", ""]
+    path.write_text("\n".join(out), encoding="utf-8")
+
+
 # ── 결과 읽기 ──
 
 def discover_runs(root: Path) -> list[Path]:
@@ -652,6 +891,28 @@ def read_timeseries(path: Path) -> pd.DataFrame | None:
         if c not in df.columns:
             return None
     return df
+
+
+def read_lineage(path: Path) -> pd.DataFrame | None:
+    """lineage.csv(묶음 실행은 기본으로 쓰지 않음 — --lineage). 없거나 읽을 수 없으면 None. eaten 은 0단계부터의 열(예전 결과는 없음)."""
+    if not path.is_file():
+        return None
+    try:
+        df = pd.read_csv(path, encoding=CSV_ENCODING)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
+        return None
+    for c in ("id", "parent_a", "gen", "birth_tick", "death_tick", "children"):
+        if c not in df.columns:
+            return None
+    return df
+
+
+def window_births(lin: pd.DataFrame | None, window: tuple[int, int] = GATE_A_BIRTH_WINDOW) -> float:
+    """틱 [시작, 끝) 에 태어난 개체 수(처음 개체 — 부모 없음 — 는 빼고). lineage.csv 가 없으면 NaN."""
+    if lin is None:
+        return float("nan")
+    born = lin[(lin["parent_a"] >= 0) & (lin["birth_tick"] >= window[0]) & (lin["birth_tick"] < window[1])]
+    return float(len(born))
 
 
 def read_chronicle(path: Path) -> pd.DataFrame | None:
@@ -739,6 +1000,7 @@ def summary_row(run_dir: Path, root: Path) -> tuple[dict, pd.DataFrame | None]:
         "civ_stage_name": s.get("civ_stage_name", ""), "extinct_tick": s.get("extinct_tick", -1),
         "storehouses": s.get("storehouses"), "farms": s.get("farms"),
         "final_mean_size": float("nan"), "final_mean_sense": float("nan"),
+        "window_births": window_births(read_lineage(run_dir / "lineage.csv")),
         "run_seconds": s.get("run_seconds"), "history_hash": s.get("history_hash", ""), "path": rel,
     }
     for _, key, _ in STAGES:
@@ -840,6 +1102,121 @@ def aggregate(df: pd.DataFrame) -> pd.DataFrame:
         row["run_seconds_total"] = float(pd.to_numeric(g["run_seconds"], errors="coerce").sum())
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+# ── 행동 셈(act/eff)·평생 먹은 양·관문 A-1 미리 보기 ──
+
+## actions.csv 열(실행·구간·행동마다 한 줄)
+ACTION_COLUMNS = ["cell", "seed", "path", "basis", "bin_lo", "bin_hi", "action", "rows", "total", "act", "eff",
+                  "act_share", "eff_share", "success"]
+## eaten.csv 열(실행·개체 세대 구간마다 한 줄)
+EATEN_COLUMNS = ["cell", "seed", "path", "gen_lo", "gen_hi", "dead", "eaten_median", "eaten_mean"]
+
+
+def run_columns(run_dir: Path, ts: pd.DataFrame | None) -> list[str]:
+    """실행 하나의 시계열 열 목록: summary.json 의 timeseries_columns(0단계부터 실행기·실험실이 씀 — DESIGN-v0.2 9.5), 없으면(예전
+    결과) timeseries.csv 머리. 열이 단계마다 늘므로 어떤 열이 있는지는 손 사본(TIMESERIES_COLUMNS)이 아니라 이것으로 본다."""
+    try:
+        s = json.loads((run_dir / "summary.json").read_text(encoding="utf-8-sig"))
+        cols = s.get("timeseries_columns")
+        if isinstance(cols, list) and cols:
+            return [str(c) for c in cols]
+    except (OSError, ValueError):
+        pass
+    return list(ts.columns) if ts is not None else []
+
+
+def action_bins(ts: pd.DataFrame, basis: str) -> list[dict]:
+    """실행 하나의 구간별 행동 셈. 시계열 한 줄 = 앞 줄 뒤 그 줄까지의 구간(births 와 같은 뜻 — DESIGN-v0.2 9.3)이고, 줄을
+    구간 **시작** 값(앞 줄의 평균 세대·틱·문명 단계, 첫 줄은 그 줄)으로 나눈다.
+      basis = "gen": 시작 평균 세대로 ACT_GEN_BIN 폭. 문명 행동마다 그 행동이 열린 단계(CIV_ACTIONS) 뒤에 시작한 줄만(열린 뒤).
+      basis = "tick": ACT_TICK_EDGES 의 틱 구간. 열림과 상관없이 모든 줄(우연 기준과 같은 틱에서 견줌).
+    행동이 하나도 없는 줄(멸종 뒤)은 뺀다. 결과: [{bin_lo, bin_hi, action, rows, total, act, eff}] — total = 그 줄들의 모든 행동 합."""
+    t = ts.sort_values("tick").reset_index(drop=True)
+    act = t[ACT_COLUMNS].to_numpy(dtype=float)
+    eff = t[EFF_COLUMNS].to_numpy(dtype=float)
+    total = act.sum(axis=1)
+    start = t[["tick", "mean_gen", "civ_stage"]].shift(1)
+    start.iloc[0] = t[["tick", "mean_gen", "civ_stage"]].iloc[0]
+    if basis == "gen":
+        idx = np.floor(start["mean_gen"].to_numpy(dtype=float) / ACT_GEN_BIN).astype(int)
+        edges = None
+    else:
+        edges = ACT_TICK_EDGES
+        idx = np.searchsorted(np.asarray(edges), start["tick"].to_numpy(dtype=float), side="right") - 1
+    stage = start["civ_stage"].to_numpy(dtype=float)
+    out = []
+    for a, (key, open_stage) in enumerate(CIV_ACTIONS):
+        col = ACT_COLUMNS.index("act_" + key)
+        use = total > 0
+        if basis == "gen":
+            use = use & (stage >= open_stage)
+        else:
+            use = use & (idx >= 0) & (idx < len(edges) - 1)
+        for b in sorted(set(idx[use].tolist())):
+            m = use & (idx == b)
+            lo, hi = (b * ACT_GEN_BIN, (b + 1) * ACT_GEN_BIN) if basis == "gen" else (edges[b], edges[b + 1])
+            out.append({"bin_lo": lo, "bin_hi": hi, "action": key, "rows": int(m.sum()), "total": float(total[m].sum()),
+                        "act": float(act[m, col].sum()), "eff": float(eff[m, col].sum())})
+    return out
+
+
+def action_table(df: pd.DataFrame, series: dict[str, pd.DataFrame], root: Path) -> pd.DataFrame:
+    """모든 실행의 구간별 문명 행동 셈(actions.csv). 행동 셈 열(act_*·eff_*)이 없는 실행(v0.1 실행기 결과)은 빠진다.
+    act_share = act ÷ total(그 구간에 고른 모든 행동 가운데 이 행동), eff_share = eff ÷ total, success = eff ÷ act."""
+    rows = []
+    for _, r in df.iterrows():
+        ts = series.get(r["path"])
+        if ts is None:
+            continue
+        cols = run_columns(root / r["path"], ts)
+        if not all(c in cols and c in ts.columns for c in ACT_COLUMNS + EFF_COLUMNS):
+            continue
+        for basis in ("gen", "tick"):
+            for b in action_bins(ts, basis):
+                tot, a, e = b["total"], b["act"], b["eff"]
+                rows.append({"cell": r["cell"], "seed": r["seed"], "path": r["path"], "basis": basis, **b,
+                             "act_share": a / tot if tot > 0 else float("nan"),
+                             "eff_share": e / tot if tot > 0 else float("nan"),
+                             "success": e / a if a > 0 else float("nan")})
+    out = pd.DataFrame(rows, columns=ACTION_COLUMNS)
+    for c in ("seed", "bin_lo", "bin_hi", "rows"):
+        out[c] = pd.to_numeric(out[c], errors="coerce").round().astype("Int64")
+    return out
+
+
+def eaten_table(df: pd.DataFrame, root: Path) -> pd.DataFrame:
+    """lineage.csv 의 평생 먹은 양(eaten — 0단계부터의 열)을 개체 세대 구간(EATEN_GEN_BIN 폭)마다: 죽은 개체(death_tick ≥ 0)의
+    수·중앙값·평균(eaten.csv). lineage.csv 나 eaten 열이 없는 실행은 빠진다."""
+    rows = []
+    for _, r in df.iterrows():
+        lin = read_lineage(root / r["path"] / "lineage.csv")
+        if lin is None or "eaten" not in lin.columns:
+            continue
+        dead = lin[lin["death_tick"] >= 0]
+        bins = (dead["gen"].to_numpy(dtype=int) // EATEN_GEN_BIN)
+        for b in sorted(set(bins.tolist())):
+            e = dead["eaten"].to_numpy(dtype=float)[bins == b]
+            rows.append({"cell": r["cell"], "seed": r["seed"], "path": r["path"], "gen_lo": b * EATEN_GEN_BIN,
+                         "gen_hi": (b + 1) * EATEN_GEN_BIN, "dead": len(e), "eaten_median": float(np.median(e)),
+                         "eaten_mean": float(np.mean(e))})
+    out = pd.DataFrame(rows, columns=EATEN_COLUMNS)
+    for c in ("seed", "gen_lo", "gen_hi", "dead"):
+        out[c] = pd.to_numeric(out[c], errors="coerce").round().astype("Int64")
+    return out
+
+
+def gate_a_status(row) -> str:
+    """관문 A-1 판정 가능성(실행 하나): "ok" = GATE_A_TICKS 틱까지 살았고 대상 출생 ≥ GATE_A_MIN_BIRTHS, "extinct" = 그 전에 멸종,
+    "few" = 살았지만 대상 출생이 모자람, "short" = 멸종하지 않았지만 그 틱 전에 끝남(모름), "nolineage" = lineage.csv 없음."""
+    ext = _int_or(row["extinct_tick"])
+    if 0 <= ext < GATE_A_TICKS:
+        return "extinct"
+    if ext < 0 and _int_or(row["ticks"]) < GATE_A_TICKS:
+        return "short"
+    if pd.isna(row["window_births"]):
+        return "nolineage"
+    return "ok" if int(row["window_births"]) >= GATE_A_MIN_BIRTHS else "few"
 
 
 def write_csv(df: pd.DataFrame, path: Path) -> None:
@@ -1195,9 +1572,95 @@ def _md_table(header: list[str], rows: list[list[str]], align: list[str] | None 
     return "\n".join(lines)
 
 
+## 관문 A-1 판정 가능성(gate_a_status) → 보고서 표기
+GATE_A_STATUS_KO = {"ok": "판정 가능", "extinct": f"{GATE_A_TICKS:,}틱 전 멸종", "few": "대상 출생 모자람",
+                    "short": f"{GATE_A_TICKS:,}틱 전에 끝남", "nolineage": "lineage.csv 없음"}
+
+
+def _action_md_rows(acts: pd.DataFrame, basis: str, cells: list[str]) -> list[list[str]]:
+    """행동 비율 표의 줄: 묶음 × 구간, 문명 행동마다 '고름 % · 효과 % (실행 수)' — 실행마다 낸 비율의 중앙값."""
+    rows = []
+    sub = acts[acts["basis"] == basis]
+    for cell in cells:
+        g = sub[sub["cell"] == cell]
+        for lo, hi in sorted(set((int(a), int(b)) for a, b in zip(g["bin_lo"], g["bin_hi"]))):
+            row = [f"`{cell}`", f"{lo:,}–{hi:,}"]
+            for key, _ in CIV_ACTIONS:
+                h = g[(g["bin_lo"] == lo) & (g["action"] == key)]
+                if not len(h):
+                    row.append("—")
+                    continue
+                a = quartiles(h["act_share"])[1] * 100.0
+                e = quartiles(h["eff_share"])[1] * 100.0
+                row.append(f"{a:.2f} · {e:.2f} ({len(h)})")
+            rows.append(row)
+    return rows
+
+
+def _action_md(acts: pd.DataFrame, cells: list[str]) -> list[str]:
+    """보고서의 '행동 비율' 절(행동 셈 열이 있는 실행이 없으면 그렇다고만)."""
+    out = ["## 행동 비율(act/eff)", ""]
+    if acts is None or not len(acts):
+        return out + ["행동 셈 열(`act_*`·`eff_*`)이 있는 실행이 없습니다(v0.2 0단계 전 실행기의 결과).", ""]
+    names = dict(zip([c[4:] for c in ACT_COLUMNS], ACTION_NAMES_KO))
+    head = [f"{names[k]} 고름 · 효과 %(실행)" for k, _ in CIV_ACTIONS]
+    out += ["실행마다 구간의 **고름 비율**(이 행동을 고른 횟수 ÷ 모든 행동 횟수)과 **효과 비율**(효과가 난 횟수 ÷ 모든 행동 횟수)을 "
+            "내고, 묶음마다 그 **중앙값**을 적습니다(괄호 = 그 구간에 값이 있는 실행 수). 실행마다 구간·행동별 값은 "
+            "[`actions.csv`](actions.csv).", "",
+            "### 세대 구간별 — 문명 행동이 열린 뒤", "",
+            f"구간 = 구간 시작의 평균 세대({ACT_GEN_BIN}세대 폭). 줍기·내려놓기는 채집, 심기는 농사가 열린 뒤에 시작한 구간만 셉니다.", ""]
+    out.append(_md_table(["묶음", "평균 세대"] + head, _action_md_rows(acts, "gen", cells), ["l", "r", "r", "r", "r"]))
+    out += ["", f"### 틱 구간별 — 처음 {ACT_TICK_EDGES[-1]:,}틱(열림과 상관없이)", "",
+            "같은 틱에서 묶음을 견주는 표(우연 기준 세계는 수백 틱 만에 멸종할 수 있음). 단계가 열리기 전의 줍기·심기는 "
+            "효과가 없는 시도라 효과 비율이 0 입니다.", ""]
+    out.append(_md_table(["묶음", "틱"] + head, _action_md_rows(acts, "tick", cells), ["l", "r", "r", "r", "r"]))
+    return out + [""]
+
+
+def _eaten_md(eaten: pd.DataFrame, cells: list[str]) -> list[str]:
+    """보고서의 '평생 먹은 양' 절(lineage.csv 에 eaten 이 있는 실행이 있을 때만)."""
+    if eaten is None or not len(eaten):
+        return []
+    out = ["## 평생 먹은 양(죽은 개체)", "",
+           f"`lineage.csv` 의 `eaten`. 개체 세대({EATEN_GEN_BIN}세대 폭)마다 실행의 중앙값을 내고 묶음마다 그 중앙값을 적습니다"
+           "(괄호 = 실행 수 · 죽은 개체 수 합). 실행마다 값은 [`eaten.csv`](eaten.csv).", ""]
+    rows = []
+    for cell in cells:
+        g = eaten[eaten["cell"] == cell]
+        for lo, hi in sorted(set((int(a), int(b)) for a, b in zip(g["gen_lo"], g["gen_hi"]))):
+            h = g[g["gen_lo"] == lo]
+            rows.append([f"`{cell}`", f"{lo:,}–{hi:,}", f"{_fmt(quartiles(h['eaten_median'])[1])} "
+                         f"({len(h)} · {int(h['dead'].sum()):,})"])
+    out.append(_md_table(["묶음", "개체 세대", "먹은 양 중앙값(실행 · 개체)"], rows, ["l", "r", "r"]))
+    return out + [""]
+
+
+def _gate_a_md(df: pd.DataFrame, cells: list[str]) -> list[str]:
+    """보고서의 '관문 A-1 판정 가능성' 절(lineage.csv 가 있는 실행이 있을 때만)."""
+    if not df["window_births"].notna().any():
+        return []
+    lo, hi = GATE_A_BIRTH_WINDOW
+    out = ["## 관문 A-1 판정 가능성(미리 보기)", "",
+           f"DESIGN-v0.2 14.3 의 A-1 은 씨앗마다 {GATE_A_TICKS:,}틱까지 살고 틱 [{lo}, {hi}) 출생이 {GATE_A_MIN_BIRTHS} 이상이어야 "
+           "판정합니다. 실행마다 값은 `summary.csv` 의 `extinct_tick`·`window_births`.", ""]
+    rows = []
+    for cell in cells:
+        g = df[df["cell"] == cell]
+        st = [gate_a_status(r) for _, r in g.iterrows()]
+        wb = g["window_births"].dropna().astype(float).tolist()
+        ext = [int(v) for v in g["extinct_tick"].dropna() if int(v) >= 0]
+        rows.append([f"`{cell}`", str(len(g)), _pct(st.count("ok"), len(g)), _pct(st.count("extinct"), len(g)),
+                     f"{min(ext):,}–{max(ext):,}" if ext else "—",
+                     f"{_fmt(quartiles(wb)[1], 0)} [{_fmt(min(wb), 0)}–{_fmt(max(wb), 0)}]" if wb else "—"])
+    out.append(_md_table(["묶음", "실행", "판정 가능", f"{GATE_A_TICKS:,}틱 전 멸종", "멸종 틱 범위",
+                          f"출생 [{lo}, {hi}) 중앙값 [최소–최대]"], rows, ["l", "r", "r", "r", "r", "r"]))
+    return out + [""]
+
+
 def write_report_md(path: Path, root: Path, df: pd.DataFrame, cells: pd.DataFrame, plots: list[str],
-                    plot_note: str, runs: dict[tuple[str, int], dict]) -> None:
-    """report.md: 묶음별 요약, 발견 세대, 실행별 결과, 그림, 실패, 읽는 법(한국어)."""
+                    plot_note: str, runs: dict[tuple[str, int], dict], acts: pd.DataFrame | None = None,
+                    eaten: pd.DataFrame | None = None) -> None:
+    """report.md: 묶음별 요약, 발견 세대, 행동 비율·먹은 양·관문 A-1 미리 보기(v0.2 0단계 열), 실행별 결과, 그림, 실패, 읽는 법."""
     out = ["# 실험 분석 보고서", ""]
     presets = sorted(set(str(p) or SNAPSHOT_CELL for p in df["preset"]))
     targets = sorted(set(float(v) for v in df["generations_target"] if not pd.isna(v)))
@@ -1244,7 +1707,12 @@ def write_report_md(path: Path, root: Path, df: pd.DataFrame, cells: pd.DataFram
                                f"{_fmt(c[f'disc_gen_{key}_q3'])}] ({k}/{n})")
         rows.append(cellrow)
     out.append(_md_table(["묶음", "채집", "저장", "농사"], rows, ["l", "r", "r", "r"]))
-    out += ["", "## 실행별 결과", ""]
+    out.append("")
+    order = cell_order(df)
+    out += _action_md(acts, order)
+    out += _eaten_md(eaten, order)
+    out += _gate_a_md(df, order)
+    out += ["## 실행별 결과", ""]
     rows = []
     for _, r in df.iterrows():
         rows.append([f"`{r['cell']}`", _fmt(r["seed"]), END_REASON_KO.get(str(r["end_reason"]), str(r["end_reason"])),
@@ -1285,6 +1753,9 @@ def write_report_md(path: Path, root: Path, df: pd.DataFrame, cells: pd.DataFram
         "(빈 개체의 평균 0 을 쓰면 중앙값이 내려가 진화가 느린 것처럼 보이므로).",
         "- 사분위는 numpy 기본(선형 보간) 백분위수입니다. 실행이 적으면(씨앗 4개 등) 사분위 범위는 거칠게 읽어야 합니다.",
         "- 실행이 목표 세대에서 멈추므로, 목표보다 늦게 올 발견은 \"도달 못 함\"으로 보입니다(오른쪽 중도 절단).",
+        "- **행동 비율**: 고름 = 그 행동을 고른 횟수 ÷ 그 구간 모든 개체·틱의 행동 수(판단하지 않은 틱의 되풀이 포함), "
+        "효과 = 실제로 무언가 바뀐 횟수(DESIGN-v0.2 11.1 — 줍기는 운반이 늘 때, 내려놓기는 운반에서 나갈 때, 심기는 밭이 생길 때) "
+        "÷ 같은 분모. 구간은 시계열 줄(기록 간격, 기본 20틱) 단위입니다.",
         "- 같은 씨앗·같은 설정이면 역사 해시가 같습니다(결정성). 해시가 다르면 설정이나 코드가 다릅니다.",
         "",
     ]
@@ -1307,6 +1778,13 @@ def report(root: Path, out_dir: Path | None = None, plots: bool = True, lang: st
     cells = aggregate(df)
     write_csv(df, out_dir / "summary.csv")
     write_csv(cells, out_dir / "cells.csv")
+    acts = action_table(df, series, root)
+    eaten = eaten_table(df, root)
+    # 행동 셈·먹은 양 열이 있는 실행이 있을 때만 쓴다(예전 결과 폴더에 빈 표를 남기지 않게)
+    if len(acts):
+        write_csv(acts, out_dir / "actions.csv")
+    if len(eaten):
+        write_csv(eaten, out_dir / "eaten.csv")
     files: list[str] = []
     note = ""
     if plots:
@@ -1318,7 +1796,7 @@ def report(root: Path, out_dir: Path | None = None, plots: bool = True, lang: st
     else:
         note = "그림을 끄고(--no-plots) 만들었습니다."
     runs = read_runs_csv(root / "runs.csv")
-    write_report_md(out_dir / "report.md", root, df, cells, files, note, runs)
+    write_report_md(out_dir / "report.md", root, df, cells, files, note, runs, acts, eaten)
     print(f"보고서: {out_dir / 'report.md'}  (실행 {len(df)}개, 묶음 {len(cells)}개, 그림 {len(files)}장)")
     return 0
 
@@ -1375,6 +1853,24 @@ def build_parser() -> argparse.ArgumentParser:
                    help="바꿔 볼 설정(여러 번 → 전체 격자), 예: --param mutation.rate=0.02,0.1")
     _add_batch_args(p)
     p.set_defaults(func=cmd_sweep)
+    p = sub.add_parser("ablate", help="반사실 재생: 같은 스냅숏에서 그대로·설정을 바꾼 갈래를 돌려 견줌(DESIGN-v0.2 11.4)")
+    p.add_argument("--runs", required=True, help="기준 실행 폴더(씨앗마다 seed<N>/ — 없으면 만들고, 같은 설정의 결과가 있으면 그대로 씀)")
+    p.add_argument("--at-gen", type=_positive_number, required=True, help="기준 실행의 목표 평균 세대(그 끝 스냅숏에서 갈라짐)")
+    p.add_argument("--set", type=_arg_type(parse_set), action="append", required=True, metavar="KEY=VALUE",
+                   help="바꾼 갈래에 줄 설정(실행기 --fork-set, 여러 번). 저장된 배열 길이를 바꾸는 키(brain.hidden 등)는 실행기가 거부")
+    p.add_argument("--ticks", type=_max_ticks, required=True, help="갈라진 뒤 돌릴 틱 수(1~SimConfig.TICK_MAX 의 정수)")
+    p.add_argument("--seeds", type=_arg_type(parse_seeds), default=parse_seeds("1-4"),
+                   help='씨앗: "1-12", "1,3,5" (기본 1-4)')
+    p.add_argument("--preset", default="default", help="기준 실행의 예설정(기본 default)")
+    p.add_argument("--base-set", type=_arg_type(parse_set), action="append", default=[], metavar="KEY=VALUE",
+                   help="기준 실행의 설정 덮어쓰기(여러 번 — 두 갈래 모두 이 설정에서 시작)")
+    p.add_argument("--out", default=None, help="갈래 결과·표 폴더(기본 <runs>-ablate/<키=값>__g<세대>__t<틱>)")
+    p.add_argument("--jobs", type=int, default=max(1, min(4, os.cpu_count() or 1)),
+                   help="동시에 돌릴 실행기 수(기본 min(4, CPU 수))")
+    p.add_argument("--godot", default=os.environ.get("GODOT", "godot"), help="godot 실행 파일(run 과 같음)")
+    p.add_argument("--repo", default=str(default_repo()), help="저장소(기본 tools/ 의 부모)")
+    p.add_argument("--timeout", type=float, default=3600.0, help="실행 하나의 시간 제한(초, 기본 3600)")
+    p.set_defaults(func=cmd_ablate)
     p = sub.add_parser("report", help="결과 폴더를 모아 summary.csv·report.md·그림")
     p.add_argument("dir", help="결과 폴더(아래의 summary.json 을 모두 찾음)")
     p.add_argument("--out", default=None, help="보고서 폴더(기본 결과 폴더)")

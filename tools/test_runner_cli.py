@@ -15,6 +15,10 @@ godot 은 환경 변수 GODOT 또는 PATH 의 godot(tools/test_analyze.py 와 �
 - 결과 폴더: 앞 실행의 파일이 섞이지 않음, 모르는 파일이 있으면 2 로 거부하고 아무것도 지우지 않음(I21).
 - 설정 오류(절 통째 덮어쓰기·범위 밖 값)는 2, 결과 폴더를 건드리지 않음(I02·I03). analyze.py --set 경로도 실행기 2 를 기록.
 - 쓰기 실패는 3 이고 RESULT 줄 끝에 write_failed(중간 스냅숏 포함, J10·I17). 정상이면 RESULT 줄이 reason=… 으로 끝남.
+- --fork-set(반사실 재생, DESIGN-v0.2 11.4·14.1 검사 기준 7): 바꾼 갈래만 다르고 그대로 갈래·같은 값으로 바꾼 갈래는 끊김 없이
+  돌린 것과 같은 해시, summary.json 의 forked. 저장된 배열 길이를 바꾸는 키(brain.hidden 등)·모르는 키·범위 밖 값은 2(앞 결과 그대로),
+  --resume 없이 주면 인자 오류. analyze.py ablate 를 실제 실행기로: 그대로 갈래 = 끊김 없이 돌린 것, 같은 명령이면 같은 표.
+- summary.json 의 timeseries_columns·lineage_columns = CSV 머리 = analyze.py 손 사본(DESIGN-v0.2 9.5·14.1 범위 7).
 """
 from __future__ import annotations
 
@@ -235,6 +239,114 @@ class TestResume(RunnerCase):
     def test_missing_snapshot(self) -> None:
         cp = run_runner(f"--resume={self.tmp / '없는.json'}", f"--out={self.tmp / 'nosnap'}", "--quiet")
         self.assertEqual(cp.returncode, 2)
+
+
+# ── 반사실 재생(--fork-set) ──
+
+class TestFork(RunnerCase):
+    """원본: 기본 설정 씨앗 3, 120틱, 40틱마다 스냅숏. 갈래는 snapshot-40 에서 120틱까지(역사 해시 검사점 100틱을 지나게)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.orig = cls.tmp / "orig"
+        cls.orig_cp = run_runner("--seed=3", "--max-ticks=120", "--snapshot-every=40", f"--out={cls.orig}", "--quiet")
+        cls.snap = cls.orig / "snapshot-40.json"
+
+    def setUp(self) -> None:
+        self.ok(self.orig_cp)
+
+    def branch(self, name: str, *forks: str) -> subprocess.CompletedProcess:
+        return run_runner(f"--resume={self.snap}", "--max-ticks=120", *forks, f"--out={self.tmp / name}", "--quiet")
+
+    def test_only_forked_branch_differs(self) -> None:
+        """그대로 갈래·같은 값으로 바꾼 갈래 = 끊김 없이 돌린 것(해시·40틱 뒤 시계열), 바꾼 갈래는 다름. summary.json 의 forked·config."""
+        names = ("same", "noop", "fork")
+        args = ((), ("--fork-set=mutation.rate=0.05",), ("--fork-set=metab.base=0.09", "--fork-set=mutation.rate=0.2"))
+        with ThreadPoolExecutor(PARALLEL) as pool:
+            cps = dict(zip(names, pool.map(lambda na: self.branch(na[0], *na[1]), zip(names, args))))
+        for n in names:
+            self.ok(cps[n])
+        orig = summary(self.orig)
+        after = [r for r in data_rows(self.orig / "timeseries.csv") if int(r[0]) > 40]
+        for n in ("same", "noop"):
+            s = summary(self.tmp / n)
+            self.assertEqual((s["tick"], s["history_hash"]), (120, orig["history_hash"]), n)
+            self.assertEqual([r for r in data_rows(self.tmp / n / "timeseries.csv") if int(r[0]) > 40], after, n)
+        self.assertEqual(summary(self.tmp / "same")["forked"], {})
+        self.assertEqual(summary(self.tmp / "noop")["forked"], {"mutation.rate": 0.05})
+        self.assertEqual(orig["forked"], {})
+        f = summary(self.tmp / "fork")
+        self.assertNotEqual(f["history_hash"], orig["history_hash"], "바꾼 갈래는 다른 역사")
+        self.assertNotEqual([r for r in data_rows(self.tmp / "fork" / "timeseries.csv") if int(r[0]) > 40], after)
+        self.assertEqual(f["forked"], {"metab.base": 0.09, "mutation.rate": 0.2})
+        self.assertEqual((f["config"]["metab"]["base"], f["config"]["mutation"]["rate"]), (0.09, 0.2))
+        self.assertEqual((f["seed"], f["resumed_from"], f["preset"], f["overrides"]), (3, str(self.snap), "", {}))
+
+    def test_layout_and_bad_keys_exit_2(self) -> None:
+        """저장된 배열 길이를 바꾸는 키(유전체 배치·기억·지도 크기)·모르는 키·종류가 다른 값·범위 밖 값은 종료 코드 2.
+        결과 폴더를 보기 전에 거르므로 앞 결과는 그대로."""
+        keep = self.tmp / "keep_fork"
+        self.ok(self.branch("keep_fork"))
+        before = listing(keep)
+        cases = {"brain.hidden=12": "유전체", "brain.memory_units=2": "기억", "map.width=60": "지도",
+                 "없는.키=1": "알 수 없는 설정 키", "metab.base=\"x\"": "종류", "metab.base=-1": "설정 오류"}
+        with ThreadPoolExecutor(PARALLEL) as pool:
+            res = dict(zip(cases, pool.map(lambda kv: run_runner(f"--resume={self.snap}", f"--fork-set={kv}",
+                                                                  "--max-ticks=120", f"--out={keep}", "--quiet"), cases)))
+        for kv, word in cases.items():
+            self.assertEqual(res[kv].returncode, 2, f"{kv}: {res[kv].stderr[-500:]}")
+            self.assertIn("--fork-set", res[kv].stderr, kv)
+            self.assertIn(word, res[kv].stderr, kv)
+        self.assertEqual(listing(keep), before)
+
+    def test_fork_needs_resume(self) -> None:
+        """--fork-set 은 --resume 과만(처음부터 돌릴 때는 --set) — 없이 주거나 키=값 꼴이 아니면 인자 오류 2, 결과 폴더 없음."""
+        for i, args in enumerate((("--seed=3", "--fork-set=mutation.rate=0.2"), ("--fork-set=mutation.rate=0.2",),
+                                  (f"--resume={self.snap}", "--fork-set=mutation.rate"), (f"--resume={self.snap}", "--fork-set==1"))):
+            out = self.tmp / f"noresume{i}"
+            cp = run_runner(*args, "--max-ticks=120", f"--out={out}", "--quiet")
+            self.assertEqual(cp.returncode, 2, args)
+            self.assertIn("인자 오류", cp.stderr, args)
+            self.assertIn("--fork-set", cp.stderr, args)
+            self.assertFalse(out.exists(), args)
+
+    def test_summary_lists_columns(self) -> None:
+        """summary.json 의 timeseries_columns·lineage_columns = 그 실행의 CSV 머리 = analyze.py 손 사본(분석 도구가 열 목록을 읽는 곳)."""
+        s = summary(self.orig)
+        with (self.orig / "timeseries.csv").open(encoding="utf-8-sig", newline="") as f:
+            ts_head = next(csv.reader(f))
+        with (self.orig / "lineage.csv").open(encoding="utf-8-sig", newline="") as f:
+            ln_head = next(csv.reader(f))
+        self.assertEqual(s["timeseries_columns"], ts_head)
+        self.assertEqual(s["lineage_columns"], ln_head)
+        self.assertEqual((ts_head, ln_head), (analyze.TIMESERIES_COLUMNS, analyze.LINEAGE_COLUMNS))
+
+
+class TestAblateReal(RunnerCase):
+    def test_ablate_with_real_runner(self) -> None:
+        """analyze.py ablate(씨앗 2개, 평균 0.3세대에서 갈라 120틱): 그대로 갈래의 끝 해시 = 같은 씨앗을 끊김 없이 그 틱까지 돌린 해시,
+        바꾼 갈래는 다름, 같은 명령을 다시 돌리면 실행 없이 같은 표."""
+        runs, out = self.tmp / "ab_base", self.tmp / "ab_out"
+        cmd = ["ablate", "--runs", str(runs), "--at-gen", "0.3", "--set", "metab.base=0.09", "--ticks", "120",
+               "--seeds", "1-2", "--out", str(out), "--godot", godot_path(), "--timeout", str(TIMEOUT), "--jobs", "2"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(analyze.main(cmd), 0)
+        table = (out / "ablate.md").read_bytes()
+        for seed in (1, 2):
+            f = summary(runs / f"seed{seed}")["tick"]
+            same, fork = summary(out / "same" / f"seed{seed}"), summary(out / "fork" / f"seed{seed}")
+            self.assertEqual((same["tick"], fork["tick"]), (f + 120, f + 120))
+            direct = self.tmp / f"ab_direct{seed}"
+            self.ok(run_runner(f"--seed={seed}", f"--max-ticks={f + 120}", "--no-lineage", f"--out={direct}", "--quiet"))
+            self.assertEqual(same["history_hash"], summary(direct)["history_hash"], f"씨앗 {seed}: 그대로 갈래 = 끊김 없이")
+            self.assertNotEqual(fork["history_hash"], same["history_hash"], f"씨앗 {seed}: 바꾼 갈래는 다름")
+            self.assertEqual(fork["forked"], {"metab.base": 0.09})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(analyze.main(cmd), 0)
+        self.assertNotIn("ok ", buf.getvalue().split("②")[1].split("표:")[0], "다시 돌리면 실행 없이(모두 건너뜀)")
+        self.assertEqual((out / "ablate.md").read_bytes(), table, "같은 명령이면 같은 표")
 
 
 # ── 결과 폴더 ──

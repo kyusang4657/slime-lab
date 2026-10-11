@@ -86,6 +86,8 @@ static func summary(world: SimWorld, extra: Dictionary) -> Dictionary:
 		civ_stage = world.stage, civ_stage_name = SimWorld.STAGE_NAMES[world.stage],
 		discovery_ticks = disc, storehouses = world.store_tiles.size(), farms = world.farms.size(),
 		extinct_tick = world.extinct_tick, history_hash = world.history_hash, config = world.cfg,
+		# 열 목록(DESIGN-v0.2 9.5): 단계마다 열이 늘므로 분석 도구가 손 사본 대신 이것으로 읽는다
+		timeseries_columns = TIMESERIES_COLUMNS, lineage_columns = LINEAGE_COLUMNS,
 	}
 	d.merge(extra)
 	return d
