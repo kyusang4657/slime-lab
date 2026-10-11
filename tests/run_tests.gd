@@ -3246,6 +3246,9 @@ const ETA_OVER_MAX := 0.5
 const LEARN_TUNED := {"learn.eta_init": 0.8, "learn.eta_max": 8.0, "learn.cost_per_eta": 0.0025, "learn.decay": 0.95,
 	"learn.stage_mult": [1.0, 0.6, 0.3, 0.1], "learn.min_surprise": 0.2, "learn.ring_len": 8, "learn.baseline_rate": 0.05, "learn.diag_factor": "exact"}
 const INHERIT_ETA_B := 0.015625
+## 학습 스냅숏 검사(test_learn_snapshot)의 learn_basic 씨앗: 관문 A 의 재판정·예비 씨앗(13~36 — learn_basic 은 A-2 의 기준 실행 세계)을
+## 쓰지 않게 101 이상(씨앗 규율 — DESIGN-v0.2 14.3 '재판정(씨앗 13~24)'. 처음에는 21 이었음)
+const LEARN_SNAP_SEED := 101
 
 
 ## 생애 단계(14.2 범위 1·검사 기준 10): 경계 표, 세계의 life_stage_of = 정적 판정(세계 설정의 성숙·비율), 시계열 stage_* 의 합 = 개체 수,
@@ -3744,7 +3747,7 @@ func test_learn_snapshot() -> void:
 	b.step_n(300)
 	check(a.history_hash == b.history_hash and SimSnapshot.to_text(a) == SimSnapshot.to_text(b) and a.s_w2.size() > 0,
 			"learn_basic·씨앗 5·300틱: 같은 씨앗 두 번 같은 해시·전체 상태 글")
-	var wd := world({}, 21, "learn_basic")
+	var wd := world({}, LEARN_SNAP_SEED, "learn_basic")
 	var rec := SimRecorder.new()
 	rec.record(wd)
 	var snaps := {}
@@ -3759,7 +3762,7 @@ func test_learn_snapshot() -> void:
 	for row in rec.rows:
 		if int(row.learn_events) > 0 and float(row.pmax_mean) > 0.0 and float(row.eta_mean) > 0.0 and float(row.dw_mean) > 0.0:
 			learned_rows += 1
-	check(not wd.is_extinct() and learned_rows > 0, "learn_basic·씨앗 21: 1,000틱 살아 있고 학습 열이 채워진 기록 줄 %d개" % learned_rows)
+	check(not wd.is_extinct() and learned_rows > 0, "learn_basic·씨앗 %d: 1,000틱 살아 있고 학습 열이 채워진 기록 줄 %d개" % [LEARN_SNAP_SEED, learned_rows])
 	for t: int in snaps:
 		var r := SimSnapshot.from_text(snaps[t])
 		check(r.error == "" and r.world != null, "%d틱 학습 스냅숏 열기: %s" % [t, str(r.error)])

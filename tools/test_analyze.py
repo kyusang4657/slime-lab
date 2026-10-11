@@ -1620,6 +1620,157 @@ class TestGateA2(TempDirCase):
         self.assertIn("--aux", err.getvalue())
 
 
+# ── 관문 A 재판정의 씨앗 규율(gate_a_seed_guard — 사용자 결정 2026-10-11, DESIGN-v0.2 14.3 '재판정(씨앗 13~24)') ──
+
+class GitOrFake:
+    """subprocess.run 대신: git 명령은 진짜로(씨앗 규율의 git 확인), 그 밖(실행기)은 가짜 실행기로."""
+
+    def __init__(self, fake) -> None:
+        self.fake = fake
+        self.real = subprocess.run
+
+    def __call__(self, cmd, **kw):
+        return self.real(cmd, **kw) if cmd[0] == "git" else self.fake(cmd, **kw)
+
+
+class TestGateASeedRule(TempDirCase):
+    def gate(self, fake, seeds: str, *extra: str, variant: str = "A-1-life", repo: Path | None = None) -> tuple[int, str]:
+        err = io.StringIO()
+        with mock.patch.object(analyze.subprocess, "run", fake), quiet(), contextlib.redirect_stderr(err):
+            code = analyze.main(["gate-a", "--variant", variant, "--seeds", seeds, "--godot", "/opt/godot",
+                                 "--out", str(self.tmp / "ga"), "--repo", str(repo or REPO), *extra])
+        return code, err.getvalue()
+
+    def make_repo(self) -> tuple[Path, callable]:
+        """임시 git 저장소: 실행을 정하는 경로(GATE_A_FROZEN_PATHS)마다 파일 하나 + 지금 도는 analyze.py 의 사본 + 문서·무시 파일."""
+        repo = self.tmp / "repo"
+        files = {"project.godot": "[application]\n", "config/sim-defaults.json": '{"learn": {"eta_init": 0.8}}\n',
+                 "scripts/sim/sim_world.gd": "class_name SimWorld\n", "tests/run_experiment.gd": "extends SceneTree\n",
+                 "docs/note.md": "문서\n", ".gitignore": ".godot/\n", ".gitattributes": "* text=auto eol=lf\n"}
+        for rel, text in files.items():
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text, encoding="utf-8")
+        (repo / "tools").mkdir()
+        shutil.copyfile(Path(analyze.__file__), repo / analyze.GATE_A_TOOL_PATH)
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *a],
+                                        cwd=str(repo), capture_output=True, text=True, env=env, check=True)
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-q", "-m", "v0.2 관문 A 재조정(3): 시험 고정")
+        return repo, git
+
+    def test_seed_constants(self) -> None:
+        """재판정 씨앗 = 13~24(문턱의 기준 씨앗 수 12개), 예비 = 25~36. 조정용 1~12 와 겹치지 않음. 실행을 정하는 경로에 설정·스크립트·
+        실행기·판정 도구가 들어 있음."""
+        self.assertEqual(analyze.GATE_A_REJUDGE_SEEDS, tuple(range(13, 25)))
+        self.assertEqual(analyze.GATE_A_RESERVE_SEEDS, tuple(range(25, 37)))
+        self.assertEqual(len(analyze.GATE_A_REJUDGE_SEEDS), analyze.GATE_A_SEEDS)
+        tune = set(range(1, analyze.GATE_A_SEEDS + 1))
+        self.assertFalse(tune & set(analyze.GATE_A_REJUDGE_SEEDS) or tune & set(analyze.GATE_A_RESERVE_SEEDS)
+                         or set(analyze.GATE_A_REJUDGE_SEEDS) & set(analyze.GATE_A_RESERVE_SEEDS))
+        self.assertEqual(analyze.GATE_A_FROZEN_PATHS,
+                         ("project.godot", "config", "scripts", "tests/run_experiment.gd", "tools/analyze.py"))
+        self.assertEqual(Path(analyze.__file__).resolve(), (REPO / analyze.GATE_A_TOOL_PATH).resolve())
+        self.assertEqual(analyze.build_parser().parse_args(["gate-a", "--out", "x"]).seeds, list(range(1, 13)),
+                         "--seeds 기본은 조정용 1~12 그대로(재판정 씨앗을 기본으로 두지 않음)")
+
+    def test_refused_before_running(self) -> None:
+        """예비 씨앗(하나라도 — 다른 씨앗과 섞여도), 재판정 씨앗의 일부·다른 씨앗과 섞음·--prereg 없음은 아무것도 돌리지 않고 결과 폴더도
+        만들지 않고 종료 코드 2(A-1-life·A-2·--aux 모두). 그 밖의 씨앗(1~12·101 이상)은 거르지 않음."""
+        cases = [("25-36", "", "예비 씨앗(25~36)"), ("1,30", "", "씨앗 30 은 예비 씨앗(25~36)"),
+                 ("13", "", "재판정 씨앗(13~24)은 12개를 함께, 다른 씨앗 없이만 돌립니다(`--seeds 13-24` — 받은 씨앗 13)"),
+                 ("12-24", "", "받은 씨앗 12~24"), ("13-23", "", "받은 씨앗 13~23"), ("13-25", "", "예비 씨앗"),
+                 ("13-24", "", "재판정 씨앗(13~24)은 `--prereg 사전 고정 커밋` 을 주고만 돌립니다")]
+        for variant in ("A-1-life", "A-2"):
+            for seeds, prereg, want in cases:
+                fake = FakeGateRunner() if variant != "A-2" else FakeGateA2Runner()
+                extra = ("--prereg", prereg) if prereg else ()
+                code, err = self.gate(fake, seeds, *extra, variant=variant)
+                self.assertEqual((code, fake.calls), (2, []), (variant, seeds))
+                self.assertIn("오류: 씨앗 규율 — ", err, (variant, seeds))
+                self.assertIn(want, err, (variant, seeds))
+                self.assertFalse((self.tmp / "ga").exists(), (variant, seeds))
+        code, err = self.gate(FakeGateRunner(), "13-24", "--aux")
+        self.assertEqual(code, 2)
+        self.assertIn("--prereg 사전 고정 커밋", err)
+        for seeds in ("1-12", "101", "3"):
+            shutil.rmtree(self.tmp / "ga", ignore_errors=True)
+            fake = FakeGateRunner()
+            self.assertEqual(self.gate(fake, seeds)[0], 0, seeds)
+            self.assertTrue(fake.calls, seeds)
+            self.assertNotIn("- 씨앗 규율:", (self.tmp / "ga" / "gate_a.md").read_text(encoding="utf-8"), seeds)
+
+    @unittest.skipUnless(shutil.which("git"), "git 없음")
+    def test_frozen_files_with_git(self) -> None:
+        """재판정 씨앗 13~24 + --prereg: 실행을 정하는 파일이 그 커밋과 같으면 돌리고 보고서 머리에 씨앗 규율 줄. 설정을 고치거나
+        추적하지 않는 새 스크립트가 있거나 추적하는 스크립트를 지우면 아무것도 돌리지 않고 결과 폴더도 만들지 않고 종료 코드 2(다른 파일이
+        많으면 앞의 GATE_A_FROZEN_LIST_MAX 개와 '외 N개'). 없는 커밋·다른 판정 도구도 거부.
+        문서·무시하는 파일(.godot/)이 달라도 돌림."""
+        repo, git = self.make_repo()
+        h = git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(analyze.gate_a_frozen_diff(h, repo), "")
+        self.assertEqual(analyze.gate_a_seed_guard(list(analyze.GATE_A_REJUDGE_SEEDS), h[:7], repo), "")
+        (repo / "docs" / "note.md").write_text("판정 뒤 문서\n", encoding="utf-8")
+        (repo / ".godot").mkdir()
+        (repo / ".godot" / "cache.cfg").write_text("x\n", encoding="utf-8")
+        shift = analyze.GATE_A_REJUDGE_SEEDS[0] - 1
+        fake = FakeGateRunner(lambda s, b: gate_spec(s - shift, b))
+        code, err = self.gate(GitOrFake(fake), "13-24", "--prereg", h[:7], repo=repo)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(fake.calls), 36)
+        md = (self.tmp / "ga" / "gate_a.md").read_text(encoding="utf-8")
+        self.assertIn("- 씨앗 규율: 재판정 씨앗(13~24) — 실행 전 확인(`gate_a_seed_guard`): 씨앗 모두를 함께, `--prereg` 커밋과 "
+                      "실행을 정하는 파일(`project.godot`, `config`, `scripts`, `tests/run_experiment.gd`, `tools/analyze.py`)이 같음\n", md)
+        self.assertIn("- **판정: 통과**", md, "씨앗 규율은 판정 계산을 바꾸지 않음(손 계산 gate_spec 을 씨앗 13~24 로 옮김)")
+        for row in GATE_HAND_ROWS:
+            self.assertIn(row, md)
+        shutil.rmtree(self.tmp / "ga")
+        cfg = repo / "config" / "sim-defaults.json"
+        changes = [
+            (lambda: cfg.write_text('{"learn": {"eta_init": 0.5}}\n', encoding="utf-8"), "다른 파일 1개: config/sim-defaults.json",
+             lambda: git("checkout", "--", "config")),
+            (lambda: (repo / "scripts" / "sim" / "sim_extra.gd").write_text("x\n", encoding="utf-8"),
+             "다른 파일 1개: scripts/sim/sim_extra.gd", lambda: (repo / "scripts" / "sim" / "sim_extra.gd").unlink()),
+            (lambda: (repo / "scripts" / "sim" / "sim_world.gd").unlink(), "다른 파일 1개: scripts/sim/sim_world.gd",
+             lambda: git("checkout", "--", "scripts")),
+        ]
+        for change, want, undo in changes:
+            change()
+            fake = FakeGateRunner()
+            code, err = self.gate(GitOrFake(fake), "13-24", "--prereg", h, repo=repo)
+            self.assertEqual((code, fake.calls), (2, []), want)
+            self.assertIn("사전 고정 커밋과 같을 때만 돌립니다", err)
+            self.assertIn(want, err)
+            self.assertFalse((self.tmp / "ga").exists())
+            undo()
+            self.assertEqual(analyze.gate_a_frozen_diff(h, repo), "", want)
+        many = [repo / "scripts" / f"s{k}.gd" for k in range(analyze.GATE_A_FROZEN_LIST_MAX + 2)]
+        for p in many:
+            p.write_text("x\n", encoding="utf-8")
+        self.assertEqual(analyze.gate_a_frozen_diff("HEAD", repo),
+                         f"커밋 `HEAD` 과 다른 파일 {len(many)}개: "
+                         + ", ".join(f"scripts/s{k}.gd" for k in range(analyze.GATE_A_FROZEN_LIST_MAX)) + " 외 2개")
+        for p in many:
+            p.unlink()
+        self.assertIn("확인 못 함(저장소에 커밋", analyze.gate_a_frozen_diff("0" * 40, repo))
+        self.assertIn("확인 못 함(저장소에 커밋", analyze.gate_a_seed_guard(list(analyze.GATE_A_REJUDGE_SEEDS), "0" * 40, repo))
+        (repo / analyze.GATE_A_TOOL_PATH).write_text("# 다른 도구\n", encoding="utf-8")
+        self.assertIn("저장소(--repo)의 `tools/analyze.py` 로만 돌립니다",
+                      analyze.gate_a_seed_guard(list(analyze.GATE_A_REJUDGE_SEEDS), h, repo))
+
+    @unittest.skipUnless(shutil.which("git"), "git 없음")
+    def test_same_second_edit_is_caught(self) -> None:
+        """인덱스를 믿지 않음: 커밋 바로 뒤(같은 초) 같은 크기로 고친 설정도 '다름'(prereg_text 와 같은 방식 — git hash-object)."""
+        repo, git = self.make_repo()
+        cfg = repo / "config" / "sim-defaults.json"
+        before = cfg.read_bytes()
+        git("status", "--short")
+        cfg.write_bytes(before.replace(b"0.8", b"0.9"))
+        self.assertEqual(len(cfg.read_bytes()), len(before))
+        self.assertIn("config/sim-defaults.json", analyze.gate_a_frozen_diff("HEAD", repo))
+
+
 # ── 볼드윈 보고서 baldwin(손으로 만든 결과 폴더 — DESIGN-v0.2 11.2) ──
 
 ## 실행마다 개체 세대 구간별 죽은 개체 값: (세대, 죽은 수, η, 배운 양, 어린 동안 배운 양, 동화 지수, 먹은 양, 자식 수)

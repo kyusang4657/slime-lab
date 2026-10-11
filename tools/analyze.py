@@ -1022,6 +1022,18 @@ PREREG_GIT_TIMEOUT = 60
 GATE_A_RUN_STATUS_KO = {"ok": "조건 채움", "extinct": "생존 틱 전 멸종", "short": "생존 틱 전에 끝남", "few": "대상 모자람",
                         "alive": "끝에 대상이 살아 있음", "nolineage": "lineage.csv 없음", "failed": "실행 실패",
                         "nobase": "기준 실행 없음(갈래 안 돌림)"}
+## 관문 A 재판정의 씨앗 규율(사용자 결정 2026-10-11 — DESIGN-v0.2 14.3 'A-1 실패' 경로의 '재판정(씨앗 13~24)'): 조정·진단은 씨앗 1~12 만,
+## GATE_A_REJUDGE_SEEDS 는 재판정 사전 고정 커밋 뒤 판정 실행에서만, GATE_A_RESERVE_SEEDS 는 쓰지 않음(예비 — 쓰려면 사용자 결정과 새
+## 사전 고정으로 이 상수를 고침). 작은 도구 확인은 씨앗 101 이상. gate-a 는 실행 전에 gate_a_seed_guard 로 거른다(판정 계산은 그대로).
+GATE_A_REJUDGE_SEEDS = tuple(range(13, 25))
+GATE_A_RESERVE_SEEDS = tuple(range(25, 37))
+## 판정 도구(저장소 안 경로) — 재판정 씨앗은 --repo 의 이 파일과 바이트까지 같은 analyze.py 로만 돌림
+GATE_A_TOOL_PATH = "tools/analyze.py"
+## 재판정 씨앗을 돌릴 때 --prereg 커밋과 바이트까지 같아야 하는 저장소 경로(실행 결과를 정하는 것 — Godot 프로젝트 파일, 설정 기본값·
+## 예설정, 스크립트 전체, 헤드리스 실행기, 판정 도구). 문서·검사 등 그 밖은 달라도 됨. .gitignore 로 무시하는 파일(.godot/)은 보지 않음
+GATE_A_FROZEN_PATHS = ("project.godot", "config", "scripts", "tests/run_experiment.gd", GATE_A_TOOL_PATH)
+## 씨앗 규율 거부 문장에 이름을 적는 다른 파일 수(넘으면 '외 N개')
+GATE_A_FROZEN_LIST_MAX = 5
 
 
 def gate_a_role(key: str) -> str:
@@ -1212,6 +1224,80 @@ def prereg_text(commit: str | None, tool: Path | None = None) -> str:
             + ("같음" if same else "**다름**(사전 고정 뒤 판정 코드가 바뀜 — 이 보고서는 사전 고정대로의 판정이 아님)"))
 
 
+def _seed_span(seeds) -> str:
+    """씨앗 목록의 글: 둘 이상이 이어진 범위면 "13~24", 아니면 쉼표 목록."""
+    s = list(seeds)
+    return f"{s[0]}~{s[-1]}" if len(s) > 1 and s == list(range(s[0], s[-1] + 1)) else ", ".join(str(x) for x in s)
+
+
+def gate_a_frozen_diff(commit: str, repo: Path) -> str:
+    """재판정 씨앗의 실행 전 확인: 저장소 repo 의 GATE_A_FROZEN_PATHS 가 커밋 commit 과 바이트까지 같은가 → 같으면 "", 아니면 까닭.
+    파일마다 그 커밋의 blob 해시 = 지금 파일의 git hash-object(경로의 줄 끝 설정을 따름 — prereg_text 와 같은 방식, 인덱스를 믿지
+    않아 같은 초에 고친 파일도 가려냄). 그 커밋에 있는데 지금 없는 파일, 그 커밋에 없는데 지금 있는 파일(추적하지 않는 파일도 —
+    .gitignore 로 무시하는 것만 뺌)도 '다름'. git 이 없거나 저장소 밖·없는 커밋이면 '확인 못 함'(돌리지 않음)."""
+    def git(*a: str, stdin: str | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *a], cwd=str(repo), input=stdin, capture_output=True, encoding="utf-8",
+                              errors="replace", timeout=PREREG_GIT_TIMEOUT)
+    try:
+        if git("rev-parse", "--show-toplevel").returncode != 0:
+            return f"확인 못 함(git 저장소 밖: {repo})"
+        full = git("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}")
+        if full.returncode != 0:
+            return f"확인 못 함(저장소에 커밋 `{commit}` 이 없음)"
+        then = git("ls-tree", "-r", "-z", full.stdout.strip(), "--", *GATE_A_FROZEN_PATHS)
+        now = git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *GATE_A_FROZEN_PATHS)
+        if then.returncode != 0 or now.returncode != 0:
+            return f"확인 못 함(git ls-tree·ls-files 종료 코드 {then.returncode}·{now.returncode})"
+        old = {}
+        for entry in filter(None, then.stdout.split("\0")):
+            meta, _, path = entry.partition("\t")
+            old[path] = meta.split()[2]
+        present = sorted({p for p in now.stdout.split("\0") if p and (repo / p).is_file()})
+        hashes: list[str] = []
+        if present:
+            hashed = git("hash-object", "--stdin-paths", stdin="".join(p + "\n" for p in present))
+            hashes = hashed.stdout.split()
+            if hashed.returncode != 0 or len(hashes) != len(present):
+                return f"확인 못 함(git hash-object 종료 코드 {hashed.returncode})"
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"확인 못 함(git 을 실행하지 못함: {e})"
+    cur = dict(zip(present, hashes))
+    changed = sorted(p for p in set(old) | set(cur) if old.get(p) != cur.get(p))
+    if not changed:
+        return ""
+    more = len(changed) - GATE_A_FROZEN_LIST_MAX
+    return (f"커밋 `{commit}` 과 다른 파일 {len(changed)}개: " + ", ".join(changed[:GATE_A_FROZEN_LIST_MAX])
+            + (f" 외 {more}개" if more > 0 else ""))
+
+
+def gate_a_seed_guard(seeds: list[int], prereg: str, repo: Path) -> str:
+    """gate-a 의 씨앗 규율(GATE_A_REJUDGE_SEEDS·GATE_A_RESERVE_SEEDS — 사용자 결정 2026-10-11)을 실행 전에 확인 → 어기면 까닭, 지키면 "".
+    예비 씨앗은 늘 거부. 재판정 씨앗은 ① 그 씨앗 모두를 함께·다른 씨앗 없이 ② --prereg 를 주고 ③ 지금 도는 이 파일이 repo 의
+    GATE_A_TOOL_PATH 와 바이트까지 같고 ④ repo 의 GATE_A_FROZEN_PATHS 가 그 커밋과 같을 때만(gate_a_frozen_diff). 그 밖의 씨앗
+    (조정용 1~12·도구 확인 101 이상 등)은 거르지 않음 — 판정 계산·보고서는 이 확인과 상관없이 그대로."""
+    reserve = [s for s in seeds if s in GATE_A_RESERVE_SEEDS]
+    if reserve:
+        return (f"씨앗 {_seed_span(reserve)} 은 예비 씨앗({_seed_span(GATE_A_RESERVE_SEEDS)})이라 gate-a 에 쓰지 않습니다"
+                "(쓰려면 사용자 결정과 새 사전 고정 — DESIGN-v0.2 14.3 '재판정(씨앗 13~24)')")
+    if not any(s in GATE_A_REJUDGE_SEEDS for s in seeds):
+        return ""
+    rj = _seed_span(GATE_A_REJUDGE_SEEDS)
+    if tuple(seeds) != GATE_A_REJUDGE_SEEDS:
+        return (f"재판정 씨앗({rj})은 {len(GATE_A_REJUDGE_SEEDS)}개를 함께, 다른 씨앗 없이만 돌립니다(`--seeds {GATE_A_REJUDGE_SEEDS[0]}-{GATE_A_REJUDGE_SEEDS[-1]}`"
+                f" — 받은 씨앗 {_seed_span(seeds)})")
+    if not prereg:
+        return f"재판정 씨앗({rj})은 `--prereg 사전 고정 커밋` 을 주고만 돌립니다"
+    tool = Path(__file__).resolve()
+    mine = repo / GATE_A_TOOL_PATH
+    if not mine.is_file() or mine.read_bytes() != tool.read_bytes():
+        return f"재판정 씨앗({rj})은 저장소(--repo)의 `{GATE_A_TOOL_PATH}` 로만 돌립니다 — 지금 도는 {tool} 와 다름"
+    diff = gate_a_frozen_diff(prereg, repo)
+    if diff:
+        return (f"재판정 씨앗({rj})은 실행을 정하는 파일({', '.join(GATE_A_FROZEN_PATHS)})이 사전 고정 커밋과 같을 때만 돌립니다"
+                f" — {diff}")
+    return ""
+
+
 def _gate_a_collect(job: Job, rows_csv: dict, window: tuple[int, int], need: int) -> tuple[dict, dict]:
     """갈래 실행 하나의 결과 → (gate_a.csv 한 줄의 값, 대상 값). 끝까지 쓰지 못했거나 설정이 다른 결과는 failed(까닭에 종료 코드·오류 줄)."""
     why = incomplete_reason(job.out_dir) if (job.out_dir / "summary.json").is_file() else "결과 없음"
@@ -1233,7 +1319,8 @@ def cmd_gate_a(args) -> int:
       A-2: ① OUT/base/seed<N> 에 learn_basic 을 평균 30세대까지(끝 스냅숏 틱 F) ② 그 스냅숏에서 학습(그대로)·freeze 를 F + 340 까지,
            우연 기준 세계를 틱 0 부터 F + 340 까지 ③ 대상 [F, F + 100) 출생.
     판정 문턱은 GATE_A_* 상수(명령 인자로 바꿀 수 없음), --prereg 는 보고서 머리의 사전 고정 줄(prereg_text).
-    종료 코드: 0 보고서를 씀(판정 결과와 상관없이), 1 실패한 실행이 있음, 2 인자·저장소 오류."""
+    씨앗 규율(gate_a_seed_guard — 재판정·예비 씨앗)을 어기면 아무것도 돌리지 않고(결과 폴더도 만들지 않음) 종료 코드 2.
+    종료 코드: 0 보고서를 씀(판정 결과와 상관없이), 1 실패한 실행이 있음, 2 인자·저장소 오류·씨앗 규율."""
     repo = Path(args.repo).resolve()
     err = _check_repo(repo)
     if err:
@@ -1242,6 +1329,10 @@ def cmd_gate_a(args) -> int:
     spec = GATE_A_VARIANTS[args.variant]
     if args.aux and spec["kind"] != "start":
         print(f"오류: --aux(보조 판)는 A-1 계열 변형만입니다(14.3 — {args.variant} 는 아님)", file=sys.stderr)
+        return 2
+    err = gate_a_seed_guard(list(args.seeds), args.prereg, repo)
+    if err:
+        print("오류: 씨앗 규율 — " + err, file=sys.stderr)
         return 2
     godot = resolve_godot(args.godot)
     out_root = Path(args.out).resolve()
@@ -1365,7 +1456,11 @@ def write_gate_a_md(path: Path, args, runs: dict, ev: dict, prereg: str) -> None
                  "- 갈래: " + " · ".join(f"{n}(`{', '.join(f'{k}={v}' for k, v in st)}`)" for _, n, st in branches)
                  + " — 같은 씨앗, 틱 0 부터",
                  f"- 대상: 틱 [{lo}, {hi}) 에 태어난 개체(처음 개체 제외). 씨앗 {', '.join(str(s) for s in args.seeds)}"]
-    out = head + [f"- 사전 고정: {prereg}", f"- **판정: {ev['verdict']}**", "",
+    # 재판정 씨앗이면 실행 전에 지난 씨앗 규율(gate_a_seed_guard — 거부되면 여기까지 오지 않음)을 적음. 그 밖의 씨앗은 줄 없음
+    rule = ([f"- 씨앗 규율: 재판정 씨앗({_seed_span(GATE_A_REJUDGE_SEEDS)}) — 실행 전 확인(`gate_a_seed_guard`): 씨앗 모두를 함께, "
+             f"`--prereg` 커밋과 실행을 정하는 파일({', '.join(f'`{x}`' for x in GATE_A_FROZEN_PATHS)})이 같음"]
+            if tuple(args.seeds) == GATE_A_REJUDGE_SEEDS else [])
+    out = head + [f"- 사전 고정: {prereg}"] + rule + [f"- **판정: {ev['verdict']}**", "",
                   "## 고정 문턱(`analyze.py` 상수 — 명령 인자로 바꿀 수 없음)", ""]
     sec = " · ".join(n for k, n, _ in GATE_A_METRICS if k in GATE_A_SECONDARY)
     out.append(_md_table(["상수", "값", "뜻"], [
