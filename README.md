@@ -6,6 +6,8 @@ Godot 4.4.1 · GDScript · 오프라인 · 서버·로그인·광고·결제·�
 
 > **현재 상태: 1단계 완료(v0.1.0), 전체 검토에서 확인된 문제 121개 모두 고침(이 저장소 111개 + 포트폴리오 저장소 10개, 최종 독립 확인에서 남은 것까지).** 시뮬레이션 핵심·헤드리스 실행기·3D 실험실(파라미터·그래프 3개·연대기·비교 모드·CSV·스냅숏·합성 효과음)·분석 도구·자동 검사·Linux·Windows·웹 빌드. 확인한 것과 확인하지 못한 것은 아래 [상태와 한계](#상태와-한계), 검수 기록은 [`docs/TEST-REPORT.md`](docs/TEST-REPORT.md)(맨 앞 절이 검토 고침), 설계와 단계별로 바뀐 것은 [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) 15절부터.
 
+> **v0.2 0단계(관찰 바닥, 규칙 불변) 구현됨 — main, 아직 릴리스·푸시 전.** 행동별 고른 횟수·효과 횟수 열과 평생 먹은 양, v0.1 금 값 검사(새 장치를 끈 세계 = v0.1 역사, 씨앗 1·100세대 `171a3a4f1a5f`), 우연 기준 예설정 `chance_baseline`, 반사실 재생(실행기 `--fork-set`·`analyze.py ablate`), 옛 스냅숏 열기 수리. 이 컨테이너에서 규칙 검사(`--skip-slow`)·파이썬·화면 검사가 통과했고, GitHub Actions 에서는 아직 돌리지 않았습니다. 기준선 결과(우연 기준 세계는 씨앗 1~12 모두 1,000틱 전에 멸종 등)와 검증한 것·못 한 것은 [`docs/TEST-REPORT.md`](docs/TEST-REPORT.md) 맨 앞 절, 설계는 [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md).
+
 | 바로 해 보기 | |
 | --- | --- |
 | **브라우저 체험판** | **아직 배포되지 않았습니다.** 주소는 https://kyusang4657.github.io/slime-lab/ 로 정해 두었지만 이 저장소의 GitHub Pages 가 꺼져 있어 Actions 의 `pages` 잡이 실패합니다(Pages 단계가 처음 돈 #9 부터 매번). 저장소 소유자가 Settings → Pages → Build and deployment → Source 를 "GitHub Actions" 로 한 번 바꾸고 main 에서 다시 돌려야(새 푸시 또는 Actions 탭 "Run workflow") 올라갑니다 — 그 전에는 이 주소가 열리지 않습니다. 직접 띄우려면 아래 "빌드" 로 만든 `build/web` 을 로컬 웹 서버로 엽니다(PC 브라우저, WebGL2). |
@@ -50,7 +52,7 @@ Godot 4.4.1 · GDScript · 오프라인 · 서버·로그인·광고·결제·�
 
 **조작:** 끌기 = 이동, 휠 = 확대·축소, 오른쪽 끌기 = 회전, 클릭 = 슬라임 고르기(비교 모드에서는 누른 지도의 실험) · 스페이스 = 멈춤, 1~7 = 속도(1·2·4·8·16·32·64배), F = 따라가기(죽어 기록만 남은 개체는 "죽은 개체는 따라갈 수 없습니다"), Home(또는 0) = 모든 지도 전체 보기(지도 위 "전체 보기" = 그 지도만), Esc = 선택 해제 · Ctrl(맥은 Cmd)+N = 새 실험(비교 모드면 나란히 시작), Ctrl+S = 스냅숏 저장, Ctrl+O = 열기, Ctrl+E = 내보내기 · 아무것도 초점이 없을 때 Tab = 실험 조건 패널 첫 칸, 단추·고르기 상자는 Tab 으로 옮겨 가고 Enter = 누름(스페이스는 그대로 멈춤). 글 칸(씨앗·숫자)에 입력 중이면 단축키는 동작하지 않고(Ctrl 단축키는 됨), Enter = 확정, Esc = 입력 취소. 그래프 위 마우스 = 값 읽기, 연대기 줄 클릭 = 그 시점·행위자(이 둘은 마우스 전용). 위쪽 막대 오른쪽에 "목표 N배 / 실제 M배"(실제는 벽시계로 잼 — 따라가면 정확히 목표 배속, 시뮬레이션이 프레임 예산에 걸리거나 화면이 아주 느려 실제가 목표의 90% 아래면 경고 색).
 
-설계와 이유: [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) · 다음 판 설계(배우고 물려주며 문명을 개척하는 슬라임, 구현 전): [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md) · 설정 키 설명서: [`docs/CONFIG.md`](docs/CONFIG.md) · 화면이 쓰는 시뮬레이션 API: [`docs/SIM-API.md`](docs/SIM-API.md) · 화면 구성 요소 계약: [`docs/VIEW-API.md`](docs/VIEW-API.md) · 여러 실행 분석: [`docs/ANALYSIS.md`](docs/ANALYSIS.md) · `fast_civ` 조정 근거: [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md) · 검수: [`docs/TEST-REPORT.md`](docs/TEST-REPORT.md)
+설계와 이유: [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) · 다음 판 설계(배우고 물려주며 문명을 개척하는 슬라임, 0단계 구현됨·1단계부터 구현 전): [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md) · 설정 키 설명서: [`docs/CONFIG.md`](docs/CONFIG.md) · 화면이 쓰는 시뮬레이션 API: [`docs/SIM-API.md`](docs/SIM-API.md) · 화면 구성 요소 계약: [`docs/VIEW-API.md`](docs/VIEW-API.md) · 여러 실행 분석: [`docs/ANALYSIS.md`](docs/ANALYSIS.md) · `fast_civ` 조정 근거: [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md) · 검수: [`docs/TEST-REPORT.md`](docs/TEST-REPORT.md)
 
 ## 실행
 
@@ -85,16 +87,17 @@ py tools\analyze.py run --seeds 1-8 --generations 100 --preset fast_civ --godot 
 
 PowerShell 예시와 자세한 규칙은 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) "Windows" 절. 리눅스에서 Windows 의 코드 페이지·따옴표 규칙을 흉내 내 검사했고, Windows 에서 직접 돌려 확인하지는 못했습니다.
 
-**실행기 인자:** `--seed=N`(64비트 정수, 기본 1) · `--generations=G`(살아 있는 개체의 평균 세대가 G 에 닿으면 끝, 0 보다 큰 수, 기본 100) · `--out=결과폴더`(꼭 필요) · `--preset=default|abundant|harsh_winter|fast_civ|demo_fast|no_resources|chance_baseline` · `--set=키=값`(여러 번, 키와 범위는 [`docs/CONFIG.md`](docs/CONFIG.md)) · `--max-ticks=N`(1~1,000,000,000) · `--no-lineage` · `--snapshot-every=N`(0 = 끔 ~ 1,000,000,000) · `--resume=스냅숏.json` · `--quiet`.
+**실행기 인자:** `--seed=N`(64비트 정수, 기본 1) · `--generations=G`(살아 있는 개체의 평균 세대가 G 에 닿으면 끝, 0 보다 큰 수, 기본 100) · `--out=결과폴더`(꼭 필요) · `--preset=default|abundant|harsh_winter|fast_civ|demo_fast|no_resources|chance_baseline` · `--set=키=값`(여러 번, 키와 범위는 [`docs/CONFIG.md`](docs/CONFIG.md)) · `--max-ticks=N`(1~1,000,000,000) · `--no-lineage` · `--snapshot-every=N`(0 = 끔 ~ 1,000,000,000) · `--resume=스냅숏.json` · `--fork-set=키=값`(여러 번, `--resume` 과만) · `--quiet`.
 
 - 수 인자에 글자가 섞이면(`1e5`·`10k`·`abc`) 앞 숫자만 쓰지 않고 인자 오류입니다. 모르는 인자도 오류.
 - `--resume` 은 스냅숏의 설정·씨앗으로 이어 돌립니다(끊김 없이 돌린 것과 같은 해시 — 검사). 그래서 `--seed`·`--preset`·`--set` 과 함께 줄 수 없습니다. 이어 돌린 `summary.json` 은 `preset = ""`·`overrides = {}` 와 실제로 읽은 파일(`resumed_from`)을 적습니다.
+- `--fork-set` 은 반사실 재생입니다: 스냅숏을 연 뒤 설정 키만 바꿔 이어 돌립니다(`summary.json` 의 `forked`). 유전체 배치·기억·지도 크기처럼 저장된 배열의 길이를 바꾸는 키(`brain.hidden` 등)는 거부(2). 씨앗마다 그대로·바꿈 두 갈래를 돌려 견주는 일은 `analyze.py ablate`([`docs/ANALYSIS.md`](docs/ANALYSIS.md)).
 - 같은 `--out` 을 다시 쓰면 실행기가 쓰는 파일만 지우고 새로 씁니다. 모르는 파일이나 하위 폴더가 하나라도 있으면 아무것도 지우지 않고 거부합니다.
 - 종료 코드: 정상 0, 인자·설정·결과 폴더 오류 2, 파일 쓰기 실패 3(마지막 `RESULT:` 줄 끝에 `write_failed=…`). 자세한 규칙은 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) "헤드리스 실행기를 직접 쓸 때".
 
-**예설정:** `default`(기본) · `abundant`(풍요, 자원 1.6배) · `harsh_winter`(혹독한 겨울 — **멸종 조건**: 씨앗 1~12 모두 8,000틱 안에 멸종, 11개는 첫 겨울 중이나 직후) · `fast_civ`(빠른 문명, 연구용 — 씨앗 12개 중 11개는 발견이 진화 도중에 열리고(씨앗 7 은 첫 세대 폭발로 2세대 안에 셋 다), 씨앗 1~12 모두 100세대 안에 농사(중앙값 14.3세대). 씨앗 1·7 은 농사를 연 뒤 멸종 — 근거 [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md)) · `demo_fast`(시연·검사용 아주 빠른 발견 — 씨앗 1~12 의 농사 중앙값 약 2세대, 씨앗 1 은 13.2세대·1,037틱) · `no_resources`(자원 없음 — 멸종 검사용) · `chance_baseline`(우연 기준 — 자식이 부모와 상관없는 새 무작위 두뇌를 받아 진화가 없음, v0.2 의 대조군. 얼마나 살아남는지는 아직 재지 않음 — [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md) 11.3). 값과 측정 결과는 [`docs/CONFIG.md`](docs/CONFIG.md) 예설정 표.
+**예설정:** `default`(기본) · `abundant`(풍요, 자원 1.6배) · `harsh_winter`(혹독한 겨울 — **멸종 조건**: 씨앗 1~12 모두 8,000틱 안에 멸종, 11개는 첫 겨울 중이나 직후) · `fast_civ`(빠른 문명, 연구용 — 씨앗 12개 중 11개는 발견이 진화 도중에 열리고(씨앗 7 은 첫 세대 폭발로 2세대 안에 셋 다), 씨앗 1~12 모두 100세대 안에 농사(중앙값 14.3세대). 씨앗 1·7 은 농사를 연 뒤 멸종 — 근거 [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md)) · `demo_fast`(시연·검사용 아주 빠른 발견 — 씨앗 1~12 의 농사 중앙값 약 2세대, 씨앗 1 은 13.2세대·1,037틱) · `no_resources`(자원 없음 — 멸종 검사용) · `chance_baseline`(우연 기준 — 자식이 부모와 상관없는 새 무작위 두뇌를 받아 진화가 없음, v0.2 의 대조군. 씨앗 1~12 모두 469~663틱에 멸종 — [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md) 11.3). 값과 측정 결과는 [`docs/CONFIG.md`](docs/CONFIG.md) 예설정 표.
 
-**결과 폴더:** `summary.json`(설정·끝난 이유·발견 시각·역사 해시), `timeseries.csv`(20틱마다 — v0.1 의 22열 뒤에 행동별 고른 횟수·효과가 난 횟수 16열), `chronicle.csv`(연대기), `lineage.csv`(모든 개체의 부모·세대·특성·평생 먹은 에너지), `final.snapshot.json`(이어 돌리기·화면에서 열기). CSV 셋은 BOM 붙은 UTF-8(JSON 에는 BOM 없음). 쓰는 순서는 `final.snapshot.json` → CSV → `summary.json`(마지막)이라 `summary.json` 이 있으면 다 쓴 결과입니다. 열과 값의 뜻은 [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) 8.4절(v0.2 에서 끝에 붙인 열은 [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md) 9.3·9.4), 여러 실행을 모은 표는 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) "결과 파일".
+**결과 폴더:** `summary.json`(설정·끝난 이유·발견 시각·역사 해시·CSV 열 목록), `timeseries.csv`(20틱마다 — v0.1 의 22열 뒤에 행동별 고른 횟수·효과가 난 횟수 16열), `chronicle.csv`(연대기), `lineage.csv`(모든 개체의 부모·세대·특성·평생 먹은 에너지), `final.snapshot.json`(이어 돌리기·화면에서 열기). CSV 셋은 BOM 붙은 UTF-8(JSON 에는 BOM 없음). 쓰는 순서는 `final.snapshot.json` → CSV → `summary.json`(마지막)이라 `summary.json` 이 있으면 다 쓴 결과입니다. 열과 값의 뜻은 [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) 8.4절(v0.2 에서 끝에 붙인 열은 [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md) 9.3·9.4), 여러 실행을 모은 표는 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) "결과 파일".
 
 ## 빌드
 
@@ -133,7 +136,7 @@ tests/ui_driver.gd         실험실 화면 동작 확인·캡처(가상 디스�
 export_presets.cfg         Linux·Windows·웹 내보내기(검사·도구·문서는 실행 파일에서 뺌)
 assets/icon.png            앱 아이콘(슬라임 모델을 렌더링한 것)
 docs/                      설계·계약·분석·검수 문서, docs/media/ 타임랩스(webm·mp4·gif·포스터 jpg), docs/screenshots/v0.1/ 캡처
-tools/analyze.py           오프라인 분석(씨앗 묶음·파라미터 격자 → 표·보고서·그림)
+tools/analyze.py           오프라인 분석(씨앗 묶음·파라미터 격자·반사실 재생 → 표·보고서·그림)
 tools/build_dist.sh        배포판 만들기(세 판 내보내기·고지 파일·zip), fetch_godot.sh(Godot·템플릿 받기 + SHA-512 확인),
                            smoke_run.sh(내보낸 실행 파일 헤드리스 확인), godot_license.gd(GODOT-LICENSE.txt 만들기)
 tools/make_timelapse.sh    타임랩스 프레임을 webm·mp4·gif·포스터로 묶기(ffmpeg), render_sounds.gd(효과음을 WAV 로 — 저장소에는 넣지 않음)

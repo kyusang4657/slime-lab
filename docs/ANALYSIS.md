@@ -48,6 +48,26 @@ python3 tools/analyze.py report results --out results/모두-보고서   # 여�
 
 `DIR` 아래의 `summary.json` 을 모두 찾습니다(실행기를 손으로 돌린 폴더도 됨). **묶음 이름** = 실행 폴더의 부모 폴더 경로(`mutation.rate=0.1` 등). 씨앗 폴더가 `DIR` 바로 아래에 있으면(`run` 결과) 예설정 이름(+덮어쓰기)으로 짓습니다(`fast_civ`, `default+mutation.rate=0.08`).
 
+### `ablate` — 반사실 재생(같은 스냅숏에서 설정 하나만 바꿔 견주기)
+
+```bash
+python3 tools/analyze.py ablate --runs results/base --at-gen 30 --set mutation.rate=0.2 --ticks 340 --seeds 1-12
+```
+
+씨앗마다 세 걸음입니다([`DESIGN-v0.2.md`](DESIGN-v0.2.md) 11.4).
+
+1. **기준 실행:** `--runs` 폴더의 `seed<N>/` 에 평균 `--at-gen` 세대까지(`run` 과 같은 폴더 꼴 — 같은 설정으로 끝까지 쓴 결과가 있으면 그대로 씀). 끝 스냅숏의 틱이 F.
+2. **갈래:** 그 `final.snapshot.json` 에서 두 번 이어 돌립니다 — `same/seed<N>`(그대로)와 `fork/seed<N>`(`--set` 들을 실행기 `--fork-set` 으로). 둘 다 `--max-ticks=F+N`(`N` = `--ticks`)·`--generations=1000000000`(세대 끝 조건이 먼저 끝내지 않게)이고 `lineage.csv` 를 씁니다.
+3. **표:** 창 [F, F+N) 의 지표를 견준 `ablate.csv`(씨앗·지표마다 그대로·바꿈·차이)와 `ablate.md`(지표마다 씨앗 수, 두 갈래 중앙값, 차이(바꿈 − 그대로) 중앙값 [Q1–Q3], 바꿈이 큰·작은 씨앗 수, 씨앗별 F 와 두 갈래 끝 해시). 표는 화면에도 찍습니다.
+
+- **지표:** 출생·사망·평균 개체 수·끝 개체 수·산 틱(시계열의 틱 (F, F+N] 줄), 줍기·내려놓기·심기의 고름 %·효과 %(그 줄들의 행동 셈), 대상(틱 [F, F+N) 에 태어난 개체)의 평균 먹은 양·평균 자식 수(`lineage.csv` — 살아 있는 개체는 끝 틱까지의 값이라 수명이 창보다 길면 잘림).
+- **폴더:** `--out`(기본 `<runs>-ablate/<키=값>__g<세대>__t<틱>` — 기준 실행 폴더 밖이라 `report <runs>` 에 갈래가 섞이지 않음). 갈래 폴더도 `report` 로 보고서를 만들 수 있습니다(묶음 `same`·`fork`).
+- **뺀 씨앗:** 기준 실행이 그 세대 전에 멸종했거나 틱 상한에 닿은 씨앗, 갈래 실행이 실패한 씨앗은 빼고 `ablate.md` 의 "뺀 씨앗" 에 까닭을 적습니다.
+- **바꿀 수 있는 키:** 저장된 배열의 길이를 바꾸지 않는 키(바꾼 설정으로 스냅숏 검사를 다시 지나야 함). `brain.hidden`·`brain.memory_units`·`map.width` 처럼 유전체 배치·기억·지도 크기를 바꾸는 키는 실행기가 종료 코드 2 로 거부하고, 그 씨앗은 실패로 기록됩니다. 세계를 만들 때만 읽는 키(`population.initial`·`plants.initial_fill` 등)는 바꿔도 이어 돌린 역사에 닿지 않습니다.
+- **이어 돌리기:** `run` 과 같습니다. 끝까지 쓴 같은 조건의 결과는 건너뛰므로 같은 명령을 다시 주면 실행 없이 같은 표가 나옵니다. 바꾼 값·이어 돌린 스냅숏·틱 상한이 다른 이전 결과는 덮어쓰지 않고 `mismatch`(종료 코드 1).
+- **인자:** `--runs`·`--at-gen`·`--set 키=값`(여러 번)·`--ticks` 는 꼭 필요합니다. `--seeds`(기본 `1-4`)·`--preset`(기준 실행의 예설정)·`--base-set 키=값`(기준 실행의 덮어쓰기, 여러 번 — 두 갈래 모두 이 설정에서 시작)·`--out`·`--jobs`·`--godot`·`--repo`·`--timeout` 은 `run` 과 같은 뜻.
+- 두 갈래는 같은 세계·같은 난수 상태에서 갈라진 쌍입니다. 차이에는 그 설정의 직접 효과와, 행동이 달라져 갈라진 출생·먹이 고갈 같은 생태 되먹임이 함께 들어 있습니다.
+
 ### 인자
 
 | 인자 | 기본 | 뜻 |
@@ -77,6 +97,8 @@ OUT/
   summary.csv              실행마다 한 줄 (아래)
   cells.csv                묶음마다 한 줄 (아래)
   report.md                한국어 보고서(표 + 그림 + 읽는 법)
+  actions.csv              구간별 문명 행동 셈(행동 셈 열이 있는 실행이 있을 때 — 아래)
+  eaten.csv                개체 세대별 평생 먹은 양(lineage.csv 에 eaten 이 있는 실행이 있을 때)
   population.png  mean_gen.png  traits.png  civ_stage.png  discovery.png
   seed1/  …                실행기 결과(summary.json, timeseries.csv, chronicle.csv, final.snapshot.json) + run.log
 ```
@@ -96,7 +118,14 @@ OUT/
 | `extinct_tick`, `storehouses`, `farms` | 멸종 틱(-1 없음), 저장고·밭 수 |
 | `disc_tick_forage` · `disc_gen_forage` (`_store`, `_farm`) | 채집(저장·농사) **발견 틱(-1)·발견 세대(NaN = 발견 못 함)**. 발견 틱은 발견한 틱 번호(진행 중인 틱 — 시계열에는 다음 줄부터 보임, DESIGN 8.4) |
 | `final_mean_size`, `final_mean_sense` | 살아 있던 마지막 기록의 평균 크기·감지 반경(`timeseries.csv` 의 `mean_sense` — 반올림한 반경의 평균이라 `lineage.csv` 의 `sense` 유전자 평균과 다름) |
+| `window_births` | 틱 [200, 600) 에 태어난 개체 수(처음 개체 빼고 — DESIGN-v0.2 14.3 의 관문 A-1 대상 구간). `lineage.csv` 가 없으면 `NaN` |
 | `run_seconds`, `history_hash`, `path` | 실행기 시간, 역사 해시(64자), 실행 폴더(상대 경로) |
+
+**v0.2 0단계 열(행동 셈 `act_*`·`eff_*`, 계통 `eaten`)이 있으면** 보고서에 세 절이 더해집니다. 열이 없는 예전 결과도 그대로 읽고, 그 절만 "없음" 으로 적거나 뺍니다. 어떤 열이 있는지는 실행마다 `summary.json` 의 `timeseries_columns`(0단계부터 실행기·실험실이 씀)를 먼저 보고, 없으면 CSV 머리로 봅니다. 도구 안의 손 사본(`TIMESERIES_COLUMNS`·`STAGE_NAMES_KO` 등)은 `test_analyze.py` 의 `TestHandCopies` 가 시뮬레이션 상수와 견줍니다.
+
+- **행동 비율(act/eff)** — `actions.csv`(열 `cell, seed, path, basis, bin_lo, bin_hi, action, rows, total, act, eff, act_share, eff_share, success`): 실행·구간·문명 행동(줍기·내려놓기·심기)마다 고른 횟수 `act`, 효과가 난 횟수 `eff`(효과의 뜻은 DESIGN-v0.2 11.1), 그 구간 모든 행동 수 `total`, `act_share` = act ÷ total, `eff_share` = eff ÷ total, `success` = eff ÷ act. 시계열 한 줄은 앞 줄 뒤 그 줄까지의 구간이고, 줄을 구간 **시작** 값(앞 줄)으로 나눕니다. `basis = gen`: 시작 평균 세대 10세대 폭, 그 행동이 열린 뒤(줍기·내려놓기 = 채집, 심기 = 농사)에 시작한 줄만. `basis = tick`: 처음 1,000틱의 200틱 폭, 열림과 상관없이 모든 줄(수백 틱 만에 멸종할 수 있는 우연 기준과 같은 틱에서 견줌). 보고서 표는 묶음마다 실행 값의 중앙값(괄호 = 실행 수).
+- **평생 먹은 양** — `eaten.csv`(`cell, seed, path, gen_lo, gen_hi, dead, eaten_median, eaten_mean`, `lineage.csv` 가 있을 때 — 묶음 기본은 `--no-lineage`): 실행·개체 세대 10세대 폭마다 죽은 개체의 수·먹은 양 중앙값·평균.
+- **관문 A-1 판정 가능성(미리 보기)** — `summary.csv` 의 `window_births` 와 멸종 틱으로, DESIGN-v0.2 14.3 의 A-1 이 그 묶음에서 판정 가능한지(씨앗마다 1,000틱까지 살고 대상 출생 30 이상) 셉니다. `lineage.csv` 가 있는 실행이 있을 때만.
 
 **`cells.csv`**: `runs`, `extinct`·`extinction_rate`, `reached_<단계>`·`reach_rate_<단계>`(끝 단계가 그 이상인 실행 수·비율), `disc_gen_<단계>_n/_median/_q1/_q3/_iqr`(도달한 실행만), `mean_generation_median`, `ticks_median`, `population_median`, `peak_population_median`, `final_mean_size_median`, `final_mean_sense_median`, `run_seconds_median`, `run_seconds_total`.
 
@@ -141,10 +170,10 @@ OUT/
 python3 tools/analyze.py run   --seeds 1-8 --generations 100 --preset fast_civ --out results/example-run --jobs 3
 python3 tools/analyze.py sweep --param mutation.rate=0.02,0.05,0.1 --seeds 1-4 --generations 60 --preset fast_civ \
                                --out results/example-sweep --jobs 3
-for k in run sweep; do cp results/example-$k/{report.md,summary.csv,cells.csv,*.png} docs/analysis/example/$k/; done
+for k in run sweep; do cp results/example-$k/{report.md,summary.csv,cells.csv,actions.csv,*.png} docs/analysis/example/$k/; done
 ```
 
-(마지막 줄은 bash 의 복사입니다. Windows 에서는 두 폴더의 `report.md`·`summary.csv`·`cells.csv`·`*.png` 를 탐색기로 같은 자리에 복사하면 됩니다 — 실행 명령의 Windows 꼴은 [Windows](#windows) 절.)
+(마지막 줄은 bash 의 복사입니다. Windows 에서는 두 폴더의 `report.md`·`summary.csv`·`cells.csv`·`actions.csv`·`*.png` 를 탐색기로 같은 자리에 복사하면 됩니다 — 실행 명령의 Windows 꼴은 [Windows](#windows) 절.) v0.2 0단계 도구로 보고서를 다시 만들었습니다(2026-10-11 — 실행 결과·해시·그림은 그대로이고 행동 비율 절·`actions.csv`·`summary.csv` 의 `window_births` 열이 더해짐. `run` 의 씨앗 1~8 은 같은 날 기준선 실행(TEST-REPORT "v0.2 0단계" 절)의 `fast_civ` 결과를 `lineage.csv` 만 빼고 옮겨 `run` 이 건너뛰게 했고, `sweep` 은 다시 돌림).
 
 - [`run/report.md`](analysis/example/run/report.md) — `fast_civ`(조정 기록 [`TUNING-fast_civ.md`](TUNING-fast_civ.md)) 씨앗 8개 × 100세대. 8개 모두 농사까지 도달하고, 2개는 농사를 연 뒤 멸종(씨앗 1 은 3,693틱, 씨앗 7 은 1,153틱). 발견 세대 중앙값 [사분위] 채집 10.4 [3.1–22.7] · 저장 12.1 [3.6–24.7] · 농사 18.9 [8.6–30.6](씨앗별 농사 28.5 · 9.9 · 55.5 · 23.6 · 14.1 · 36.8 · 1.9 · 4.8). 씨앗 1 의 농사(2,040틱, 28.5세대)는 규칙 검사 S15(`test_farm_reachable`)가 같은 씨앗으로 다시 얻는 값입니다(결정성).
 - [`sweep/report.md`](analysis/example/sweep/report.md) — 돌연변이율 0.02·0.05·0.1 × 씨앗 4개 × 60세대. 멸종 1/4 · 1/4 · 0/4(0.02 의 씨앗 1 은 아무 발견 없이 618틱에, 0.05 의 씨앗 1 은 농사를 연 뒤 3,693틱에), 농사 도달 3/4 · 4/4 · 4/4(60세대에서 멈추므로 늦은 씨앗은 "도달 못 함"이 될 수 있음 — 중도 절단), 농사 세대 중앙값 16.7 · 26.1 · 20.1. 0.05(기본값과 같음) 칸은 위 `run` 의 씨앗 1~4 와 60세대까지 같은 역사입니다(채집 21.70 · 3.31 · 25.89 · 13.97세대로 같음). 0.1 에서 씨앗 2 는 첫 세대 폭발로 채집이 0.33세대에 열리고, 씨앗 1 의 채집은 18.5세대(0.05 에서 21.7)입니다. 씨앗 4개라 칸 사이 차이는 아직 결론이 아닙니다.
@@ -164,6 +193,8 @@ godot --headless --path . --script res://tests/run_experiment.gd -- --resume=res
 
 - **수 인자:** `--seed` 는 64비트 정수, `--generations` 는 0 보다 큰 유한한 수, `--max-ticks` 는 1~1,000,000,000(`SimConfig.TICK_MAX` — 설정의 틱 키와 같은 상한, 틱을 담는 배열의 2^31−1 안), `--snapshot-every` 는 0(끔)~1,000,000,000 의 정수. `1e5`·`10k`·`abc` 처럼 글자가 섞이면 앞 숫자만 쓰지 않고 **인자 오류(종료 코드 2)** 입니다. 상대 경로(`--out`·`--resume`)는 프로젝트 폴더(`--path`) 기준.
 - **이어 돌리기(`--resume`):** 설정·씨앗은 스냅숏의 것을 씁니다. `--seed`·`--preset`·`--set` 을 함께 주면 무시하지 않고 인자 오류(2). 끊김 없이 돌린 것과 같은 역사 해시가 나옵니다(검사). 이어 돌린 `summary.json` 은 `preset = ""`·`overrides = {}`(스냅숏에는 예설정 이름이 없음 — 실제 설정은 `config`), `resumed_from` = 실제로 읽은 파일, `resume_status` = `loaded`(본 파일) 또는 `backup` — 본 파일이 깨져 직전 정상본(`.bak`)에서 읽었으면 경고 줄을 찍고 `resumed_from` 에 `.bak` 경로를 적습니다(`.bak` 은 같은 이름으로 앞서 저장한 다른 실험일 수 있음). 이어 돌릴 스냅숏이 `--out` 폴더 바로 안이면 거부(2) — 링크·대소문자만 다른 경로로 같은 폴더를 가리켜도 지울 파일 가운데 크기·내용이 같은 것이 있으면 거부합니다. 이어 돌리자마자 끝나도(틱 상한 ≤ 스냅숏 틱) 시계열은 그 틱 한 줄입니다(실험실에서 스냅숏을 연 것과 같음).
+- **반사실 재생(`--fork-set=키=값`, 여러 번):** `--resume` 과만 씁니다(없이 주면 인자 오류 2 — 처음부터 돌릴 때는 `--set`). 스냅숏을 연 뒤 설정 키만 바꿔 이어 돌립니다. 바꾼 설정으로 스냅숏 검사(설정 범위·관계, 유전체·기억·지도 배열 길이)를 다시 지나야 하므로 `brain.hidden`·`brain.memory_units`·`map.width` 처럼 저장된 배열의 길이를 바꾸는 키, 모르는 키, 범위 밖 값은 종료 코드 2(결과 폴더를 보기 전에 거름). 같은 값으로 "바꾸면" 끊김 없이 돌린 것과 같은 역사입니다(검사). `summary.json` 의 `forked` = `{키: 값}`(바꾸지 않았으면 `{}`). 씨앗마다 묶어 돌리고 견주는 일은 위 `ablate`.
+- **`summary.json` 의 열 목록:** `timeseries_columns`·`lineage_columns` = 그 실행의 CSV 열(단계마다 열이 늘므로 분석 도구가 이것을 먼저 읽음 — DESIGN-v0.2 9.5).
 - **결과 폴더(`--out`):** 없거나 비었으면 그대로 씁니다. 실행기가 쓰는 파일(`summary.json`·`timeseries.csv`·`chronicle.csv`·`lineage.csv`·`final.snapshot.json`·`snapshot-<틱>.json`, 그리고 그 `.tmp`·`.bak`·`.broken`)만 있으면 **그것을 모두 지우고** 새로 씁니다 — 같은 폴더를 다시 써도 앞 실행의 `lineage.csv`(`--no-lineage` 일 때)·`snapshot-N.json`·`.bak` 이 새 결과 옆에 섞여 남지 않습니다. `.gdignore`·`run.log`(`analyze.py` 의 기록)·OS 가 만드는 파일(`.DS_Store`·`Thumbs.db`·`desktop.ini`)은 그대로 둡니다. **그 밖의 파일이나 하위 폴더가 하나라도 있으면 아무것도 지우지 않고** 오류(2) — 사용자 파일을 지우지 않으려고 실행기가 모르는 것은 건드리지 않습니다(빈 폴더나 새 `--out` 을 주세요). 설정 오류는 폴더를 보기 전에 걸러지므로 앞 결과가 그대로 남습니다.
 - **쓰는 순서:** 중간 스냅숏(`--snapshot-every`) → `final.snapshot.json` → CSV → `summary.json`(마지막 — 임시 이름으로 쓴 뒤 바꿈. CSV 를 하나라도 못 쓰면 `summary.json` 은 쓰지 않음). 그래서 `summary.json` 이 있으면 다 쓴 결과입니다. `summary.json` 의 `write_failed` = 그보다 먼저 쓰지 못한 파일(중간·최종 스냅숏). 실험실의 결과 폴더 내보내기도 같은 순서입니다.
 - **종료 코드:** 정상 0, 인자·설정·결과 폴더 오류 2, 파일 쓰기 실패 3(중간 스냅숏 포함 — 실패마다 오류 줄을 찍음). 마지막 줄 `RESULT: … reason=<끝난 이유>` 는 정상이면 `reason=…` 으로 끝나고, 쓰기 실패면 끝에 ` write_failed=파일(까닭),…` 이 붙습니다(CI 처럼 판정할 때는 종료 코드나 줄 끝까지 맞춘 `reason=generations$` 로). 씨앗은 `INT64_MIN` 도 그대로(`seed=-9223372036854775808`).
@@ -213,4 +244,4 @@ py tools\analyze.py report results\fast8
 python3 -m unittest discover -s tools -p "test_*.py" -v
 ```
 
-`tools/test_analyze.py`: 가짜 결과 폴더(묶음 2개 × 씨앗 2개)로 `summary.csv`(발견 세대·NaN·정렬, 멸종 실행의 끝 평균 세대)·`cells.csv`(중앙값·사분위·도달·멸종 비율)·`report.md`·그림·`.gdignore`, 같은 입력 → 같은 출력, 쓰는 CSV 의 BOM·BOM 있는 실행기 CSV 읽기, 예설정을 모르는 실행의 묶음 이름(`snapshot`), matplotlib 없을 때, 묶음 9개(작은 그림 모드), 씨앗·격자 인자 해석(배열 값·괄호 오류·하이픈 이름 순서·따옴표가 붙은 키·실행기와 같은 `--generations` 꼴), `run`·`sweep` 가 만드는 godot 명령줄(상대 `--godot` 경로)과 이어 돌리기(설정·틱 상한이 다르면 mismatch, 실패·덜 쓴 결과는 다시 돌림)·실패 기록(가짜 subprocess), `runs.csv` 의 `command`(Windows·POSIX 따옴표), cp949·cp1252 표준 출력에서 실패 경로, 실제 자식 프로세스의 UTF-8 출력 읽기, 올린 예시 보고서의 결과 폴더 이름이 위 명령과 같은지. `tools/test_runner_cli.py`: 실행기의 명령줄 계약("헤드리스 실행기를 직접 쓸 때") — 수 인자 거부, 이어 돌리기(같은 해시·인자 조합 거부·백업 경고·한 줄), 결과 폴더 정리·거부, 설정 오류 2(`analyze.py --set` 경로 포함), 쓰기 실패 3. `tools/test_build_ci.py`(표준 라이브러리만): GitHub Actions 워크플로 모양(셸·실패 감지·올림 파일), 가짜 godot 으로 검사 단계를 실제로 돌려 봄, `fetch_godot`(내려받기 무결성)·`build_dist`(배포판)·`smoke_run`, 배포판의 엔진 라이선스 파일. `tools/test_repo_rules.py`: `assets/` 의 모든 파일이 `CREDITS.md` 에 있음, 화면 코드가 `docs/SIM-API.md` 에 없는 세계 멤버를 쓰지 않음, 문서의 `ui.json` 키 이름이 실제 키. `tools/test_design_format.py`: DESIGN 8.3(스냅숏 형식) 표가 `SimSnapshot` 이 쓰는 모든 키를, 8.4(결과 파일) 표가 `SimRecorder` 의 모든 CSV 열을 적음(검토 I18·J25). v0.2 에서 더한 키·열은 DESIGN-v0.2 9.1·9.3·9.4 에 있고, 새 열은 v0.1 열 뒤에 그 표의 순서대로 붙음. godot 이 있으면(`GODOT` 또는 PATH) `test_analyze.py` 는 실제 실행기로 씨앗 2개 × 2세대를 돌려 같은 씨앗의 해시가 같은지도 봅니다(없으면 그 하나만 건너뜀). `test_runner_cli.py` 는 godot 이 꼭 있어야 합니다(없으면 실패). GitHub Actions(`build.yml` 의 마지막 단계)에서도 돌립니다.
+`tools/test_analyze.py`: 가짜 결과 폴더(묶음 2개 × 씨앗 2개)로 `summary.csv`(발견 세대·NaN·정렬, 멸종 실행의 끝 평균 세대)·`cells.csv`(중앙값·사분위·도달·멸종 비율)·`report.md`·그림·`.gdignore`, 같은 입력 → 같은 출력, 쓰는 CSV 의 BOM·BOM 있는 실행기 CSV 읽기, 예설정을 모르는 실행의 묶음 이름(`snapshot`), matplotlib 없을 때, 묶음 9개(작은 그림 모드), 씨앗·격자 인자 해석(배열 값·괄호 오류·하이픈 이름 순서·따옴표가 붙은 키·실행기와 같은 `--generations` 꼴), `run`·`sweep` 가 만드는 godot 명령줄(상대 `--godot` 경로)과 이어 돌리기(설정·틱 상한이 다르면 mismatch, 실패·덜 쓴 결과는 다시 돌림)·실패 기록(가짜 subprocess), `runs.csv` 의 `command`(Windows·POSIX 따옴표), cp949·cp1252 표준 출력에서 실패 경로, 실제 자식 프로세스의 UTF-8 출력 읽기, 올린 예시 보고서의 결과 폴더 이름이 위 명령과 같은지, 손 사본 = 시뮬레이션 상수(`TestHandCopies` — 열 하나를 지우면 실패), 손으로 정한 시계열의 세대·틱 구간 행동 셈과 보고서 표, `summary.json` 의 열 목록을 CSV 머리보다 먼저 봄, 예전 22열 결과, `lineage.csv` 의 먹은 양·관문 A-1 대상 출생, `ablate` 의 명령줄(기준 실행·두 갈래)·표·뺀 씨앗·다시 돌리기·mismatch·기본 폴더(가짜 subprocess). `tools/test_runner_cli.py`: 실행기의 명령줄 계약("헤드리스 실행기를 직접 쓸 때") — 수 인자 거부, 이어 돌리기(같은 해시·인자 조합 거부·백업 경고·한 줄), 결과 폴더 정리·거부, 설정 오류 2(`analyze.py --set` 경로 포함), 쓰기 실패 3, `--fork-set`(그대로·같은 값 갈래 = 끊김 없이, 바꾼 갈래는 다름, 배열 길이를 바꾸는 키·모르는 키·범위 밖 값 2 와 앞 결과 그대로, `--resume` 없이 인자 오류), `summary.json` 의 열 목록 = CSV 머리 = 손 사본, 실제 실행기로 `ablate`(그대로 갈래 = 끊김 없이 돌린 해시, 다시 돌리면 같은 표). `tools/test_build_ci.py`(표준 라이브러리만): GitHub Actions 워크플로 모양(셸·실패 감지·올림 파일), 가짜 godot 으로 검사 단계를 실제로 돌려 봄, `fetch_godot`(내려받기 무결성)·`build_dist`(배포판)·`smoke_run`, 배포판의 엔진 라이선스 파일. `tools/test_repo_rules.py`: `assets/` 의 모든 파일이 `CREDITS.md` 에 있음, 화면 코드가 `docs/SIM-API.md` 에 없는 세계 멤버를 쓰지 않음, 문서의 `ui.json` 키 이름이 실제 키. `tools/test_design_format.py`: DESIGN 8.3(스냅숏 형식) 표가 `SimSnapshot` 이 쓰는 모든 키를, 8.4(결과 파일) 표가 `SimRecorder` 의 모든 CSV 열을 적음(검토 I18·J25). v0.2 에서 더한 키·열은 DESIGN-v0.2 9.1·9.3·9.4 에 있고, 새 열은 v0.1 열 뒤에 그 표의 순서대로 붙음. godot 이 있으면(`GODOT` 또는 PATH) `test_analyze.py` 는 실제 실행기로 씨앗 2개 × 2세대를 돌려 같은 씨앗의 해시가 같은지도 봅니다(없으면 그 하나만 건너뜀). `test_runner_cli.py` 는 godot 이 꼭 있어야 합니다(없으면 실패). GitHub Actions(`build.yml` 의 마지막 단계)에서도 돌립니다.
