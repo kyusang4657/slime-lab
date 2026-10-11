@@ -21,7 +21,7 @@ const MAIN_SHORT := {"mutation.rate": "돌연변이", "resources.scale": "자원
 const SECTION_NAMES := {
 	"map": "지도", "time": "시간", "seasons": "계절", "plants": "식물", "resources": "자원", "dropped": "떨어진 먹이",
 	"body": "몸", "metab": "대사", "eat": "먹기", "life": "수명", "repro": "번식", "population": "개체군",
-	"sense": "감각", "traits": "특성", "brain": "두뇌", "mutation": "돌연변이", "carry": "운반", "store": "저장고",
+	"sense": "감각", "traits": "특성", "brain": "두뇌", "mutation": "돌연변이", "learn": "학습", "carry": "운반", "store": "저장고",
 	"farm": "밭", "discovery": "발견", "hash": "역사 해시", "record": "기록", "run": "실행기",
 }
 ## set_value 의 특별 키(설정 키가 아닌 것)

@@ -136,11 +136,11 @@ def render_doc() -> str:
         "",
         "- **범위**는 모두 \"(검사)\" = `SimConfig.validate` 가 막는 범위입니다(밖이면 실험을 만들지 않고 패널은 그 줄 아래 오류)."
         " 규칙은 `scripts/sim/sim_config.gd` 의 `RULES`·`ARRAY_RULES`·`CHOICES` 와 관계 검사(크기·감지 초기값, 해 뜨고 지는 시간,"
-        " 수명 흔들림)이고 `tools/test_sim_labels.py` 가 이 표의 범위 글과 대조합니다. \"0 초과\" 는 0 을 뺀 범위(나눗수로 쓰이는 값).",
+        " 수명 흔들림, 어른 ≤ 늙음 시작, 학습률 유전자 처음 값 ≤ 상한, 학습을 켜면 sample 정책·판단 1틱마다·날카로움 1 이상)이고 `tools/test_sim_labels.py` 가 이 표의 범위 글과 대조합니다. \"0 초과\" 는 0 을 뺀 범위(나눗수로 쓰이는 값).",
         "- 규칙의 자세한 식은 [`DESIGN-v0.1.md`](DESIGN-v0.1.md) 1~7절, 발견(`discovery.*`) 임계를 고른 기록은"
         " [`TUNING-fast_civ.md`](TUNING-fast_civ.md).",
         "- 정수 키는 파일에 소수점 없이 적힌 키입니다(소수는 거부 — 검사, 패널도 정수만 받음). 틱 단위 키의 상한 1e9 ="
-        " `SimConfig.TICK_MAX`(틱 값을 32비트 정수 배열에 담음). 배열·글자 키(`seasons.growth`·`brain.policy`·`repro.inherit`)는 패널에서 보기만 합니다.",
+        " `SimConfig.TICK_MAX`(틱 값을 32비트 정수 배열에 담음). 배열·글자 키(`seasons.growth`·`brain.policy`·`repro.inherit`·`learn.stage_mult`·`learn.diag_factor`)는 패널에서 보기만 합니다.",
         "",
     ]
     by_sec: dict[str, list[tuple[str, str, object]]] = {}

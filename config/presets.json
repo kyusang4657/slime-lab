@@ -50,6 +50,14 @@
 			"plants.initial_fill": 0.0
 		}
 	},
+	"learn_basic": {
+		"label": "학습·성장(1단계)",
+		"_comment": "연구용(v0.2 1단계): 평생 학습(배운 두뇌·학습률 유전자)과 몸 자람을 켬(docs/DESIGN-v0.2.md 2·3절). 관문 A-2 의 세계. 값은 모두 첫 값(조정 전)",
+		"set": {
+			"learn.enabled": true,
+			"body.grow_enabled": true
+		}
+	},
 	"chance_baseline": {
 		"label": "우연 기준(유전 없음)",
 		"_comment": "연구용 대조: 자식이 부모와 상관없는 새 무작위 두뇌를 받아 진화가 없음(docs/DESIGN-v0.2.md 11.3). 문명 지표(행동 비율 등)는 같은 틱의 이 기준과의 차이로 봄. 오래 살지 못함: 씨앗 1~12 모두 469~663틱에 멸종(0단계 기준선, docs/TEST-REPORT.md) — 같은 틱으로 견줄 수 있는 것은 처음 약 600틱",

@@ -44,7 +44,9 @@
 	},
 	"body": {
 		"energy_per_size": 40.0,
-		"start_energy_frac": 0.6
+		"start_energy_frac": 0.6,
+		"grow_enabled": false,
+		"birth_size_frac": 0.5
 	},
 	"metab": {
 		"base": 0.06,
@@ -58,7 +60,9 @@
 	},
 	"life": {
 		"max_age": 200,
-		"max_age_jitter": 30
+		"max_age_jitter": 30,
+		"adult_frac": 0.4,
+		"old_frac": 0.8
 	},
 	"repro": {
 		"maturity": 30,
@@ -103,6 +107,26 @@
 	"mutation": {
 		"rate": 0.05,
 		"sigma": 0.3
+	},
+	"learn": {
+		"enabled": false,
+		"freeze": false,
+		"ring_len": 8,
+		"decay": 0.8,
+		"baseline_rate": 0.05,
+		"min_surprise": 0.2,
+		"eta_init": 0.05,
+		"eta_max": 0.5,
+		"mutation_scale_eta": 0.1,
+		"cost_per_eta": 0.04,
+		"stage_mult": [
+			1.0,
+			0.6,
+			0.3,
+			0.1
+		],
+		"lamarck_frac": 0.0,
+		"diag_factor": "exact"
 	},
 	"carry": {
 		"max": 6.0

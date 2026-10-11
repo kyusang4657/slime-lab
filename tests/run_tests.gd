@@ -3047,12 +3047,18 @@ func test_snapshot_v01_fixture() -> void:
 	var r2 := SimSnapshot.from_text(t2)
 	check(r2.world != null and SimSnapshot.to_text(r2.world) == t2 and str(JSON.parse_string(t2).config.repro.inherit) == "genome",
 			"이어 돌린 세계를 다시 저장하면 v0.2 키·repro.inherit 가 들어가고 글자 그대로 왕복")
+	# 1단계 절(learn)·키(life.adult_frac 등): 옛 파일에 없으니 SECTIONS_ADDED·CONFIG_KEYS_ADDED 가 기본값(학습·몸 자람 끔)으로 채움
+	check(SimSnapshot.SECTIONS_ADDED.has("learn") and not d.config.has("learn") and SimConfig.deep_equal(w.cfg.learn, SimConfig.defaults().learn)
+			and float(w.cfg.life.adult_frac) == float(SimConfig.defaults().life.adult_frac) and not bool(w.cfg.body.grow_enabled),
+			"옛 파일에 없는 1단계 설정: learn 절·life.adult_frac·body.grow_enabled 등을 기본값(학습·몸 자람 끔)으로 채움")
 	# 시험용 새 절: 기본값에 절을 더하면 그 절이 없는 옛 파일은 SECTIONS_ADDED 없이는 거부, 있으면 기본값 절로 채워 열림
 	SimConfig.defaults()
 	SimConfig._defaults_cache["probe_section"] = {"probe_on": false}
-	SimSnapshot._sections_added = []
+	SimSnapshot._sections_added = SimSnapshot.SECTIONS_ADDED
 	var e_without := str(SimSnapshot.from_text(text).error)
-	SimSnapshot._sections_added = ["probe_section"]
+	var with_probe: Array = SimSnapshot.SECTIONS_ADDED.duplicate()
+	with_probe.append("probe_section")
+	SimSnapshot._sections_added = with_probe
 	var r3 := SimSnapshot.from_text(text)
 	var w4 := world({}, 3)
 	w4.step_n(50)

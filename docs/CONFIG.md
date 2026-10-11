@@ -4,9 +4,9 @@
 
 시뮬레이션 수치의 단일 기준은 `config/sim-defaults.json` 입니다. 실험 설정 = 기본값 + 예설정(`config/presets.json`) + 바꾼 값(실험실 파라미터 패널, 헤드리스 실행기 `--set=절.키=값`). 아래 표는 모든 잎 키의 한국어 이름·기본값·단위·범위·뜻입니다. 실험실 **고급 설정**에서 키 이름에 마우스를 올리면 같은 설명이 말풍선으로 나옵니다.
 
-- **범위**는 모두 "(검사)" = `SimConfig.validate` 가 막는 범위입니다(밖이면 실험을 만들지 않고 패널은 그 줄 아래 오류). 규칙은 `scripts/sim/sim_config.gd` 의 `RULES`·`ARRAY_RULES`·`CHOICES` 와 관계 검사(크기·감지 초기값, 해 뜨고 지는 시간, 수명 흔들림)이고 `tools/test_sim_labels.py` 가 이 표의 범위 글과 대조합니다. "0 초과" 는 0 을 뺀 범위(나눗수로 쓰이는 값).
+- **범위**는 모두 "(검사)" = `SimConfig.validate` 가 막는 범위입니다(밖이면 실험을 만들지 않고 패널은 그 줄 아래 오류). 규칙은 `scripts/sim/sim_config.gd` 의 `RULES`·`ARRAY_RULES`·`CHOICES` 와 관계 검사(크기·감지 초기값, 해 뜨고 지는 시간, 수명 흔들림, 어른 ≤ 늙음 시작, 학습률 유전자 처음 값 ≤ 상한, 학습을 켜면 sample 정책·판단 1틱마다·날카로움 1 이상)이고 `tools/test_sim_labels.py` 가 이 표의 범위 글과 대조합니다. "0 초과" 는 0 을 뺀 범위(나눗수로 쓰이는 값).
 - 규칙의 자세한 식은 [`DESIGN-v0.1.md`](DESIGN-v0.1.md) 1~7절, 발견(`discovery.*`) 임계를 고른 기록은 [`TUNING-fast_civ.md`](TUNING-fast_civ.md).
-- 정수 키는 파일에 소수점 없이 적힌 키입니다(소수는 거부 — 검사, 패널도 정수만 받음). 틱 단위 키의 상한 1e9 = `SimConfig.TICK_MAX`(틱 값을 32비트 정수 배열에 담음). 배열·글자 키(`seasons.growth`·`brain.policy`·`repro.inherit`)는 패널에서 보기만 합니다.
+- 정수 키는 파일에 소수점 없이 적힌 키입니다(소수는 거부 — 검사, 패널도 정수만 받음). 틱 단위 키의 상한 1e9 = `SimConfig.TICK_MAX`(틱 값을 32비트 정수 배열에 담음). 배열·글자 키(`seasons.growth`·`brain.policy`·`repro.inherit`·`learn.stage_mult`·`learn.diag_factor`)는 패널에서 보기만 합니다.
 
 ## 지도 · `map`
 
@@ -69,6 +69,8 @@
 |---|---|---|---|---|---|
 | `body.energy_per_size` | 크기당 최대 에너지 | `40.0` | 에너지 | 0 초과 ~ 1e6 (검사) | 최대 에너지 = 이 값 × 크기 |
 | `body.start_energy_frac` | 처음 에너지 | `0.6` | 비율 | 0~1 (검사) | 초기 개체의 에너지 = 최대 에너지 × 이 값 |
+| `body.grow_enabled` | 몸 자람 | `false` | 참·거짓 | true / false (검사) | 켜면 갓 태어난 몸이 작고(유전자 크기 × body.birth_size_frac) 성숙 나이(repro.maturity)까지 고르게 자라 유전자 크기가 됨. 크기를 쓰는 곳(최대 에너지·대사·이동 비용·한입·운반 상한)이 모두 따라오고, 자식 에너지 상한은 태어날 때의 최대 에너지, 초기 개체의 처음 에너지는 그 나이의 최대 에너지 × body.start_energy_frac. 끄면 v0.1 그대로(DESIGN-v0.2 2.2) |
+| `body.birth_size_frac` | 갓 태어난 몸 비율 | `0.5` | 비율 | 0 초과 ~ 1 (검사) | 몸 자람을 켰을 때 갓 태어난 몸 크기 = 유전자 크기 × 이 값. 크기 비율 = 이 값 + (1 - 이 값) × 나이 ÷ 성숙 나이(성숙 뒤 1). 시계열 mean_size 는 그대로 유전자 크기 평균, 실제 크기 평균은 mean_size_eff |
 
 ## 대사 · `metab`
 
@@ -92,6 +94,8 @@
 |---|---|---|---|---|---|
 | `life.max_age` | 최대 나이 | `200` | 틱 | 1~1e9 (검사) | 이 나이에 이르면 늙어 죽음 |
 | `life.max_age_jitter` | 수명 흔들림 | `30` | 틱 | 0~1e9, 최대 나이보다 작게 (검사) | 개체마다 최대 나이에 -이 값 ~ +이 값을 고르게 더함 |
+| `life.adult_frac` | 어른 시작 | `0.4` | 수명 비율 | 0~1, 늙음 시작 이하 (검사) | 생애 단계(어린·젊은·어른·늙은 — DESIGN-v0.2 2.1): 성숙 나이(repro.maturity)를 넘고 나이가 자기 수명 × 이 값 이상이면 어른. 학습률 배수(learn.stage_mult)와 시계열 stage_* 에 쓰이고, 학습을 끄면 규칙에 닿지 않음 |
+| `life.old_frac` | 늙음 시작 | `0.8` | 수명 비율 | 0~1, 어른 시작 이상 (검사) | 성숙 나이를 넘고 나이가 자기 수명 × 이 값 이상이면 늙은 단계(어린 판정이 먼저 — 이 값 × 수명이 성숙 나이보다 작으면 어린 다음이 바로 늙은) |
 
 ## 번식 · `repro`
 
@@ -154,6 +158,24 @@
 |---|---|---|---|---|---|
 | `mutation.rate` | 돌연변이율 | `0.05` | 확률 | 0~1 (검사) | 자식의 유전자(가중치·특성)마다 이 확률로 변이 |
 | `mutation.sigma` | 돌연변이 폭 | `0.3` | 표준편차 | 0~100 (검사) | 변이할 때 더하는 정규 잡음의 표준편차(특성은 traits.mutation_scale_* 를 곱함) |
+
+## 학습 · `learn`
+
+| 키 | 이름 | 기본값 | 단위 | 범위 | 뜻·효과 |
+|---|---|---|---|---|---|
+| `learn.enabled` | 평생 학습 | `false` | 참·거짓 | true / false (검사) | 켜면 개체마다 출력층 행동 8행의 '배운 두뇌'를 따로 들고 보상 조절 학습으로 고치고, 행동 행마다 학습률 유전자(eta)를 유전체 끝에 붙임(유전자 163 → 171). 배운 두뇌는 유전되지 않음(DESIGN-v0.2 3절). brain.policy = "sample"·brain.think_every = 1·brain.sharpness 1 이상이어야 함(검사). 유전체 길이가 바뀌므로 저장한 실험을 이어 돌리며 바꿀 수 없음 |
+| `learn.freeze` | 학습 멈춤 | `false` | 참·거짓 | true / false (검사) | 켜면 판단 고리와 기준선은 채우지만 배운 두뇌를 고치지 않음. 학습 비용은 그대로 냄 — 관문 A 의 대조(DESIGN-v0.2 14.3) |
+| `learn.ring_len` | 고리 길이 | `8` | 판단 수 | 1~32 (검사) | 보상을 나눠 줄 최근 판단 수 H. 놀람이 클 때 고리의 판단마다 고침(방금 판단은 몫 1, 그 앞은 learn.decay, 그 앞은 learn.decay 의 제곱 …) |
+| `learn.decay` | 고리 감쇠 | `0.8` | 배수 | 0~1 (검사) | 고리에서 m 판단 전의 몫 = 이 값을 m 번 곱한 값(0.8 이면 7판단 전 0.21) |
+| `learn.baseline_rate` | 기준선 속도 | `0.05` | 비율 | 0 초과 ~ 1 (검사) | 기준선 b ← b + 이 값 × (보상 - b). 보상에서 기준선을 뺀 놀람으로 배움(대사 때문에 보상은 거의 늘 음수라) |
+| `learn.min_surprise` | 놀람 문턱 | `0.2` | 한입 | 0~1e6 (검사) | 놀람(보상 - 기준선)의 크기가 이 값 이상일 때만 배운 두뇌를 고침(보상 단위 = 한입 — 배고픈 개체가 한입을 다 먹으면 약 +1) |
+| `learn.eta_init` | 학습률 유전자 처음 값 | `0.05` | 학습률 | 0~100, 학습률 유전자 상한 이하 (검사) | 처음 개체(와 우연 기준의 새 유전체)의 학습률 유전자(eta) |
+| `learn.eta_max` | 학습률 유전자 상한 | `0.5` | 학습률 | 0~100 (검사) | 학습률 유전자의 범위 [0, 이 값] — 돌연변이가 이 범위로 자름 |
+| `learn.mutation_scale_eta` | 학습률 유전자 돌연변이 배율 | `0.1` | 배수 | 0~100 (검사) | 학습률 유전자 돌연변이 크기 = mutation.sigma × 이 값 |
+| `learn.cost_per_eta` | 학습 비용 | `0.04` | 에너지/틱 | 0~1e6 (검사) | 매 틱 대사에 이 값 × (학습률 유전자 8개의 평균)을 더함(쉬기 배수 뒤라 쉬어도 줄지 않음 — 배우는 능력의 값, DESIGN-v0.2 3.6) |
+| `learn.stage_mult` | 단계별 학습률 배수 | `[1.0, 0.6, 0.3, 0.1]` | 배수 4개 | 어린·젊은·어른·늙은 4개, 각 0~1 (검사) | 생애 단계마다 유효 학습률 = 학습률 유전자 × 이 값(DESIGN-v0.2 2.3). 패널에서는 보기만 함(예설정·명령줄 --set 으로 바꿈) |
+| `learn.lamarck_frac` | 라마르크 몫 | `0.0` | 비율 | 0~1 (검사) | 비교용: 0 보다 크면 자식 유전체 W2 행동 행에 이 값 × 부모의 (배운 - 타고난) 평균을 더함(기본 0 = 배운 두뇌는 유전되지 않음, DESIGN-v0.2 3.7). 우연 기준(repro.inherit = random)·학습 끔에서는 쓰지 않음 |
+| `learn.diag_factor` | 갱신 보정 | `"exact"` | 글자 | "exact" / "none" (검사) | 고른 행동의 갱신 보정 e: exact = (1 - 고른 확률) × brain.sharpness × d(출력) — 출력이 포화될수록 덜 고침, none = 1 - 고른 확률(비교용, DESIGN-v0.2 3.5). 패널에서는 보기만 함 |
 
 ## 운반 · `carry`
 
@@ -220,4 +242,5 @@
 | `fast_civ` | 빠른 문명 | `discovery.forage_threshold` = `280`, `discovery.store_threshold` = `30.0`, `discovery.region_size` = `16`, `discovery.farm_radius` = `16`, `discovery.farm_threshold` = `15` | 연구용: 씨앗 12개 중 11개는 발견이 진화 도중에 열림(씨앗 7 은 첫 세대 폭발로 2세대 안에 채집·저장·농사), 씨앗 1~12 모두 100세대 안에 농사(중앙값 14.3세대 — 규칙 고침 뒤 다시 잼, 씨앗 1·7 은 농사 뒤 멸종). 근거·씨앗별 결과는 docs/TUNING-fast_civ.md |
 | `demo_fast` | 시연·검사용(아주 빠른 발견) | `discovery.forage_threshold` = `120`, `discovery.store_threshold` = `30.0`, `discovery.farm_threshold` = `8` | 예전 fast_civ 값. 씨앗 1~12 의 농사 중앙값 2.3세대(대부분 첫 세대 폭발), 씨앗 1 은 13.2세대(1,037틱) — 그래프·연대기 캡처는 씨앗 1, 농사 장면 캡처(ui_driver·map_capture·perf_capture)는 씨앗 11 |
 | `no_resources` | 자원 없음 | `resources.scale` = `0.0`, `plants.initial_fill` = `0.0` | — |
+| `learn_basic` | 학습·성장(1단계) | `learn.enabled` = `true`, `body.grow_enabled` = `true` | 연구용(v0.2 1단계): 평생 학습(배운 두뇌·학습률 유전자)과 몸 자람을 켬(docs/DESIGN-v0.2.md 2·3절). 관문 A-2 의 세계. 값은 모두 첫 값(조정 전) |
 | `chance_baseline` | 우연 기준(유전 없음) | `repro.inherit` = `"random"` | 연구용 대조: 자식이 부모와 상관없는 새 무작위 두뇌를 받아 진화가 없음(docs/DESIGN-v0.2.md 11.3). 문명 지표(행동 비율 등)는 같은 틱의 이 기준과의 차이로 봄. 오래 살지 못함: 씨앗 1~12 모두 469~663틱에 멸종(0단계 기준선, docs/TEST-REPORT.md) — 같은 틱으로 견줄 수 있는 것은 처음 약 600틱 |

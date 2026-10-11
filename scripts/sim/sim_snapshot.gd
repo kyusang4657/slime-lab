@@ -227,10 +227,11 @@ static func from_text(text: String) -> Dictionary:
 
 
 ## 스냅숏 형식 1 을 만든 뒤에 더한 설정 키(있는 절의 새 잎). 옛 스냅숏에 없으면 기본값(= 그 키가 생기기 전 코드의 동작)으로 채운다.
-const CONFIG_KEYS_ADDED: Array[String] = ["time.night_light_threshold", "repro.inherit"]
+const CONFIG_KEYS_ADDED: Array[String] = ["time.night_light_threshold", "repro.inherit", "life.adult_frac", "life.old_frac",
+	"body.grow_enabled", "body.birth_size_frac"]
 ## 형식 1 을 만든 뒤에 더한 설정 절(DESIGN-v0.2 8·9.2). 옛 스냅숏에 그 절이 통째로 없으면 기본값 절을 통째로 넣는다
-## (CONFIG_KEYS_ADDED 는 절이 있을 때만 잎을 채우므로). 0단계에는 아직 없음 — 1단계부터 learn 등.
-const SECTIONS_ADDED: Array[String] = []
+## (CONFIG_KEYS_ADDED 는 절이 있을 때만 잎을 채우므로). 1단계 = learn(기본값은 학습 끔 — 옛 실행과 같은 동작).
+const SECTIONS_ADDED: Array[String] = ["learn"]
 ## 하위 절의 키(값 종류: b64 = base64 글자, hex = float64 비트 16진 글자, int = 정수인 수).
 const MAP_B64: Array[String] = ["tiles", "fert", "base_fert", "food", "dropped", "drop_timer", "drop_list", "sat", "farm_visit", "farms"]
 const CIV_B64: Array[String] = ["drop_total_tile", "region_drop", "store_tiles", "store_food"]

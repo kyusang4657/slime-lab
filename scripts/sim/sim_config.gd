@@ -25,10 +25,10 @@ const RULES := [
 	["resources.scale", 0.0, 100.0],
 	["dropped.spoil_ticks", 1, TICK_MAX], ["dropped.sprout_chance", 0.0, 1.0], ["dropped.sprout_food", 0.0, 1e6],
 	["dropped.sprout_fertility", 0.0, 1.0],
-	["body.energy_per_size", 0.0, 1e6, ABOVE], ["body.start_energy_frac", 0.0, 1.0],
+	["body.energy_per_size", 0.0, 1e6, ABOVE], ["body.start_energy_frac", 0.0, 1.0], ["body.birth_size_frac", 0.0, 1.0, ABOVE],
 	["metab.base", 0.0, 1e6], ["metab.sense_cost", 0.0, 1e6], ["metab.move", 0.0, 1e6], ["metab.rest_factor", 0.0, 1.0],
 	["eat.bite", 0.0, 1e6, ABOVE], ["eat.efficiency", 0.0, 1.0, ABOVE],
-	["life.max_age", 1, TICK_MAX], ["life.max_age_jitter", 0, TICK_MAX],
+	["life.max_age", 1, TICK_MAX], ["life.max_age_jitter", 0, TICK_MAX], ["life.adult_frac", 0.0, 1.0], ["life.old_frac", 0.0, 1.0],
 	["repro.maturity", 0, TICK_MAX], ["repro.min_energy_frac", 0.0, 1.0], ["repro.cost_frac", 0.0, 1.0],
 	["repro.transfer_efficiency", 0.0, 1.0], ["repro.cooldown", 0, TICK_MAX], ["repro.mate_radius", 0, 100000],
 	["population.initial", 0, 100000], ["population.cap", 1, 100000], ["population.initial_age_spread", 0, TICK_MAX],
@@ -40,6 +40,9 @@ const RULES := [
 	["brain.hidden", 1, 64], ["brain.memory_units", 0, 16], ["brain.think_every", 1, 100],
 	["brain.weight_clamp", 0.0, 1e6, ABOVE], ["brain.init_range", 0.0, 1e6], ["brain.sharpness", 0, 64],
 	["mutation.rate", 0.0, 1.0], ["mutation.sigma", 0.0, 100.0],
+	["learn.ring_len", 1, 32], ["learn.decay", 0.0, 1.0], ["learn.baseline_rate", 0.0, 1.0, ABOVE], ["learn.min_surprise", 0.0, 1e6],
+	["learn.eta_init", 0.0, 100.0], ["learn.eta_max", 0.0, 100.0], ["learn.mutation_scale_eta", 0.0, 100.0],
+	["learn.cost_per_eta", 0.0, 1e6], ["learn.lamarck_frac", 0.0, 1.0],
 	["carry.max", 0.0, 1e6, ABOVE],
 	["store.capacity", 0.0, 1e9, ABOVE], ["store.max_count", 1, 100000], ["store.min_spacing", 0, 100000],
 	["farm.radius", 0, 100000], ["farm.seed_cost", 0.0, 1e6], ["farm.growth_mult", 0.0, 100.0],
@@ -56,11 +59,13 @@ const INT_ELEMS := "정수"
 ## 배열 잎 키: 원소마다 [키, 하한, 상한(, INT_ELEMS)](원소는 수, 길이는 기본값과 같아야 함).
 const ARRAY_RULES := [
 	["seasons.growth", 0.0, 100.0],
+	["learn.stage_mult", 0.0, 1.0],
 ]
-## 글자 잎 키: 고를 수 있는 값(SimBrain.POLICY_*·SimWorld.INHERIT_* 와 같음 — 검사).
+## 글자 잎 키: 고를 수 있는 값(SimBrain.POLICY_*·SimWorld.INHERIT_*·SimBrain.DIAG_* 와 같음 — 검사).
 const CHOICES := {
 	"brain.policy": ["sample", "argmax"],
 	"repro.inherit": ["genome", "random"],
+	"learn.diag_factor": ["exact", "none"],
 }
 
 static var _defaults_cache: Dictionary = {}
@@ -277,6 +282,21 @@ static func validate(cfg: Dictionary) -> String:
 	if cfg.life.max_age_jitter >= cfg.life.max_age:
 		return "설정 life.max_age_jitter = %s: life.max_age(%s)보다 작아야 합니다" % [
 				num_text(cfg.life.max_age_jitter, true), num_text(cfg.life.max_age, true)]
+	# 생애 단계(DESIGN-v0.2 2.1): 어른이 늙음보다 먼저 시작(같으면 어른 구간이 빔).
+	if float(cfg.life.adult_frac) > float(cfg.life.old_frac):
+		return "설정 life.adult_frac = %s: life.old_frac(%s) 이하여야 합니다" % [num_text(cfg.life.adult_frac, false), num_text(cfg.life.old_frac, false)]
+	# 학습률 유전자 η(3.7): 처음 값이 상한 안.
+	if float(cfg.learn.eta_init) > float(cfg.learn.eta_max):
+		return "설정 learn.eta_init = %s: learn.eta_max(%s) 이하여야 합니다" % [num_text(cfg.learn.eta_init, false), num_text(cfg.learn.eta_max, false)]
+	# 평생 학습을 켜면(3.5): sample 정책(argmax 면 고른 확률이 1 이라 보정이 0), 판단 1틱마다(판단 사이 틱의 보상이 어느 판단 몫인지
+	# 모호하지 않게), 날카로움 1 이상(0 이면 정책이 균등이라 배워도 행동이 바뀌지 않으면서 비용만 냄).
+	if cfg.learn.enabled:
+		if str(cfg.brain.policy) != SimBrain.POLICY_SAMPLE:
+			return "설정 learn.enabled = true: brain.policy 가 \"%s\" 여야 합니다(지금 \"%s\")" % [SimBrain.POLICY_SAMPLE, str(cfg.brain.policy)]
+		if int(cfg.brain.think_every) != 1:
+			return "설정 learn.enabled = true: brain.think_every 가 1 이어야 합니다(지금 %s)" % num_text(cfg.brain.think_every, true)
+		if int(cfg.brain.sharpness) < 1:
+			return "설정 learn.enabled = true: brain.sharpness 가 1 이상이어야 합니다(지금 %s)" % num_text(cfg.brain.sharpness, true)
 	# 스냅숏은 설정을 JSON 글자로 저장한다. 글자로 바꿨다 다시 읽어 같은 값이 되어야 한다(유효숫자 15자리 이내).
 	var again = JSON.parse_string(JSON.stringify(cfg))
 	if not deep_equal(again, cfg):
