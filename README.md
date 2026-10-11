@@ -12,7 +12,7 @@ Godot 4.4.1 · GDScript · 오프라인 · 서버·로그인·광고·결제·�
 
 | 바로 해 보기 | |
 | --- | --- |
-| **브라우저 체험판** | **아직 배포되지 않았습니다.** 주소는 https://kyusang4657.github.io/slime-lab/ 로 정해 두었지만 이 저장소의 GitHub Pages 가 꺼져 있어 Actions 의 `pages` 잡이 실패합니다(Pages 단계가 처음 돈 #9 부터 매번). 저장소 소유자가 Settings → Pages → Build and deployment → Source 를 "GitHub Actions" 로 한 번 바꾸고 main 에서 다시 돌려야(새 푸시 또는 Actions 탭 "Run workflow") 올라갑니다 — 그 전에는 이 주소가 열리지 않습니다. 직접 띄우려면 아래 "빌드" 로 만든 `build/web` 을 로컬 웹 서버로 엽니다(PC 브라우저, WebGL2). |
+| **브라우저 체험판** | https://kyusang4657.github.io/slime-lab/ — `main` 에 푸시할 때마다 Actions 가 GitHub Pages 에 배포합니다(2026-10-11 저장소 Pages 를 켠 뒤 #17 부터 `pages` 잡 성공, 배포 기록 success). PC 브라우저(WebGL2)용입니다. 제작 환경에서는 github.io 접속이 막혀 이 주소를 직접 열어 보지는 못했습니다. 직접 띄우려면 아래 "빌드" 로 만든 `build/web` 을 로컬 웹 서버로 엽니다(PC 브라우저, WebGL2). |
 | **Linux·Windows** | GitHub Actions 실행의 산출물(`slime-lab-linux`·`slime-lab-windows`, zip, 30일 보관 — 받으려면 GitHub 로그인). 서명 없음. Windows 실행 파일은 실제 Windows 에서 띄워 본 적이 없습니다(아래 상태와 한계). 태그 `v*` 를 올리면 Release 에도 붙습니다(아직 태그 없음) |
 | **소스에서** | 아래 "실행" |
 
@@ -114,7 +114,7 @@ xvfb-run -a godot --path . --rendering-driver opengl3 --resolution 1280x720 --sc
 
 `tools/build_dist.sh` 는 Linux·Windows·웹을 내보내고(`<결과폴더>/linux`·`windows`·`web`), 엔진이 스스로 알려 주는 라이선스로 `GODOT-LICENSE.txt` 를 만들어 고지 파일 넷(`LICENSE`·`CREDITS.md`·`OFL-NanumGothic.txt`·`GODOT-LICENSE.txt`)을 zip 과 웹 묶음에 넣고, `slime-lab-<판>-linux.zip`·`-windows.zip` 으로 묶습니다. 판은 `project.godot` 의 `config/version` 하나에서 읽고, 태그 실행이면 태그가 `v<판>` 이어야 합니다. 내보내기 기록에 WARNING·ERROR 가 있으면 실패합니다. Windows 실행 파일의 아이콘·판 정보(회사·제품·저작권)는 편집기 설정의 rcedit(Linux 에서는 wine 도, `LC_ALL=C.UTF-8`)로 씁니다 — 없으면 경고가 나 실패하므로, 그 설정 없이 한 판만 필요하면 `godot --headless --path . --export-release "Linux" build/linux/slime-lab.x86_64` 처럼 직접 내보냅니다.
 
-`main` 에 푸시하거나 Actions 탭에서 "Run workflow" 를 누르면 GitHub Actions 가 검사(규칙·화면·씨앗 1 의 100세대 실행·파이썬) → 세 판 내보내기(`tools/build_dist.sh`, Linux 실행 파일은 빈 폴더에서 헤드리스로 띄워 주 장면·종료 코드·오류 줄 확인) → 웹 체험판을 GitHub Pages 에 배포합니다(**Pages 가 꺼져 있어 지금은 실패** — 위 "바로 해 보기"). `v*` 태그를 올리면 Linux·Windows zip 을 Release 에 붙입니다(`.github/workflows/build.yml`). 내려받는 Godot·템플릿(`tools/fetch_godot.sh`)과 rcedit 는 SHA-512 로 확인합니다.
+`main` 에 푸시하거나 Actions 탭에서 "Run workflow" 를 누르면 GitHub Actions 가 검사(규칙·화면·씨앗 1 의 100세대 실행·파이썬) → 세 판 내보내기(`tools/build_dist.sh`, Linux 실행 파일은 빈 폴더에서 헤드리스로 띄워 주 장면·종료 코드·오류 줄 확인) → 웹 체험판을 GitHub Pages 에 배포합니다(위 "바로 해 보기"). `v*` 태그를 올리면 Linux·Windows zip 을 Release 에 붙입니다(`.github/workflows/build.yml`). 내려받는 Godot·템플릿(`tools/fetch_godot.sh`)과 rcedit 는 SHA-512 로 확인합니다.
 
 웹 체험판은 처음 결정(PC 전용)의 **포트폴리오용 예외**입니다: 같은 시뮬레이션 코드이고, 전체 검토 때 시뮬레이션만 담은 탐침을 같은 웹 템플릿으로 내보내 헤드리스 Chromium 에서 돌린 역사 해시가 리눅스 데스크톱과 비트까지 같았습니다(검토 때 7경우, 규칙 고침 뒤 코드로 다시 8경우 — 수동 탐침이며 Chromium 에서만, TEST-REPORT K12). 브라우저에는 고를 파일 시스템이 없어 "CSV 내보내기"·"스냅숏 저장"이 브라우저 내려받기(zip·JSON)로 바뀌고 "스냅숏 열기"는 숨습니다. 브라우저 GDScript 는 데스크톱보다 느려 높은 배속이 덜 나옵니다(화면의 "실제 M배"가 정직하게 보여 줌).
 
@@ -166,7 +166,7 @@ tools/test_*.py            파이썬 검사: test_analyze(분석 도구), test_r
 - 실제 GPU 에서 200마리 60FPS 와 웹 체험판의 실제 브라우저 속도 — 이 환경에는 GPU 가 없어 소프트웨어 GL(llvmpipe, 약 5FPS)로만 쟀습니다. 화면 배율(Windows 150%·200%, macOS 레티나)과 창 관리자별 첫 창 위치도 실기로는 보지 못했습니다.
 - 실제 브라우저에서 사람이 누르는 내려받기 창(zip·JSON — 묶는 바이트는 검사), 운영 체제 파일 대화 상자(엔진 대화 상자로만 확인).
 - 효과음을 실제 스피커로 듣기(합성한 파형 바이트만 검사).
-- GitHub Pages 체험판 주소(Pages 꺼짐)와 Release(아직 태그 없음).
+- GitHub Pages 체험판 주소를 실제 브라우저로 열어 보기(배포는 성공 — 제작 환경에서 github.io 접속이 막힘)와 Release(아직 태그 없음).
 
 **목표를 못 맞춘 것**
 

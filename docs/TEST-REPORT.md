@@ -1019,7 +1019,7 @@ DESIGN-v0.2 의 해당 줄에 '구현(1단계)' 로 적었습니다.
 | K06 | 같은 씨앗 → 같은 역사·저장 복원 뒤 이어 돌려도 같음, 이제 밭 단계까지 | 통과 | `test_determinism`·`test_snapshot_roundtrip`(I09·I10), 실행기 `--resume`(test_runner_cli) |
 | K07 | GitHub Actions(#12 `bafa017`·#13 `bf3209a`) test·export | 통과 | 10절 |
 | K08 | 다른 리눅스 x86_64 기계 사이 결정성 | 통과 | 씨앗 1·100세대 `171a3a4f1a5f` — Actions #12·#13 = 이 컨테이너 |
-| K09 | GitHub Pages 체험판 배포 | **실패** | 저장소 Pages 꺼짐(`has_pages = false`), #9~#13 의 pages 잡 모두 실패(#8 은 test 실패로 건너뜀) — 소유자 설정 몫(10절) |
+| K09 | GitHub Pages 체험판 배포 | **실패** | 저장소 Pages 꺼짐(`has_pages = false`), #9~#13 의 pages 잡 모두 실패(#8 은 test 실패로 건너뜀) — 소유자 설정 몫(10절). **뒤 기록(2026-10-11): 소유자가 Pages 를 켠 뒤 #17(`3830afb`)부터 pages 잡 성공, 배포 기록 success(`https://kyusang4657.github.io/slime-lab/`) — 배포는 통과. 주소를 실제 브라우저로 열어 보는 것은 제작 환경에서 github.io 접속이 막혀 미검증** |
 | K10 | 헤드리스 1,000세대 "목표 5분 이내"(설계 13절) | **실패** | 733.8초(12.2분, 기계가 느린 날 — 같은 날 고침 전 코드도 같은 속도, 7절) |
 | K11 | `fast_civ` 세대 목표(저장 15~35·농사 30~70 중앙값, TUNING) | **실패** | 규칙 고침 뒤 5.7·14.3세대(고침 전 8.6·15.9). 100세대 안 농사 12/12 는 그대로, 멸종 2/12(6절) |
 | K12 | 웹(wasm) ↔ 리눅스 데스크톱 역사 해시 | 통과(수동 탐침) | 검토 때(고침 전 코드) 7경우, 고침 뒤 코드(`bf3209a`)로 다시 8경우 — 시뮬레이션·설정만 담은 탐침을 4.4.1 `web_nothreads_release` 로 내보내 헤드리스 Chromium(SwiftShader)과 리눅스 데스크톱에서 돌려 역사 해시 64자·에너지 합 비트까지 모두 같음(default 11·1500, fast_civ 1·3400(밭 7), default 42·2500, default 7(800틱 멸종), fast_civ 3·3000, default 5·기억 2·1000, harsh_winter 9·800, demo_fast 2·1500(밭 67)). CI 검사는 아님(DESIGN §20) |
