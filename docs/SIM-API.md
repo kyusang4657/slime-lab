@@ -68,7 +68,7 @@
 
 | 이름 | 뜻 |
 |---|---|
-| `world.L` = `SimBrain.layout(config)` | `{n_in, n_hid, n_out, n_mem, w2_offset, trait_offset, genes}` |
+| `world.L` = `SimBrain.layout(config)` | `{n_in, n_hid, n_out, n_mem, n_act, w2_offset, trait_offset, eta_offset, eta_len, genes}` — `n_act` = 행동 출력 수(8), `eta_offset`·`eta_len` = 학습률 유전자 η 구간(특성 뒤, 학습 끔이면 길이 0 — 유전자 163, 켜면 171. [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 3.7) |
 | `SimBrain.forward(L, genome, base, inputs, sharpness) -> {hidden, out, probs, action}` | 정보 창의 두뇌 그림용 순전파 |
 | `SimBrain.INPUT_NAMES`, `SimBrain.ACTION_NAMES` | 화면 이름(행동 1·2 "왼쪽 돌기"·"오른쪽 돌기" 는 제자리에서 방향만 바꿈 — 칸을 옮기는 것은 0 "앞으로" 뿐) |
 | `SimWorld.STAGE_NAMES`, `SimWorld.CAUSE_NAMES` | 화면 이름. 번호가 첨자: 단계 0 없음·1 채집·2 저장·3 농사, 사망 원인 0 살아 있음·1 굶주림·2 노화(lineage.csv 의 death_cause 와 같은 번호 — DESIGN 8.4) |
