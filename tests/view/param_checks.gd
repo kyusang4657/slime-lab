@@ -12,7 +12,7 @@ extends RefCounted
 ## 두뇌 열지도 범례 끝 글(weight_clamp 를 반올림하지 않음 — I44).
 ## 비교 시작 인자는 start_compare·stop_compare 를 가로채는 가짜 실험실(FakeLab)로도 확인한다(패널 단위 — 종단은 integration4_checks).
 
-const MIN_CHECKS := 262
+const MIN_CHECKS := 268
 ## 임시 폴더는 프로세스마다 따로(저장소 사본 여럿에서 함께 돌려도 서로 지우지 않게 — I37, run_tests.tmp_dir 와 같은 규칙)
 var TMP_DIR := "user://test_param-%d" % OS.get_process_id()
 var SNAP_PATH := TMP_DIR.path_join("snap.json")
@@ -104,6 +104,7 @@ func run(t) -> void:
 	await _compare_save(t, lab, p)
 	await _engine_overwrite(t, lab, p)
 	await _confirm(t, lab, p)
+	await _stage1(t, lab, p)
 	lab.queue_free()
 	await t.frames(2)
 	await _fake_lab(t)
@@ -1524,3 +1525,70 @@ func _clean_dir(abs_dir: String) -> void:
 	for f in da.get_files():
 		DirAccess.remove_absolute(abs_dir.path_join(f))
 	DirAccess.remove_absolute(abs_dir)
+
+
+## v0.2 1단계(DESIGN-v0.2 8절의 1단계 키): 고급 설정에 새 절 learn·생애(life)·몸 자람(body) 키가 이름표대로(줄 이름 = 키,
+## 말풍선 = config/sim-labels.json 의 한국어 이름·범위), 참거짓은 체크 상자·배열·글자는 보기만, 예설정 learn_basic, 패널로 학습·
+## 몸 자람을 켜 새 실험(유전자 171, 배운 두뇌), 관계 검사(학습 + 판단 2틱마다 → 그 줄 오류·새 실험 단추 꺼짐).
+func _stage1(t, lab: LabMain, p: ParamPanel) -> void:
+	if p.is_compare_mode():
+		p.set_compare_mode(false)
+	_select_preset(p, "default")
+	await t.frames(1)
+	var keys: Array[String] = ["life.adult_frac", "life.old_frac", "body.grow_enabled", "body.birth_size_frac"]
+	var learn: Dictionary = SimConfig.defaults().learn
+	for k: String in learn:
+		keys.append("learn." + k)
+	var leaves := ParamPanel.leaf_keys()
+	p.set_advanced_open(true)
+	await t.frames(1)
+	var heads := {}
+	for n in p.find_children("*", "Label", true, false):
+		heads[(n as Label).text] = true
+	var bad: Array[String] = []
+	for k in keys:
+		var lab_d := ParamPanel.key_label(k)
+		var nl := p.control("adv_name:" + k) as Label
+		var field := p.control("adv:" + k) as Control
+		if not leaves.has(k) or nl == null or field == null or lab_d.is_empty():
+			bad.append("%s 없음" % k)
+			continue
+		var leaf := k.get_slice(".", 1)
+		if nl.text != leaf or not nl.tooltip_text.contains(str(lab_d.name)) or not nl.tooltip_text.contains(k) or not nl.tooltip_text.contains(str(lab_d.range)):
+			bad.append("%s 이름·말풍선(%s)" % [k, nl.tooltip_text.replace("\n", " / ")])
+		var kind := ParamPanel.leaf_kind(k)
+		if kind == ParamPanel.KIND_BOOL and not (field is CheckBox):
+			bad.append("%s 체크 상자 아님" % k)
+		elif kind == ParamPanel.KIND_OTHER and (not (field is LineEdit) or (field as LineEdit).editable):
+			bad.append("%s 보기만이 아님" % k)
+		elif (kind == ParamPanel.KIND_INT or kind == ParamPanel.KIND_FLOAT) and (not (field is LineEdit) or not (field as LineEdit).editable):
+			bad.append("%s 수 칸 아님" % k)
+	t.check(bad.is_empty() and keys.size() == 17, "1단계 키 %d개가 고급 설정에 이름표대로(줄 = 키, 말풍선 = 이름·범위, 참거짓 = 체크 상자, 배열·글자 = 보기만): %s" % [keys.size(), str(bad)])
+	t.check(heads.has("학습 · learn") and heads.has("수명 · life") and heads.has("몸 · body") and ParamPanel.SECTION_NAMES.get("learn", "") == "학습",
+			"절 제목: 학습 · learn, 수명 · life, 몸 · body")
+	var opt := p.control("preset:0") as OptionButton
+	var found := ""
+	for i in opt.item_count:
+		if str(opt.get_item_metadata(i)) == "learn_basic":
+			found = opt.get_item_text(i)
+	t.check(found == str((SimConfig.presets()["learn_basic"] as Dictionary).label), "예설정 목록에 learn_basic(\"%s\")" % found)
+	# 패널로 학습·몸 자람을 켜 새 실험
+	(p.control("adv:learn.enabled") as CheckBox).button_pressed = true
+	(p.control("adv:body.grow_enabled") as CheckBox).button_pressed = true
+	var e := p.apply()
+	await t.frames(1)
+	var w := lab.world
+	t.check(e == "" and bool(_cfg(w.cfg, "learn.enabled")) and bool(_cfg(w.cfg, "body.grow_enabled")) and int(w.L.genes) == 171
+			and w.s_w2.size() == w.population() * int(w.L.n_act) * int(w.L.n_hid),
+			"체크 상자로 학습·몸 자람 켬 → 새 실험(유전자 %d, 배운 두뇌 %d칸) %s" % [int(w.L.genes), w.s_w2.size(), e])
+	# 관계 검사: 학습 + 판단 2틱마다 → 그 줄 오류, 새 실험 단추 꺼짐, 지금 실험 그대로
+	var x := lab.experiments[0]
+	var err := p.set_value("brain.think_every", 2)
+	t.check(err.contains("brain.think_every") and (p.control("apply") as Button).disabled and p.apply() != "" and lab.experiments[0] == x,
+			"학습 + brain.think_every 2 → 오류(%s)·새 실험 단추 꺼짐·지금 실험 그대로" % err)
+	p.set_value("brain.think_every", 1)
+	(p.control("adv:learn.enabled") as CheckBox).button_pressed = false
+	(p.control("adv:body.grow_enabled") as CheckBox).button_pressed = false
+	t.check(p.row_error("brain.think_every", 0, true) == "" and not (p.control("apply") as Button).disabled,
+			"되돌리면 그 줄 오류 없음·새 실험 단추 켜짐(패널 글: %s)" % p.error_text())
+	p.set_advanced_open(false)

@@ -4,11 +4,14 @@ extends RefCounted
 ## 비교 모드는 패널 단위로(LabMain.start_compare 를 거친 종단은 integration4_checks), 실험 둘을 직접 만들어 LabMain 이 내는 것과 같은 호출로 몬다:
 ##   x.tag = "A"/"B" → panel.load_experiments([a, b])(= experiments_changed) → 진행할 때마다 append_row(k, rows().back())(= recorded).
 
-const MIN_CHECKS := 149
+const MIN_CHECKS := 158
 ## 합성 줄 수(긴 실행 흉내: 실험 둘 × 이만큼)와 그 줄 간격(틱)
 const LONG_ROWS := 6000
 const LONG_EVERY := 20
 const DEMO_TICKS := 1700
+## v0.2 1단계 학습 고르기 검사: learn_basic 을 돌릴 틱·씨앗(몸 자람으로 처음 기록 줄들에 어린 개체가 많음)
+const LEARN_TICKS := 400
+const LEARN_SEED := 1
 
 
 func run(t) -> void:
@@ -25,6 +28,7 @@ func run(t) -> void:
 	await _synthetic_checks(t)
 	await _snapshot_note_checks(t)
 	await _long_checks(t)
+	await _learn_trait_checks(t)
 
 
 # ── 정적 도움 함수·줄이기 ──
@@ -1260,3 +1264,84 @@ func _row(i: int, k: int, spike_row: int) -> Dictionary:
 	return {tick = i * LONG_EVERY, population = int(pop), births = (i * 7) % 11, deaths = (i * 5) % 9, mean_gen = f * 0.02,
 			mean_size = 1.0 + 0.05 * sin(f * 0.003), mean_sense = 3.0, mean_energy = 12.0 + sin(f * 0.02), mean_age = 90.0,
 			civ_stage = mini(3, i / 1500), storehouses = mini(8, i / 600), farms = maxi(0, i / 40 - 60)}
+
+
+## v0.2 1단계(DESIGN-v0.2 10절 '학습' 그래프 — 평균 특성 고르기에 실제 크기·학습률·배운 양·행동 쏠림): 열 = 시계열 열 그대로,
+## 학습 항목은 학습을 켠 실험이 있을 때만(없으면 꺼지고 고른 것이 '크기' 로).
+func _learn_trait_checks(t) -> void:
+	var n := GraphPanel.TRAIT_COLS.size()
+	var keys_ok := true
+	for c in GraphPanel.COL_KEYS:
+		keys_ok = keys_ok and SimRecorder.TIMESERIES_COLUMNS.has(c)
+	for c in GraphPanel.LEARN_TRAIT_COLS:
+		keys_ok = keys_ok and GraphPanel.TRAIT_COLS.has(c) and GraphPanel.MEAN_COLS.has(c)
+	t.check(keys_ok and GraphPanel.TRAIT_NAMES.size() == n and GraphPanel.TRAIT_UNITS.size() == n and GraphPanel.TRAIT_TIPS.size() == n
+			and GraphPanel.COL_KEYS[GraphPanel.C_DW] == "dw_mean" and GraphPanel.COL_KEYS[GraphPanel.C_PMAX] == "pmax_mean"
+			and GraphPanel.COL_KEYS[GraphPanel.C_ETA] == "eta_mean" and GraphPanel.COL_KEYS[GraphPanel.C_SIZE_EFF] == "mean_size_eff",
+			"평균 특성 고르기 %d개: 열 이름 = 시계열 열(SimRecorder), 학습 셋은 평균 열" % n)
+	var host := _host(t, Vector2(1200, 260))
+	var panel := GraphPanel.new()
+	host.add_child(panel)
+	panel.size = host.size
+	var off: Experiment = Experiment.create("default", {}, LEARN_SEED).experiment
+	off.step_n(LEARN_TICKS)
+	panel.load_experiments([off])
+	await t.frames(2)
+	var opt := _find_named(panel, "Trait") as OptionButton
+	var i_dw := GraphPanel.TRAIT_COLS.find(GraphPanel.C_DW)
+	var i_eff := GraphPanel.TRAIT_COLS.find(GraphPanel.C_SIZE_EFF)
+	var learn_off := true
+	for c in GraphPanel.LEARN_TRAIT_COLS:
+		learn_off = learn_off and opt.is_item_disabled(GraphPanel.TRAIT_COLS.find(c))
+	panel.set_trait(i_dw)
+	t.check(not panel.any_learning and learn_off and not opt.is_item_disabled(i_eff) and panel.trait_index == 0,
+			"학습 끈 실험: 학습 항목 셋 꺼짐(실제 크기는 켜짐), 배운 양을 골라도 '크기'")
+	var s0: GraphPanel.Series = panel.series[0]
+	var same_eff := true
+	for r in s0.size():
+		same_eff = same_eff and (is_nan(s0.cols[GraphPanel.C_SIZE][r]) or s0.cols[GraphPanel.C_SIZE_EFF][r] == s0.cols[GraphPanel.C_SIZE][r])
+	t.check(same_eff and s0.size() > 2, "몸 자람 끔: 실제 크기 = 크기(%d줄)" % s0.size())
+	# 학습·몸 자람 켠 실험
+	var on: Experiment = Experiment.create("learn_basic", {}, LEARN_SEED).experiment
+	on.step_n(LEARN_TICKS)
+	panel.load_experiments([on])
+	await t.frames(2)
+	panel.set_trait(i_dw)
+	await t.frames(2)
+	var v1 := panel.view(GraphPanel.GRAPH_TRAIT)
+	var s1: GraphPanel.Series = panel.series[0]
+	var rows: Array = on.rows()
+	var vals_ok := s1.size() == rows.size()
+	var dw_pos := false
+	var pmax_ok := true
+	for r in mini(s1.size(), rows.size()):
+		var row: Dictionary = rows[r]
+		if int(row.population) == 0:
+			continue
+		for c in [GraphPanel.C_ETA, GraphPanel.C_DW, GraphPanel.C_PMAX, GraphPanel.C_SIZE_EFF]:
+			vals_ok = vals_ok and s1.cols[c][r] == float(row[GraphPanel.COL_KEYS[c]])
+		dw_pos = dw_pos or s1.cols[GraphPanel.C_DW][r] > 0.0
+		if r > 0:
+			pmax_ok = pmax_ok and s1.cols[GraphPanel.C_PMAX][r] > 0.0 and s1.cols[GraphPanel.C_PMAX][r] <= 1.0
+	t.check(panel.any_learning and not opt.is_item_disabled(i_dw) and panel.trait_index == i_dw and v1.last_lines.size() == 1
+			and int(v1.last_lines[0].col) == GraphPanel.C_DW and opt.get_item_text(opt.selected) == "배운 양",
+			"학습 켠 실험: 학습 항목 켜짐, '배운 양' 을 고르면 평균 특성 그래프 = dw_mean 선")
+	t.check(vals_ok and dw_pos and pmax_ok, "학습 열 값 = 기록 줄(eta_mean·dw_mean·pmax_mean·mean_size_eff), 배운 양 > 0, 행동 쏠림 0~1")
+	t.check(s1.cols[GraphPanel.C_SIZE_EFF][0] < s1.cols[GraphPanel.C_SIZE][0], "몸 자람 켬: 첫 줄 실제 크기 %.3f < 유전자 크기 %.3f(어린 개체가 작음)"
+			% [s1.cols[GraphPanel.C_SIZE_EFF][0], s1.cols[GraphPanel.C_SIZE][0]])
+	var r1 := mini(s1.size() - 1, 5)
+	v1.hover_at(Vector2(v1.data_to_px(s1.tick[r1]), v1.plot.get_center().y))
+	var txt := v1.readout_text()
+	panel.clear_hover()
+	t.check(txt.contains("배운 양 "), "값 읽기에 고른 이름(\"%s\")" % txt.replace("\n", " / "))
+	# 비교(학습 켬 + 끔)에서도 켜짐, 학습 끈 실험만 남으면 '크기' 로
+	off.tag = "A"
+	on.tag = "B"
+	panel.load_experiments([off, on])
+	await t.frames(1)
+	t.check(panel.any_learning and panel.trait_index == i_dw, "비교(끔 + 켬): 학습 항목 그대로")
+	panel.load_experiments([off])
+	await t.frames(1)
+	t.check(panel.trait_index == 0 and opt.selected == 0 and opt.is_item_disabled(i_dw), "학습 끈 실험만 남으면 학습 항목 꺼지고 '크기' 로")
+	host.queue_free()
+	await t.frames(1)

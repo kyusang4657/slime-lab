@@ -29,16 +29,38 @@ const C_GEN := 7
 const C_STAGE := 8
 const C_STORES := 9
 const C_FARMS := 10
+## v0.2 1단계 열(DESIGN-v0.2 9.3 — 학습 그래프 몫은 평균 특성 고르기에): 실제 몸 크기 평균, 학습률 유전자 평균, 배운 양 평균,
+## 판단마다 가장 큰 행동 확률의 구간 평균
+const C_SIZE_EFF := 11
+const C_ETA := 12
+const C_DW := 13
+const C_PMAX := 14
 ## 열 번호 → 시계열 줄 키(SimRecorder.TIMESERIES_COLUMNS)
 const COL_KEYS: Array[String] = ["population", "births", "deaths", "mean_size", "mean_sense", "mean_energy",
-		"mean_age", "mean_gen", "civ_stage", "storehouses", "farms"]
+		"mean_age", "mean_gen", "civ_stage", "storehouses", "farms", "mean_size_eff", "eta_mean", "dw_mean", "pmax_mean"]
 ## 개체가 없으면 뜻이 없는 열(평균): 그 줄은 NaN 으로 두어 선을 끊는다(평균 함수가 0 을 돌려 거짓 바닥이 생기지 않게)
-const MEAN_COLS: Array[int] = [C_SIZE, C_SENSE, C_ENERGY, C_AGE, C_GEN]
-## 평균 특성 고르기(OptionButton 항목 순서)
-const TRAIT_COLS: Array[int] = [C_SIZE, C_SENSE, C_ENERGY, C_AGE, C_GEN]
+const MEAN_COLS: Array[int] = [C_SIZE, C_SENSE, C_ENERGY, C_AGE, C_GEN, C_SIZE_EFF, C_ETA, C_DW, C_PMAX]
+## 평균 특성 고르기(OptionButton 항목 순서). 뒤의 넷은 v0.2 1단계(DESIGN-v0.2 10절 '학습' 그래프 — 그래프 칸을 늘리지 않고
+## 고르기에 더함), 학습 셋(LEARN_TRAIT_COLS)은 평생 학습을 켠 실험이 있을 때만 고를 수 있음
+const TRAIT_COLS: Array[int] = [C_SIZE, C_SENSE, C_ENERGY, C_AGE, C_GEN, C_SIZE_EFF, C_ETA, C_DW, C_PMAX]
+const LEARN_TRAIT_COLS: Array[int] = [C_ETA, C_DW, C_PMAX]
 ## 감지 = 개체의 감지 반경 s_sense(정보 창·README 와 같은 이름 — 검토 I51: 그래프만 "감각". 설정 절 sense "감각" 은 다른 것)
-const TRAIT_NAMES: Array[String] = ["크기", "감지", "에너지", "나이", "세대"]
-const TRAIT_UNITS: Array[String] = ["", "칸", "", "틱", "세대"]
+const TRAIT_NAMES: Array[String] = ["크기", "감지", "에너지", "나이", "세대", "실제 크기", "학습률", "배운 양", "행동 쏠림"]
+const TRAIT_UNITS: Array[String] = ["", "칸", "", "틱", "세대", "", "", "", ""]
+## 고르기 항목 말풍선
+const TRAIT_TIPS: Array[String] = [
+	"유전자 크기 평균(몸 자람을 켜도 유전자 값 — 실제 몸은 '실제 크기')",
+	"감지 반경(반올림한 칸) 평균",
+	"에너지 평균",
+	"나이 평균",
+	"평균 세대",
+	"실제 몸 크기 평균(몸 자람을 켜면 어린 개체가 작음 — 끄면 크기와 같음)",
+	"학습률 유전자 평균(행동 8개 평균의 개체 평균)",
+	"배운 양 평균: 행동 가중치의 abs(배운 - 타고난) 평균",
+	"행동 쏠림: 판단마다 가장 큰 행동 확률의 구간 평균(1 에 가까울수록 정책이 한 행동으로 굳음)",
+]
+## 학습 끈 실험만 있을 때 학습 항목 말풍선
+const LEARN_OFF_TIP := "평생 학습(learn.enabled)을 켠 실험에서만"
 
 const FLOWS_TEXT := "출생·사망"
 const FLOWS_TIP := "출생·사망 수를 얇은 선으로 — %d틱당 수로 고쳐 그림(실험마다 기록 간격 record.every 가 달라도 같은 눈금)"
@@ -66,6 +88,8 @@ class Series extends RefCounted:
 	var exp: Experiment
 	var name := ""
 	var tag := ""
+	## 평생 학습을 켠 실험인가(세계 구조의 학습률 구간 — 학습 열이 뜻이 있음)
+	var learning := false
 	var tick := PackedFloat64Array()
 	## 평균 세대 가로축: 개체가 없으면(멸종 뒤) 마지막 평균 세대를 이어 쓴다(멸종한 세대에 선이 떨어짐)
 	var gen_x := PackedFloat64Array()
@@ -104,6 +128,7 @@ class Series extends RefCounted:
 			tag = e.tag
 			if e.world != null:
 				_first_dt = maxf(1.0, float(e.world.cfg.record.every))
+				learning = int(e.world.L.get("eta_len", 0)) > 0
 		for c in COL_KEYS.size():
 			cols.append(PackedFloat64Array())
 			lo.append(INF)
@@ -425,6 +450,8 @@ var series: Array[Series] = []
 var x_mode := X_TICK
 var show_flows := false
 var trait_index := 0
+## 평생 학습을 켠 실험이 있나(학습 고르기 항목을 켬 — load_series 가 정함)
+var any_learning := false
 ## 연대기 등이 요청한 시점(틱, -1 = 없음)
 var cursor_tick := -1
 ## 마우스가 가리키는 가로축 값(NaN = 없음)과 그 그래프(값 읽기 상자는 그 그래프에만)
@@ -530,6 +557,10 @@ func load_series(list: Array[Series]) -> void:
 	series = list
 	epoch += 1
 	data_rev += 1
+	any_learning = false
+	for x in list:
+		any_learning = any_learning or x.learning
+	_sync_trait_items()
 	cursor_tick = -1
 	hover_x = NAN
 	hover_view = null
@@ -593,12 +624,31 @@ func flow_unit() -> String:
 	return FLOW_UNIT % int(_flow_ticks)
 
 
-## 평균 특성 고르기(TRAIT_COLS 의 번호)
+## 평균 특성 고르기(TRAIT_COLS 의 번호). 학습 항목은 학습을 켠 실험이 없으면 고를 수 없음(첫 항목 '크기' 로).
 func set_trait(i: int) -> void:
 	trait_index = clampi(i, 0, TRAIT_COLS.size() - 1)
+	if not trait_enabled(trait_index):
+		trait_index = 0
 	if _trait_opt != null and _trait_opt.selected != trait_index:
 		_trait_opt.select(trait_index)
 	redraw_now()
+
+
+## (v0.2 1단계) 고르기 i 번째 항목을 지금 고를 수 있나(학습 항목은 학습을 켠 실험이 있을 때만).
+func trait_enabled(i: int) -> bool:
+	return i >= 0 and i < TRAIT_COLS.size() and (any_learning or not LEARN_TRAIT_COLS.has(TRAIT_COLS[i]))
+
+
+## 실험이 바뀌면 학습 항목을 켜고 끄고, 지금 고른 것이 꺼졌으면 '크기' 로.
+func _sync_trait_items() -> void:
+	if _trait_opt != null:
+		for i in TRAIT_COLS.size():
+			_trait_opt.set_item_disabled(i, not trait_enabled(i))
+			_trait_opt.set_item_tooltip(i, TRAIT_TIPS[i] if trait_enabled(i) else "%s — %s" % [TRAIT_TIPS[i], LEARN_OFF_TIP])
+	if not trait_enabled(trait_index):
+		trait_index = 0
+		if _trait_opt != null:
+			_trait_opt.select(0)
 
 
 func trait_col() -> int:
@@ -959,6 +1009,7 @@ func _build() -> void:
 				for n in TRAIT_NAMES:
 					_trait_opt.add_item(n)
 				_trait_opt.select(trait_index)
+				_sync_trait_items()
 				# 키보드로 닿음(Tab·Enter — 스페이스는 LabMain 이 먼저 멈춤으로 씀, J16)
 				ParamPanel.keyboard_focus(_trait_opt)
 				_compact(_trait_opt, "OptionButton")
