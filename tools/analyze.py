@@ -8,6 +8,8 @@
   python3 tools/analyze.py sweep  --param mutation.rate=0.02,0.1 --seeds 1-4 --generations 50 --out results/sweep
   python3 tools/analyze.py report results/batch [--out 보고서폴더]
   python3 tools/analyze.py ablate --runs results/base --at-gen 30 --set mutation.rate=0.2 --ticks 340 --seeds 1-12
+  python3 tools/analyze.py gate-a --variant A-1 --seeds 1-12 --out results/gate-a1
+  python3 tools/analyze.py baldwin results/learn [--probe 이식시험폴더 …] [--control-probe 대조폴더 …]
 
 Windows(cmd·PowerShell): python3 대신 py, 인자는 큰따옴표(cmd 는 작은따옴표를 벗기지 않음), 줄잇기는 cmd ^·PowerShell `,
 godot 은 콘솔 판으로: py tools\\analyze.py run --seeds 1-4 --godot "C:\\Godot\\Godot_v4.4.1-stable_win64_console.exe" --out results\\batch
@@ -351,7 +353,7 @@ def natural_key(s: str) -> tuple:
 @dataclass
 class Job:
     """실행기 한 번: 묶음·씨앗·결과 폴더·명령줄, 그리고 이어 돌리기 때 맞춰 볼 요청 설정.
-    resume·forks 는 반사실 재생(ablate)의 갈래: 이어 돌릴 스냅숏과 --fork-set 키=값."""
+    resume·forks·reset 은 반사실 재생(ablate)의 갈래: 이어 돌릴 스냅숏, --fork-set 키=값, --fork-reset-learned(배운 두뇌 되돌림)."""
     cell: str
     seed: int
     out_dir: Path
@@ -362,6 +364,7 @@ class Job:
     max_ticks: int | None = None
     resume: str = ""
     forks: list[tuple[str, str]] = field(default_factory=list)
+    reset: bool = False
 
 
 def _same_value(text: str, v) -> bool:
@@ -394,6 +397,9 @@ def existing_mismatch(job: Job) -> str:
                 diffs.append(f"{k} {_json_scalar(have[k]) if k in have else '없음'} ≠ {want.get(k, '없음')}")
     if job.resume and _norm_path(s.get("resumed_from", "")) != _norm_path(job.resume):
         diffs.append(f"resumed_from {s.get('resumed_from') or '없음'} ≠ {job.resume}")
+    # 이식 시험(--fork-reset-learned): summary.json 의 reset_learned(1단계부터 — 예전 결과는 없음 = false)
+    if bool(s.get("reset_learned", False)) != job.reset:
+        diffs.append(f"reset_learned {bool(s.get('reset_learned', False))} ≠ {job.reset}")
     # 틱 상한: 실행기가 summary.json 에 실제로 쓴 상한(max_ticks)과 이번 요청(--max-ticks, 없으면 설정의 run.max_ticks).
     # 예전 결과(max_ticks 기록 없음)는 설정값으로 본다. 다르면 잘린 실행이 섞이므로 mismatch.
     cfg_cap = ((s.get("config", {}) or {}).get("run", {}) or {}).get("max_ticks")
@@ -466,13 +472,16 @@ def build_command(godot: str, repo: Path, seed: int, generations: str, out_dir: 
 
 
 def build_resume_command(godot: str, repo: Path, snapshot: Path, max_ticks: int, out_dir: Path,
-                         forks: list[tuple[str, str]], lineage: bool) -> list[str]:
+                         forks: list[tuple[str, str]], lineage: bool, reset: bool = False) -> list[str]:
     """반사실 재생 갈래의 실행기 명령줄(DESIGN-v0.2 11.4 의 2): 스냅숏에서 --max-ticks(절대 틱)까지, 세대 끝 조건은 큰 값.
-    --resume 은 --seed·--preset·--set 과 함께 줄 수 없으므로 그것들은 넣지 않는다. forks 가 있으면 --fork-set 으로."""
+    --resume 은 --seed·--preset·--set 과 함께 줄 수 없으므로 그것들은 넣지 않는다. forks 가 있으면 --fork-set 으로,
+    reset 이면 --fork-reset-learned(이식 시험 — 살아 있는 개체의 배운 두뇌를 타고난 것으로 되돌림, 11.2)."""
     cmd = [godot, "--headless", "--path", str(repo), "--script", RUNNER_SCRIPT, "--",
            f"--resume={snapshot}", f"--max-ticks={max_ticks}", f"--generations={ABLATE_GENERATIONS}", f"--out={out_dir}"]
     for k, v in forks:
         cmd.append(f"--fork-set={k}={v}")
+    if reset:
+        cmd.append("--fork-reset-learned")
     if not lineage:
         cmd.append("--no-lineage")
     cmd.append("--quiet")
@@ -723,6 +732,9 @@ ABLATE_METRICS = [
 ]
 ## ablate.csv 열(씨앗·지표마다 한 줄)
 ABLATE_COLUMNS = ["seed", "fork_tick", "metric", "same", "fork", "diff"]
+## ablate 의 조건 파일(baldwin 이 이식 시험 폴더를 읽을 때 씀)과, --reset-learned 일 때 기본 폴더 이름에 붙이는 말
+ABLATE_META = "ablate.json"
+ABLATE_RESET_TAG = "reset_learned"
 
 
 def ablate_metrics(run_dir: Path, fork_tick: int, ticks: int) -> dict[str, float]:
@@ -783,17 +795,23 @@ def ablate_table(pairs: list[tuple[int, int, dict, dict]]) -> tuple[pd.DataFrame
 def cmd_ablate(args) -> int:
     """ablate: 반사실 재생(DESIGN-v0.2 11.4 의 실행 순서). 씨앗마다
       ① 기준 실행 --runs/seed<N>/ 을 평균 --at-gen 세대까지(같은 설정의 끝까지 쓴 결과가 있으면 그대로 씀) → final.snapshot.json, 그 틱 = F
-      ② 그 스냅숏에서 두 갈래를 F + --ticks 틱까지: OUT/same/seed<N>(그대로)·OUT/fork/seed<N>(--set 들을 --fork-set 으로)
-      ③ 창 [F, F + N) 의 지표(ABLATE_METRICS)를 견준 표 → OUT/ablate.csv·ablate.md(같은 명령을 다시 돌리면 같은 표).
+      ② 그 스냅숏에서 두 갈래를 F + --ticks 틱까지: OUT/same/seed<N>(그대로)·OUT/fork/seed<N>(--set 들을 --fork-set 으로,
+         --reset-learned 면 --fork-reset-learned 도 — 이식 시험, DESIGN-v0.2 11.2)
+      ③ 창 [F, F + N) 의 지표(ABLATE_METRICS)를 견준 표 → OUT/ablate.csv·ablate.md, 조건 → OUT/ablate.json(baldwin 이 읽음).
+         같은 명령을 다시 돌리면 같은 표.
     기준 실행이 그 세대 전에 멸종했거나 틱 상한에 닿은 씨앗은 빼고 표에 적는다. 종료 코드: 0 성공, 1 실패한 실행이 있음, 2 인자·저장소 오류."""
     repo = Path(args.repo).resolve()
     err = _check_repo(repo)
     if err:
         print("오류: " + err, file=sys.stderr)
         return 2
+    if not args.set and not args.reset_learned:
+        print("오류: 바꾼 갈래에 줄 것이 없습니다(--set 또는 --reset-learned)", file=sys.stderr)
+        return 2
     godot = resolve_godot(args.godot)
     runs_root = Path(args.runs).resolve()
-    tag = cell_dirname(list(args.set)) + f"__g{args.at_gen}__t{args.ticks}"
+    tag = "__".join(([cell_dirname(list(args.set))] if args.set else []) + ([ABLATE_RESET_TAG] if args.reset_learned else [])) \
+        + f"__g{args.at_gen}__t{args.ticks}"
     out_root = Path(args.out).resolve() if args.out else runs_root.parent / f"{runs_root.name}-ablate" / tag
     for d in (runs_root, out_root):
         d.mkdir(parents=True, exist_ok=True)
@@ -825,11 +843,11 @@ def cmd_ablate(args) -> int:
         f = int(s["tick"])
         fork_tick[seed] = f
         snap = d / "final.snapshot.json"
-        for branch, forks in ((ABLATE_SAME, []), (ABLATE_FORK, list(args.set))):
+        for branch, forks, reset in ((ABLATE_SAME, [], False), (ABLATE_FORK, list(args.set), args.reset_learned)):
             od = out_root / branch / f"seed{seed}"
-            cmd = build_resume_command(godot, repo, snap, f + args.ticks, od, forks, True)
-            branches.append(Job(branch, seed, od, cmd, "", ABLATE_GENERATIONS, [], f + args.ticks, str(snap), forks))
-    print(f"② 갈래: 그대로·바꿈({', '.join(f'{k}={v}' for k, v in args.set)}) × 씨앗 {len(fork_tick)}개, "
+            cmd = build_resume_command(godot, repo, snap, f + args.ticks, od, forks, True, reset)
+            branches.append(Job(branch, seed, od, cmd, "", ABLATE_GENERATIONS, [], f + args.ticks, str(snap), forks, reset))
+    print(f"② 갈래: 그대로·바꿈({ablate_change_text(args)}) × 씨앗 {len(fork_tick)}개, "
           f"갈라진 틱부터 {args.ticks}틱 → {out_root}")
     if branches:
         failed += run_jobs(branches, out_root, repo, args.jobs, args.timeout)
@@ -852,6 +870,10 @@ def cmd_ablate(args) -> int:
     table, md_rows = ablate_table(pairs)
     write_csv(table, out_root / "ablate.csv")
     write_ablate_md(out_root / "ablate.md", args, runs_root, pairs, md_rows, skipped, out_root)
+    meta = {"runs": str(runs_root), "preset": args.preset, "base_set": [list(kv) for kv in args.base_set],
+            "at_gen": args.at_gen, "ticks": args.ticks, "set": [list(kv) for kv in args.set],
+            "reset_learned": bool(args.reset_learned), "seeds": list(args.seeds)}
+    (out_root / ABLATE_META).write_text(json.dumps(meta, ensure_ascii=False, indent="\t") + "\n", encoding="utf-8")
     print(f"표: {out_root / 'ablate.md'}  (씨앗 {len(pairs)}개, 뺀 씨앗 {len(skipped)}개)")
     print(_md_table(["지표", "씨앗", "그대로", "바꿈", "차이 중앙값 [Q1–Q3]", "바꿈 > · < 그대로"], md_rows,
                     ["l", "r", "r", "r", "r", "r"]))
@@ -861,10 +883,20 @@ def cmd_ablate(args) -> int:
     return 1 if failed else 0
 
 
+def ablate_change_text(args) -> str:
+    """바꾼 갈래에 준 것(보고서·진행 출력): --set 키=값들과 --reset-learned."""
+    parts = [f"{k}={v}" for k, v in args.set]
+    if args.reset_learned:
+        parts.append("--fork-reset-learned(배운 두뇌를 타고난 것으로)")
+    return ", ".join(parts)
+
+
 def write_ablate_md(path: Path, args, runs_root: Path, pairs: list, md_rows: list[list[str]], skipped: dict[int, str],
                     out_root: Path) -> None:
     """ablate.md: 조건, 지표 차이 표, 씨앗별 갈라진 틱과 두 갈래의 끝 해시, 뺀 씨앗, 읽는 법."""
-    sets = ", ".join(f"`{k}={v}`" for k, v in args.set)
+    sets = ", ".join([f"`{k}={v}`" for k, v in args.set]
+                     + (["`--fork-reset-learned`(살아 있는 개체의 배운 두뇌 = 유전체, 기준선 0, 고리 비움 — 이식 시험)"]
+                        if args.reset_learned else []))
     base_sets = ", ".join(f"`{k}={v}`" for k, v in args.base_set) or "없음"
     out = ["# 반사실 재생(ablate) 보고서", "",
            f"- 기준 실행: `{runs_root.name}` — 예설정 `{args.preset}`, 덮어쓰기 {base_sets}, 평균 {args.at_gen}세대까지(끝 스냅숏의 틱 = F)",
@@ -894,6 +926,515 @@ def write_ablate_md(path: Path, args, runs_root: Path, pairs: list, md_rows: lis
             "(살아 있는 개체의 먹은 양·자식 수는 끝 틱까지의 값 — 수명이 창보다 길면 잘림).",
             "- 차이의 사분위는 numpy 기본(선형 보간)입니다. 씨앗이 적으면 거칠게 읽어야 합니다.", ""]
     path.write_text("\n".join(out), encoding="utf-8")
+
+
+# ── 관문 A 판정(gate-a — DESIGN-v0.2 14.3) ──
+
+## 판정 문턱(실행 전 고정 — 14.3·11.5, 명령 인자로 바꿀 수 없음. 보고서 머리에 그대로 인쇄). 씨앗 GATE_A_SEEDS 개 기준이라 씨앗 수가
+## 다르면 판정하지 않는다(값만 적음). 대상 출생 틱 구간·필요 생존 틱·대상 수 하한은 위의 GATE_A_BIRTH_WINDOW·GATE_A_TICKS·GATE_A_MIN_BIRTHS.
+GATE_A_WIN = 10
+GATE_A_RATIO = 1.05
+GATE_A_SECONDARY_WIN = 8
+GATE_A_SEEDS = 12
+## A-1-life 의 틱 상한: 대상(틱 GATE_A_BIRTH_WINDOW 출생)이 모두 죽을 때까지 — 최대 수명(life.max_age 200 + 흔들림 30)이면 830틱 전에
+## 모두 죽으므로 넉넉한 끝. 그 전에 멸종하면 실행기가 멈춤. 끝에 살아 있는 대상이 있으면 그 씨앗은 판정 불가(평생 값이 잘림)
+GATE_A_LIFE_MAX_TICKS = 1500
+## 관문 A 세계(14.3 A-1): 우연 기준 예설정 + 학습 + 몸 자람(A-2 의 learn_basic 과 같은 몸)
+GATE_A_PRESET = "chance_baseline"
+GATE_A_BASE_SETS = [("learn.enabled", "true"), ("body.grow_enabled", "true")]
+## 판정 조건의 이름 붙은 변형(사용자가 다시 정하는 중 — 2026-10-11 작업 지시). need_ticks = 대상과 상관없이 그 틱까지 살아야 판정
+## (0 = 요구 없음), max_ticks = 실행기 --max-ticks(틱 0 부터, 그 전에 멸종하면 멈춤).
+GATE_A_VARIANTS = {
+    "A-1": {"sets": GATE_A_BASE_SETS, "max_ticks": GATE_A_TICKS, "need_ticks": GATE_A_TICKS,
+            "text": f"14.3 그대로 — 틱 0 부터 {GATE_A_TICKS:,}틱, 두 갈래 모두 {GATE_A_TICKS:,}틱까지 살고 대상 ≥ {GATE_A_MIN_BIRTHS}"},
+    "A-1-life": {"sets": GATE_A_BASE_SETS + [("population.initial", "400"), ("population.cap", "400"),
+                                             ("plants.initial_fill", "1.0")],
+                 "max_ticks": GATE_A_LIFE_MAX_TICKS, "need_ticks": 0,
+                 "text": f"제안(A-1′ 조건에서 {GATE_A_TICKS:,}틱 생존 요구를 뺌) — 두 갈래 모두 대상 ≥ {GATE_A_MIN_BIRTHS}, "
+                         f"대상이 모두 죽을 때까지(또는 멸종까지, 최대 {GATE_A_LIFE_MAX_TICKS:,}틱)"},
+}
+## 갈래: (폴더·csv 이름, 보고서 이름, 더하는 설정). 학습 = 배우는 쪽, freeze = 학습을 멈춘 대조(비용은 냄), 학습 끔 = 비용까지 뺀 셋째 행
+GATE_A_BRANCHES = [("learn", "학습", [("learn.freeze", "false")]), ("freeze", "freeze", [("learn.freeze", "true")]),
+                   ("off", "학습 끔", [("learn.enabled", "false")])]
+## 판정에 쓰는 두 갈래(셋째 행은 보고만)
+GATE_A_JUDGED = ("learn", "freeze")
+## 보조 판(--aux, 14.3): 학습·freeze 갈래를 learn.diag_factor = none 으로 — 보고만, 판정에 쓰지 않음
+GATE_A_AUX_SETS = [("learn.diag_factor", "none")]
+## gate_a.csv 열(씨앗·갈래마다 한 줄)
+GATE_A_COLUMNS = ["seed", "branch", "status", "end_reason", "ticks", "extinct_tick", "targets", "targets_alive",
+                  "eaten_median", "eaten_mean", "matured_share", "children_mean", "history_hash"]
+## 지표: (키, 보고서 이름, 소수 자리)
+GATE_A_METRICS = [("eaten", "평생 먹은 양(중앙값)", 2), ("matured", "성숙까지 산 몫", 3), ("children", "평균 자식 수", 3)]
+## 씨앗·갈래 상태 → 보고서 표기
+GATE_A_RUN_STATUS_KO = {"ok": "판정 가능", "extinct": "생존 틱 전 멸종", "short": "생존 틱 전에 끝남", "few": "대상 모자람",
+                        "alive": "끝에 대상이 살아 있음", "nolineage": "lineage.csv 없음", "failed": "실행 실패"}
+
+
+def gate_a_branch_sets(variant: str, branch: str, aux: bool) -> list[tuple[str, str]]:
+    """갈래 하나의 덮어쓰기(변형의 설정 → 갈래 설정 → 보조 판 설정 순, 같은 키는 뒤의 값 — 실행기와 같은 규칙)."""
+    sets = dict(GATE_A_VARIANTS[variant]["sets"])
+    sets.update(dict(next(b[2] for b in GATE_A_BRANCHES if b[0] == branch)))
+    if aux and branch in GATE_A_JUDGED:
+        sets.update(dict(GATE_A_AUX_SETS))
+    return list(sets.items())
+
+
+def gate_a_run(run_dir: Path, variant: str) -> tuple[dict, dict[str, np.ndarray]]:
+    """결과 폴더 하나(끝까지 쓴 실행) → (gate_a.csv 한 줄의 값, 대상 개체 값 배열 {eaten, matured, children}).
+    대상 = 틱 GATE_A_BIRTH_WINDOW 에 태어난 개체(처음 개체 제외). 성숙까지 산 = 죽은 나이(death_tick − birth_tick) > repro.maturity
+    — 나이를 더한 뒤 번식 자격(나이 ≥ 성숙)을 갖고 그 틱의 번식 단계에 살아서 닿음(DESIGN-v0.1 8.4 틱 기준, sim_world.gd _act·_eligible).
+    상태: ok · extinct(need_ticks 전 멸종) · short(멸종 없이 need_ticks 전에 끝남) · few(대상 < GATE_A_MIN_BIRTHS) ·
+    alive(끝에 살아 있는 대상 — 평생 값이 잘림) · nolineage."""
+    s = json.loads((run_dir / "summary.json").read_text(encoding="utf-8-sig"))
+    need = int(GATE_A_VARIANTS[variant]["need_ticks"])
+    ext, ticks = _int_or(s.get("extinct_tick")), _int_or(s.get("tick"), 0)
+    row = {"status": "ok", "end_reason": s.get("end_reason", ""), "ticks": ticks, "extinct_tick": ext,
+           "targets": 0, "targets_alive": 0, "eaten_median": float("nan"), "eaten_mean": float("nan"),
+           "matured_share": float("nan"), "children_mean": float("nan"), "history_hash": str(s.get("history_hash", ""))[:12]}
+    vals = {"eaten": np.zeros(0), "matured": np.zeros(0), "children": np.zeros(0)}
+    lin = read_lineage(run_dir / "lineage.csv")
+    if lin is None or "eaten" not in lin.columns:
+        row["status"] = "nolineage"
+        return row, vals
+    lo, hi = GATE_A_BIRTH_WINDOW
+    tg = lin[(lin["parent_a"] >= 0) & (lin["birth_tick"] >= lo) & (lin["birth_tick"] < hi)]
+    maturity = int(((s.get("config", {}) or {}).get("repro", {}) or {}).get("maturity", 0))
+    dead = tg["death_tick"].to_numpy(dtype=int) >= 0
+    life = np.where(dead, tg["death_tick"].to_numpy(dtype=int), ticks) - tg["birth_tick"].to_numpy(dtype=int)
+    vals = {"eaten": pd.to_numeric(tg["eaten"], errors="coerce").to_numpy(dtype=float),
+            "matured": (life > maturity).astype(float), "children": tg["children"].to_numpy(dtype=float)}
+    n = len(tg)
+    row.update({"targets": n, "targets_alive": int((~dead).sum())})
+    if n:
+        row.update({"eaten_median": float(np.nanmedian(vals["eaten"])), "eaten_mean": float(np.nanmean(vals["eaten"])),
+                    "matured_share": float(vals["matured"].mean()), "children_mean": float(vals["children"].mean())})
+    if need and 0 <= ext < need:
+        row["status"] = "extinct"
+    elif need and ext < 0 and ticks < need:
+        row["status"] = "short"
+    elif n < GATE_A_MIN_BIRTHS:
+        row["status"] = "few"
+    elif row["targets_alive"] > 0:
+        row["status"] = "alive"
+    return row, vals
+
+
+def _pooled(vals: list[dict], key: str) -> float:
+    """씨앗들의 대상 값을 묶은 값: 먹은 양은 중앙값, 성숙까지 산 몫·자식 수는 평균. 대상이 없으면 NaN."""
+    arr = np.concatenate([v[key] for v in vals]) if vals else np.zeros(0)
+    arr = arr[~np.isnan(arr)]
+    if not arr.size:
+        return float("nan")
+    return float(np.median(arr)) if key == "eaten" else float(arr.mean())
+
+
+def gate_a_evaluate(seeds: list[int], runs: dict[tuple[str, int], tuple[dict, dict]], variant: str, aux: bool) -> dict:
+    """씨앗·갈래 결과 → 판정. runs[(갈래, 씨앗)] = gate_a_run 의 결과(실행 실패면 ({status: failed, why}, {})).
+    판정 가능한 씨앗 = 판정 갈래(GATE_A_JUDGED) 둘 다 ok. 결과: {verdict, judged, unjudged{씨앗: 까닭}, wins{지표: (학습 > freeze, 학습 > 끔)},
+    pooled{(갈래, 지표): 값}, ratio, crit1, crit2}."""
+    unjudged: dict[int, str] = {}
+    for seed in seeds:
+        why = []
+        for b in GATE_A_JUDGED:
+            row = runs.get((b, seed), ({"status": "failed", "why": "결과 없음"}, {}))[0]
+            if row["status"] != "ok":
+                name = dict((x[0], x[1]) for x in GATE_A_BRANCHES)[b]
+                detail = {"extinct": f"{row.get('extinct_tick')}틱 멸종", "short": f"{row.get('ticks')}틱에 끝남",
+                          "few": f"대상 {row.get('targets')}", "alive": f"대상 {row.get('targets_alive')}명이 끝에 살아 있음",
+                          "nolineage": "lineage.csv 없음", "failed": row.get("why", "")}.get(row["status"], "")
+                why.append(f"{name}: {GATE_A_RUN_STATUS_KO[row['status']]}" + (f"({detail})" if detail else ""))
+        if why:
+            unjudged[seed] = "; ".join(why)
+    judged = [s for s in seeds if s not in unjudged]
+    pooled = {}
+    for b, _, _ in GATE_A_BRANCHES:
+        vs = [runs[(b, s)][1] for s in judged if (b, s) in runs and runs[(b, s)][1]]
+        for key, _, _ in GATE_A_METRICS:
+            pooled[(b, key)] = _pooled(vs, key)
+    col = {"eaten": "eaten_median", "matured": "matured_share", "children": "children_mean"}
+    wins = {}
+    for key, _, _ in GATE_A_METRICS:
+        w = []
+        for other in ("freeze", "off"):
+            k = 0
+            for s in judged:
+                a = runs[("learn", s)][0][col[key]]
+                o = runs.get((other, s), ({col[key]: float("nan")}, {}))[0].get(col[key], float("nan"))
+                k += int(not (math.isnan(a) or math.isnan(o)) and a > o)
+            w.append(k)
+        wins[key] = tuple(w)
+    fr = pooled[("freeze", "eaten")]
+    ratio = pooled[("learn", "eaten")] / fr if fr and not math.isnan(fr) else float("nan")
+    crit1 = wins["eaten"][0] >= GATE_A_WIN and not math.isnan(ratio) and ratio >= GATE_A_RATIO
+    crit2 = wins["matured"][0] >= GATE_A_SECONDARY_WIN or wins["children"][0] >= GATE_A_SECONDARY_WIN
+    if aux:
+        verdict = "보조 판 — 판정에 쓰지 않음(learn.diag_factor = none, 14.3)"
+    elif len(seeds) != GATE_A_SEEDS:
+        verdict = f"판정 안 함 — 씨앗 {len(seeds)}개(문턱은 씨앗 {GATE_A_SEEDS}개 기준, 14.3)"
+    elif unjudged:
+        verdict = f"판정 불가 — 씨앗 {len(unjudged)}개({', '.join(str(s) for s in sorted(unjudged))})가 조건을 채우지 못함"
+        if variant == "A-1":
+            verdict += "(14.3 은 이때 A-1′ 를 같은 문턱으로 돌림 — 판정 조건은 사용자가 다시 정하는 중)"
+    else:
+        verdict = "통과" if crit1 and crit2 else "실패"
+    return {"verdict": verdict, "judged": judged, "unjudged": unjudged, "wins": wins, "pooled": pooled, "ratio": ratio,
+            "crit1": crit1, "crit2": crit2}
+
+
+def cmd_gate_a(args) -> int:
+    """gate-a: 관문 A(DESIGN-v0.2 14.3)의 변형 하나를 씨앗마다 세 갈래(학습·freeze·학습 끔)로 틱 0 부터 돌리고(같은 설정의 끝까지 쓴
+    결과가 있으면 그대로 씀) 대상 개체의 평생 먹은 양·성숙까지 산 몫·자식 수를 견줘 OUT/gate_a.csv·gate_a.md 를 쓴다.
+    판정 문턱은 GATE_A_* 상수. 종료 코드: 0 보고서를 씀(판정 결과와 상관없이), 1 실패한 실행이 있음, 2 인자·저장소 오류."""
+    repo = Path(args.repo).resolve()
+    err = _check_repo(repo)
+    if err:
+        print("오류: " + err, file=sys.stderr)
+        return 2
+    godot = resolve_godot(args.godot)
+    out_root = Path(args.out).resolve()
+    out_root.mkdir(parents=True, exist_ok=True)
+    ensure_gdignore(out_root)
+    spec = GATE_A_VARIANTS[args.variant]
+    jobs = []
+    for b, _, _ in GATE_A_BRANCHES:
+        for seed in args.seeds:
+            d = out_root / b / f"seed{seed}"
+            sets = gate_a_branch_sets(args.variant, b, args.aux)
+            cmd = build_command(godot, repo, seed, ABLATE_GENERATIONS, d, GATE_A_PRESET, sets, True, spec["max_ticks"])
+            jobs.append(Job(b, seed, d, cmd, GATE_A_PRESET, ABLATE_GENERATIONS, sets, spec["max_ticks"]))
+    print(f"관문 A 변형 {args.variant}{' (보조 판)' if args.aux else ''}: 갈래 {len(GATE_A_BRANCHES)}개 × 씨앗 {len(args.seeds)}개 → {out_root}")
+    failed = run_jobs(jobs, out_root, repo, args.jobs, args.timeout)
+    rows_csv = read_runs_csv(out_root / "runs.csv")
+    runs: dict[tuple[str, int], tuple[dict, dict]] = {}
+    table = []
+    for job in jobs:
+        why = incomplete_reason(job.out_dir) if (job.out_dir / "summary.json").is_file() else "결과 없음"
+        if not why and existing_mismatch(job):
+            why = "설정이 다른 결과(runs.csv 의 mismatch)"
+        if why:
+            det = failure_detail(job.out_dir, rows_csv.get((job.cell, job.seed)))
+            row = {c: float("nan") for c in GATE_A_COLUMNS}
+            row.update({"status": "failed", "why": why + (f" ({det})" if det else ""), "end_reason": "", "history_hash": ""})
+            runs[(job.cell, job.seed)] = (row, {})
+        else:
+            runs[(job.cell, job.seed)] = gate_a_run(job.out_dir, args.variant)
+        table.append({"seed": job.seed, "branch": job.cell, **{c: runs[(job.cell, job.seed)][0].get(c) for c in GATE_A_COLUMNS[2:]}})
+    ev = gate_a_evaluate(list(args.seeds), runs, args.variant, args.aux)
+    df = pd.DataFrame(table, columns=GATE_A_COLUMNS)
+    for c in ("seed", "ticks", "extinct_tick", "targets", "targets_alive"):
+        df[c] = pd.to_numeric(df[c], errors="coerce").round().astype("Int64")
+    write_csv(df, out_root / "gate_a.csv")
+    write_gate_a_md(out_root / "gate_a.md", args, runs, ev)
+    print(f"판정: {ev['verdict']}")
+    print(f"보고서: {out_root / 'gate_a.md'}")
+    return 1 if failed else 0
+
+
+def write_gate_a_md(path: Path, args, runs: dict, ev: dict) -> None:
+    """gate_a.md: 변형·조건, 고정 문턱(GATE_A_* 그대로), 판정, 지표마다 세 행·두 차이·효과 크기(14.3 보고 꼴), 씨앗별 표, 판정 불가 씨앗, 읽는 법."""
+    spec = GATE_A_VARIANTS[args.variant]
+    lo, hi = GATE_A_BIRTH_WINDOW
+    names = {b: n for b, n, _ in GATE_A_BRANCHES}
+    sets = ", ".join(f"`{k}={v}`" for k, v in spec["sets"])
+    out = [f"# 관문 A 보고서 — 변형 `{args.variant}`{' · 보조 판' if args.aux else ''}", "",
+           f"- 변형: {spec['text']}",
+           f"- 세계: 예설정 `{GATE_A_PRESET}` + {sets}" + (f" + 학습·freeze 갈래에 {', '.join(f'`{k}={v}`' for k, v in GATE_A_AUX_SETS)}"
+                                                         if args.aux else ""),
+           "- 갈래: " + " · ".join(f"{n}(`{', '.join(f'{k}={v}' for k, v in st)}`)" for _, n, st in GATE_A_BRANCHES)
+           + " — 같은 씨앗, 틱 0 부터",
+           f"- 대상: 틱 [{lo}, {hi}) 에 태어난 개체(처음 개체 제외). 씨앗 {', '.join(str(s) for s in args.seeds)}",
+           f"- **판정: {ev['verdict']}**", "",
+           "## 고정 문턱(`analyze.py` 상수 — 명령 인자로 바꿀 수 없음)", ""]
+    out.append(_md_table(["상수", "값", "뜻"], [
+        ["`GATE_A_WIN`", str(GATE_A_WIN), "① 대상 먹은 양 중앙값이 학습 쪽에서 높은 씨앗 수 하한"],
+        ["`GATE_A_RATIO`", f"{GATE_A_RATIO}", "① 씨앗들의 대상을 묶은 먹은 양 중앙값 비(학습 ÷ freeze) 하한"],
+        ["`GATE_A_SECONDARY_WIN`", str(GATE_A_SECONDARY_WIN), "② 성숙까지 산 몫·평균 자식 수 가운데 하나가 학습 쪽에서 높은 씨앗 수 하한"],
+        ["`GATE_A_MIN_BIRTHS`", str(GATE_A_MIN_BIRTHS), "씨앗·갈래마다 필요한 대상 수"],
+        ["`GATE_A_SEEDS`", str(GATE_A_SEEDS), "문턱의 기준 씨앗 수(다르면 판정하지 않음)"],
+        ["`GATE_A_BIRTH_WINDOW`", f"[{lo}, {hi})", "대상 출생 틱"],
+        ["`GATE_A_TICKS`", f"{GATE_A_TICKS:,}", "A-1: 두 갈래 모두 이 틱까지 살아야 판정"],
+        ["`GATE_A_LIFE_MAX_TICKS`", f"{GATE_A_LIFE_MAX_TICKS:,}", "A-1-life: 틱 상한(그 전에 대상이 모두 죽음)"],
+    ], ["l", "r", "l"]))
+    n = len(ev["judged"])
+    w = ev["wins"]
+    out += ["", "## 판정", "",
+            f"판정 가능한 씨앗 {n}개 / {len(args.seeds)}개.", "",
+            f"- ① 먹은 양: 학습 > freeze 씨앗 **{w['eaten'][0]}/{n}**(문턱 {GATE_A_WIN}), 묶은 중앙값 비 "
+            f"**{_fmt(ev['ratio'], 3)}**(문턱 {GATE_A_RATIO}) → {'충족' if ev['crit1'] else '못 함'}",
+            f"- ② 생존·번식: 성숙까지 산 몫 **{w['matured'][0]}/{n}** · 평균 자식 수 **{w['children'][0]}/{n}**"
+            f"(둘 가운데 하나 ≥ {GATE_A_SECONDARY_WIN}) → {'충족' if ev['crit2'] else '못 함'}",
+            "", f"## 지표 — 판정 가능 씨앗 {n}개의 대상을 묶은 값", ""]
+    rows = []
+    p = ev["pooled"]
+    for key, name, dg in GATE_A_METRICS:
+        a, f, o = p[("learn", key)], p[("freeze", key)], p[("off", key)]
+        eff = (a - f) / f if f and not (math.isnan(a) or math.isnan(f)) else float("nan")
+        rows.append([name, _fmt(a, dg), _fmt(f, dg), _fmt(o, dg), _fmt(a - f, dg), _fmt(a - o, dg), _fmt(eff, 3),
+                     f"{w[key][0]}/{n}", f"{w[key][1]}/{n}"])
+    out.append(_md_table(["지표", names["learn"], names["freeze"], names["off"], "학습 − freeze", "학습 − 학습 끔",
+                          "효과 크기 (학습 − freeze) ÷ freeze", "학습 > freeze 씨앗", "학습 > 학습 끔 씨앗"], rows,
+                         ["l", "r", "r", "r", "r", "r", "r", "r", "r"]))
+    out += ["", "## 씨앗별", ""]
+    rows = []
+    for seed in args.seeds:
+        for b, bn, _ in GATE_A_BRANCHES:
+            r = runs.get((b, seed), ({"status": "failed"}, {}))[0]
+            end = r.get("extinct_tick")
+            end_text = (f"{int(end):,} 멸종" if isinstance(end, (int, np.integer)) and end >= 0
+                        else (f"{int(r['ticks']):,}" if isinstance(r.get("ticks"), (int, np.integer)) else "—"))
+            rows.append([str(seed), bn, GATE_A_RUN_STATUS_KO.get(r.get("status"), str(r.get("status"))), end_text,
+                         _fmt(r.get("targets"), 0) if isinstance(r.get("targets"), (int, np.integer)) else "—",
+                         _fmt(r.get("eaten_median"), 2), _fmt(r.get("matured_share"), 3), _fmt(r.get("children_mean"), 3),
+                         f"`{r.get('history_hash') or ''}`"])
+    out.append(_md_table(["씨앗", "갈래", "상태", "끝(틱)", "대상", "먹은 양 중앙값", "성숙까지 산 몫", "평균 자식 수", "해시"], rows,
+                         ["r", "l", "l", "r", "r", "r", "r", "r", "l"]))
+    if ev["unjudged"]:
+        out += ["", "## 판정 불가 씨앗", ""]
+        out.append(_md_table(["씨앗", "까닭"], [[str(k), v] for k, v in sorted(ev["unjudged"].items())], ["r", "l"]))
+    out += ["", "## 읽는 법", "",
+            "- 세 갈래는 같은 씨앗·같은 처음 세계에서 설정 하나만 다르게 돌린 것입니다. 행동이 달라지면 출생·먹이 고갈·난수 뽑기도 갈라지므로, "
+            "차이에는 학습 자체와 학습이 바꾼 생태 되먹임이 함께 들어 있습니다(14.3).",
+            "- 학습 − freeze = 학습이 한 몫(freeze 도 학습 비용은 냄), 학습 − 학습 끔 = 비용까지 뺀 순 득. 효과 크기 = (학습 − freeze) ÷ freeze.",
+            "- 묶은 값 = 판정 가능 씨앗들의 대상 개체를 한데 모은 값(먹은 양은 중앙값, 성숙까지 산 몫·자식 수는 평균). 씨앗 수는 씨앗마다 값"
+            "(먹은 양 중앙값·성숙까지 산 몫·평균 자식 수)이 학습 쪽에서 **더 큰**(같으면 세지 않음) 씨앗.",
+            "- 성숙까지 산 = 죽은 나이(`death_tick` − `birth_tick`) > `repro.maturity` — 번식 자격 나이로 번식 단계에 살아서 닿음.",
+            f"- 표: [`gate_a.csv`](gate_a.csv)(씨앗·갈래마다 한 줄). 갈래 결과는 이 폴더의 "
+            f"{'·'.join(f'`{b}/`' for b, _, _ in GATE_A_BRANCHES)}.", ""]
+    path.write_text("\n".join(out), encoding="utf-8")
+
+
+# ── 볼드윈 보고서(baldwin — DESIGN-v0.2 11.2) ──
+
+## 세대 추이의 개체 세대 구간 폭, 같은 실행의 첫 → 끝 구간을 견줄 때 쓰는 구간의 죽은 개체 수 하한(끝 세대 구간은 앞서 간 몇 계통만
+## 있어 개체가 적음 — 그런 구간은 방향 셈에서 뺌)
+BALDWIN_GEN_BIN = EATEN_GEN_BIN
+BALDWIN_MIN_DEAD = 30
+## baldwin.csv 열(실행·개체 세대 구간마다 한 줄 — 죽은 개체)
+BALDWIN_COLUMNS = ["cell", "seed", "path", "gen_lo", "gen_hi", "dead", "eta_mean", "dw_mean", "dw_juv_mean", "assim_mean",
+                   "eaten_median", "children_mean"]
+## 세대 추이 지표: (baldwin.csv 열, 보고서 이름, 소수 자리, 동화 쪽 방향 — +1 오름 · −1 내림 · 0 방향 없음)
+BALDWIN_TREND = [("eta_mean", "η 평균", 4, -1), ("assim_mean", "동화 지수", 3, +1), ("dw_mean", "배운 양", 4, 0),
+                 ("dw_juv_mean", "어린 동안 배운 양", 4, 0), ("eaten_median", "평생 먹은 양 중앙값", 1, 0)]
+## 이식 시험 지표(ablate.csv 의 metric — 그대로 갈래 = 배우는 두뇌, 바꾼 갈래 = 타고난 두뇌)
+BALDWIN_PROBE_METRICS = [("target_eaten", "대상 평균 먹은 양"), ("target_children", "대상 평균 자식 수")]
+
+
+def baldwin_bins(lin: pd.DataFrame) -> list[dict]:
+    """실행 하나의 개체 세대 구간(BALDWIN_GEN_BIN 폭)별 죽은 개체의 η·배운 양·어린 동안 배운 양·동화 지수 평균, 먹은 양 중앙값, 자식 수 평균.
+    죽은 개체만(평생 값이 정해짐). 먹은 양 칸이 빈 개체(옛 스냅숏에서 이어 돌림)는 먹은 양에서만 뺌."""
+    dead = lin[lin["death_tick"] >= 0]
+    out = []
+    bins = dead["gen"].to_numpy(dtype=int) // BALDWIN_GEN_BIN
+    for b in sorted(set(bins.tolist())):
+        g = dead[bins == b]
+        e = pd.to_numeric(g["eaten"], errors="coerce").dropna().to_numpy(dtype=float) if "eaten" in g.columns else np.zeros(0)
+        out.append({"gen_lo": b * BALDWIN_GEN_BIN, "gen_hi": (b + 1) * BALDWIN_GEN_BIN, "dead": len(g),
+                    "eta_mean": float(g["eta"].mean()), "dw_mean": float(g["dw"].mean()),
+                    "dw_juv_mean": float(g["dw_juv"].mean()), "assim_mean": float(g["assim"].mean()),
+                    "eaten_median": float(np.median(e)) if e.size else float("nan"),
+                    "children_mean": float(g["children"].mean())})
+    return out
+
+
+def baldwin_table(root: Path) -> tuple[pd.DataFrame, list[str]]:
+    """root 아래 학습을 켠 실행(summary.json 의 features 에 learn.enabled)의 lineage.csv → baldwin.csv 표. 둘째 값 = 뺀 실행과 까닭."""
+    df, _ = build_summary(root)
+    rows, skipped = [], []
+    for _, r in df.iterrows():
+        d = root / r["path"]
+        s = json.loads((d / "summary.json").read_text(encoding="utf-8-sig"))
+        lin = read_lineage(d / "lineage.csv")
+        if "learn.enabled" not in (s.get("features") or []):
+            skipped.append(f"`{r['path']}` — 학습을 켜지 않은 실행(features 에 learn.enabled 없음)")
+        elif lin is None or not all(c in lin.columns for c in ("eta", "dw", "dw_juv", "assim")):
+            skipped.append(f"`{r['path']}` — lineage.csv 나 1단계 열(eta·dw·dw_juv·assim)이 없음")
+        else:
+            for b in baldwin_bins(lin):
+                rows.append({"cell": r["cell"], "seed": r["seed"], "path": r["path"], **b})
+    out = pd.DataFrame(rows, columns=BALDWIN_COLUMNS)
+    for c in ("seed", "gen_lo", "gen_hi", "dead"):
+        out[c] = pd.to_numeric(out[c], errors="coerce").round().astype("Int64")
+    return out, skipped
+
+
+def baldwin_direction(table: pd.DataFrame, col: str) -> tuple[int, int, int]:
+    """같은 실행의 첫 → 끝 세대 구간(죽은 개체 ≥ BALDWIN_MIN_DEAD 인 구간만)에서 col 이 (내린, 오른, 같은) 실행 수. 구간이 하나뿐이면 뺌."""
+    down = up = same = 0
+    for _, g in table[table["dead"] >= BALDWIN_MIN_DEAD].groupby("path", sort=True):
+        if len(g) < 2:
+            continue
+        g = g.sort_values("gen_lo")
+        a, b = float(g[col].iloc[0]), float(g[col].iloc[-1])
+        if math.isnan(a) or math.isnan(b):
+            continue
+        down += int(b < a)
+        up += int(b > a)
+        same += int(b == a)
+    return down, up, same
+
+
+def read_probe(d: Path) -> dict:
+    """이식 시험 폴더(analyze.py ablate --reset-learned 의 결과) → {dir, at_gen, ticks, reset, seeds{씨앗: {지표: (배우는, 타고난)}}, error}."""
+    try:
+        meta = json.loads((d / ABLATE_META).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"dir": d, "error": f"{ABLATE_META} 를 읽을 수 없음(analyze.py ablate 의 결과 폴더가 아님)"}
+    try:
+        t = pd.read_csv(d / "ablate.csv", encoding=CSV_ENCODING)
+    except (OSError, ValueError, pd.errors.EmptyDataError):
+        return {"dir": d, "error": "ablate.csv 를 읽을 수 없음"}
+    seeds: dict[int, dict] = {}
+    for r in t.itertuples():
+        if r.metric in dict(BALDWIN_PROBE_METRICS):
+            seeds.setdefault(int(r.seed), {})[r.metric] = (float(r.same), float(r.fork))
+    return {"dir": d, "at_gen": float(meta.get("at_gen", "nan")), "ticks": int(meta.get("ticks", 0)),
+            "reset": bool(meta.get("reset_learned")), "sets": meta.get("set", []), "seeds": seeds, "error": ""}
+
+
+def cmd_baldwin(args) -> int:
+    """baldwin: 학습을 켠 실행 폴더의 세대 추이(η·배운 양·어린 동안 배운 양·동화 지수 — lineage.csv), 이식 시험(--probe: ablate
+    --reset-learned 결과 — 같은 스냅숏의 배우는 두뇌 대 타고난 두뇌), 학습 끈 대조(--control-probe: 학습을 끈 실행의 ablate 결과의
+    그대로 갈래)를 모아 OUT/baldwin.csv·baldwin.md(DESIGN-v0.2 11.2 의 보고 항목 — 관문 아님). 종료 코드: 0 씀, 1 읽을 실행이 없음, 2 폴더 오류."""
+    root = Path(args.dir).resolve()
+    if not root.is_dir():
+        print(f"오류: 폴더가 없습니다: {root}", file=sys.stderr)
+        return 2
+    out_dir = Path(args.out).resolve() if args.out else root
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ensure_gdignore(out_dir)
+    table, skipped = baldwin_table(root)
+    probes = sorted((read_probe(Path(p).resolve()) for p in args.probe), key=lambda p: (p.get("at_gen", math.inf), str(p["dir"])))
+    controls = [read_probe(Path(p).resolve()) for p in args.control_probe]
+    write_csv(table, out_dir / "baldwin.csv")
+    write_baldwin_md(out_dir / "baldwin.md", root, table, skipped, probes, controls)
+    print(f"보고서: {out_dir / 'baldwin.md'}  (실행 {table['path'].nunique() if len(table) else 0}개, 이식 시험 {len(probes)}개)")
+    if not len(table):
+        print(f"오류: {root} 아래에 학습을 켠 실행의 lineage.csv 가 없습니다(analyze.py run --lineage)", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _probe_innate(p: dict, metric: str) -> dict[int, float]:
+    return {s: v[metric][1] for s, v in p.get("seeds", {}).items() if metric in v and not math.isnan(v[metric][1])}
+
+
+def write_baldwin_md(path: Path, root: Path, table: pd.DataFrame, skipped: list[str], probes: list[dict],
+                     controls: list[dict]) -> None:
+    """baldwin.md: 세대 추이, 같은 실행의 첫 → 끝 구간 방향, 이식 시험(배우는 대 타고난), 학습 끈 대조와 타고난 능력, 동화·감춤 항목, 읽는 법."""
+    out = ["# 볼드윈 보고서(baldwin)", "",
+           f"- 실행 폴더: `{root.name}` — 학습을 켠 실행 **{table['path'].nunique() if len(table) else 0}개**",
+           f"- 이식 시험(`--probe`) {len(probes)}개 · 학습 끈 대조(`--control-probe`) {len(controls)}개",
+           "- 표: [`baldwin.csv`](baldwin.csv)(실행·개체 세대 구간마다 — 죽은 개체). DESIGN-v0.2 11.2 의 보고 항목이고 관문이 아닙니다.", ""]
+    cells = sorted(set(table["cell"]), key=natural_key) if len(table) else []
+    out += ["## 세대 추이(죽은 개체)", "",
+            f"개체 세대({BALDWIN_GEN_BIN}세대 폭)마다 실행의 값을 내고 묶음마다 그 **중앙값**(괄호 = 실행 수 · 죽은 개체 수 합). "
+            "η = 태어날 때 학습률 유전자 8개의 평균(행동 행별 η 는 기록 열에 없음), 배운 양 = 64 행동 가중치의 abs(배운 − 타고난) 평균, "
+            "동화 지수 = 고리의 판단마다 타고난·배운 두뇌의 가장 큰 행동이 같은 몫(죽을 때).", ""]
+    rows = []
+    for cell in cells:
+        g = table[table["cell"] == cell]
+        for lo, hi in sorted(set((int(a), int(b)) for a, b in zip(g["gen_lo"], g["gen_hi"]))):
+            h = g[g["gen_lo"] == lo]
+            rows.append([f"`{cell}`", f"{lo:,}–{hi:,}"] + [_fmt(quartiles(h[c])[1], dg) for c, _, dg, _ in BALDWIN_TREND]
+                        + [f"{len(h)} · {int(h['dead'].sum()):,}"])
+    out.append(_md_table(["묶음", "개체 세대"] + [n for _, n, _, _ in BALDWIN_TREND] + ["실행 · 개체"], rows,
+                         ["l", "r"] + ["r"] * (len(BALDWIN_TREND) + 1)) if rows else "학습을 켠 실행의 lineage.csv 가 없습니다.")
+    out += ["", "## 같은 실행의 첫 구간 → 끝 구간", "",
+            f"실행마다 죽은 개체가 {BALDWIN_MIN_DEAD} 이상인 첫 세대 구간과 끝 구간을 견줘 **내린 실행 · 오른 실행 (견준 실행)** 을 셉니다"
+            "(구간마다 실행 묶음이 달라 중앙값끼리 견주면 실행 구성이 섞이므로).", ""]
+    dirs = {c: baldwin_direction(table, c) for c, _, _, _ in BALDWIN_TREND} if len(table) else {}
+    out.append(_md_table(["지표", "내림 · 오름 (견준 실행)"],
+                         [[n, f"{dirs[c][0]} · {dirs[c][1]} ({sum(dirs[c])})"] for c, n, _, _ in BALDWIN_TREND], ["l", "r"])
+               if dirs else "견줄 실행이 없습니다.")
+    out += ["", "## 이식 시험 — 같은 스냅숏의 배우는 두뇌 대 타고난 두뇌", "",
+            "`analyze.py ablate --reset-learned --set learn.freeze=true` 의 결과 폴더마다: 그대로 갈래(배우는 두뇌) · 바꾼 갈래(살아 있는 "
+            "개체의 배운 두뇌를 유전체로 되돌리고 학습을 멈춤 = 타고난 두뇌)의 씨앗 중앙값, 차이(배우는 − 타고난)의 중앙값, 배우는 쪽이 큰 씨앗 수.", ""]
+    rows = []
+    bad = []
+    for p in probes:
+        if p["error"] or not p.get("reset"):
+            bad.append([f"`{p['dir'].name}`", p["error"] or "이식 시험이 아님(ablate.json 의 reset_learned 가 false)"])
+            continue
+        for m, name in BALDWIN_PROBE_METRICS:
+            vals = [(v[m][0], v[m][1]) for v in p["seeds"].values() if m in v and not any(math.isnan(x) for x in v[m])]
+            if not vals:
+                continue
+            a = [x for x, _ in vals]
+            b = [y for _, y in vals]
+            rows.append([f"`{p['dir'].name}`", _fmt(p["at_gen"], 1), f"{p['ticks']:,}", name, str(len(vals)),
+                         _fmt(quartiles(a)[1], 2), _fmt(quartiles(b)[1], 2), _fmt(quartiles([x - y for x, y in vals])[1], 2),
+                         str(sum(1 for x, y in vals if x > y))])
+    out.append(_md_table(["폴더", "평균 세대", "틱", "지표", "씨앗", "배우는", "타고난", "차이 중앙값", "배우는 > 타고난"], rows,
+                         ["l", "r", "r", "l", "r", "r", "r", "r", "r"]) if rows else "이식 시험 결과가 없습니다(`--probe`).")
+    if bad:
+        out += ["", _md_table(["폴더", "뺀 까닭"], bad)]
+    good = [p for p in probes if not p["error"] and p.get("reset")]
+    m0 = BALDWIN_PROBE_METRICS[0][0]
+    out += ["", "## 학습 끈 대조와 타고난 능력", "",
+            f"`--control-probe`(학습을 끈 실행에서 같은 평균 세대·틱으로 돌린 ablate 결과)의 그대로 갈래 = 학습 없이 진화한 두뇌의 능력. "
+            f"같은 평균 세대의 이식 시험의 타고난 능력과 {BALDWIN_PROBE_METRICS[0][1]}로 견줍니다(같은 씨앗끼리).", ""]
+    rows = []
+    hiding = None
+    for c in controls:
+        if c["error"]:
+            rows.append([f"`{c['dir'].name}`", "—", "—", "—", "—", c["error"]])
+            continue
+        match = [p for p in good if p["at_gen"] == c["at_gen"]]
+        if not match:
+            rows.append([f"`{c['dir'].name}`", _fmt(c["at_gen"], 1), "—", "—", "—", "같은 평균 세대의 이식 시험이 없음"])
+            continue
+        innate = _probe_innate(match[0], m0)
+        ctrl = {s: v[m0][0] for s, v in c["seeds"].items() if m0 in v and not math.isnan(v[m0][0])}
+        common = sorted(set(innate) & set(ctrl))
+        lower = sum(1 for s in common if innate[s] < ctrl[s])
+        rows.append([f"`{c['dir'].name}`", _fmt(c["at_gen"], 1), _fmt(quartiles([innate[s] for s in common])[1], 2),
+                     _fmt(quartiles([ctrl[s] for s in common])[1], 2), f"{lower}/{len(common)}", ""])
+        if common and (hiding is None or c["at_gen"] >= hiding[0]):
+            hiding = (c["at_gen"], lower, len(common))
+    out.append(_md_table(["대조 폴더", "평균 세대", "타고난(학습 켬) 중앙값", "학습 끔 중앙값", "타고난 < 학습 끔 씨앗", "비고"], rows,
+                         ["l", "r", "r", "r", "r", "l"]) if rows else "학습 끈 대조가 없습니다(`--control-probe`).")
+    # 동화·감춤(11.2 의 보고 항목): 방향 수의 과반으로 적고, 자료가 없으면 그렇다고만
+    eta_d, assim_d = dirs.get("eta_mean"), dirs.get("assim_mean")
+    items = []
+    items.append(f"- η 가 세대에 따라 줄어듦: {_majority(eta_d, 0)}")
+    items.append(f"- 동화 지수가 오름: {_majority(assim_d, 1)}")
+    if len(good) >= 2:
+        first, last = _probe_innate(good[0], m0), _probe_innate(good[-1], m0)
+        common = sorted(set(first) & set(last))
+        upn = sum(1 for s in common if last[s] > first[s])
+        innate_up = common and upn * 2 > len(common)
+        items.append(f"- 이식 시험의 타고난 능력이 오름(평균 세대 {_fmt(good[0]['at_gen'], 1)} → {_fmt(good[-1]['at_gen'], 1)}, "
+                     f"{BALDWIN_PROBE_METRICS[0][1]}): {'예' if innate_up else '아니오'}({upn}/{len(common)} 씨앗)")
+    else:
+        innate_up = None
+        items.append("- 이식 시험의 타고난 능력이 오름: 자료 없음(평균 세대가 다른 `--probe` 둘 이상이 필요)")
+    assim = (eta_d and assim_d and innate_up is not None and _is_majority(eta_d, 0) and _is_majority(assim_d, 1) and innate_up)
+    items.append(f"- **동화**(셋 모두): {'예' if assim else ('아니오' if innate_up is not None and eta_d and assim_d else '판단할 자료 없음')}")
+    items.append("- **감춤**(가장 늦은 평균 세대에서 타고난 능력 < 학습 끔인 씨앗이 과반): "
+                 + (f"{'예' if hiding[1] * 2 > hiding[2] else '아니오'}(평균 세대 {_fmt(hiding[0], 1)}, {hiding[1]}/{hiding[2]} 씨앗)"
+                    if hiding else "판단할 자료 없음"))
+    out += ["", "## 동화·감춤(보고 항목 — 결과 그대로)", ""] + items
+    if skipped:
+        out += ["", "## 뺀 실행", ""] + [f"- {x}" for x in skipped]
+    out += ["", "## 읽는 법", "",
+            "- 동화(11.2): 세대가 가며 η 가 줄고, 동화 지수가 오르고, 이식 시험의 타고난 능력이 오름 — 처음에는 배워야 했던 행동이 타고난 것이 됨. "
+            "감춤: 학습을 켠 실행의 타고난 능력이 학습 끈 대조보다 낮음(Mayley 1997). 어느 쪽이든 결과 그대로 적습니다.",
+            "- 방향 수는 같은 실행끼리 짝지은 첫 → 끝 구간이고, 과반이면 '예'로 적습니다(통계 검정 아님).",
+            "- 이식 시험의 두 갈래는 같은 스냅숏에서 갈라 돌린 쌍입니다. 타고난 갈래는 갈라진 뒤 태어난 개체도 배우지 않습니다(학습 멈춤).",
+            "- 이식 시험 폴더 만들기: `analyze.py ablate --runs <학습 실행> --preset learn_basic --at-gen G --reset-learned "
+            "--set learn.freeze=true --ticks N`, 학습 끈 대조는 같은 G·N 으로 학습을 끈 실행에서(`--set` 은 아무 키 — 그대로 갈래만 읽음).", ""]
+    path.write_text("\n".join(out), encoding="utf-8")
+
+
+def _is_majority(d: tuple[int, int, int] | None, idx: int) -> bool:
+    """방향 수 (내림, 오름, 같음) 가운데 idx 쪽이 견준 실행의 과반인가."""
+    return bool(d) and sum(d) > 0 and d[idx] * 2 > sum(d)
+
+
+def _majority(d: tuple[int, int, int] | None, idx: int) -> str:
+    if not d or sum(d) == 0:
+        return "자료 없음"
+    return f"{'예' if _is_majority(d, idx) else '아니오'}({d[idx]}/{sum(d)} 실행)"
 
 
 # ── 결과 읽기 ──
@@ -1938,8 +2479,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("ablate", help="반사실 재생: 같은 스냅숏에서 그대로·설정을 바꾼 갈래를 돌려 견줌(DESIGN-v0.2 11.4)")
     p.add_argument("--runs", required=True, help="기준 실행 폴더(씨앗마다 seed<N>/ — 없으면 만들고, 같은 설정의 결과가 있으면 그대로 씀)")
     p.add_argument("--at-gen", type=_positive_number, required=True, help="기준 실행의 목표 평균 세대(그 끝 스냅숏에서 갈라짐)")
-    p.add_argument("--set", type=_arg_type(parse_set), action="append", required=True, metavar="KEY=VALUE",
+    p.add_argument("--set", type=_arg_type(parse_set), action="append", default=[], metavar="KEY=VALUE",
                    help="바꾼 갈래에 줄 설정(실행기 --fork-set, 여러 번). 저장된 배열 길이를 바꾸는 키(brain.hidden 등)는 실행기가 거부")
+    p.add_argument("--reset-learned", action="store_true",
+                   help="바꾼 갈래에 실행기 --fork-reset-learned(이식 시험: 배운 두뇌 = 유전체 — 학습을 켠 기준 실행만, "
+                        "보통 --set learn.freeze=true 와 함께, DESIGN-v0.2 11.2). --set 이나 이것 가운데 하나는 있어야 함")
     p.add_argument("--ticks", type=_max_ticks, required=True, help="갈라진 뒤 돌릴 틱 수(1~SimConfig.TICK_MAX 의 정수)")
     p.add_argument("--seeds", type=_arg_type(parse_seeds), default=parse_seeds("1-4"),
                    help='씨앗: "1-12", "1,3,5" (기본 1-4)')
@@ -1953,6 +2497,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", default=str(default_repo()), help="저장소(기본 tools/ 의 부모)")
     p.add_argument("--timeout", type=float, default=3600.0, help="실행 하나의 시간 제한(초, 기본 3600)")
     p.set_defaults(func=cmd_ablate)
+    p = sub.add_parser("gate-a", help="관문 A(DESIGN-v0.2 14.3): 학습·freeze·학습 끔 세 갈래를 씨앗마다 돌려 판정 보고서")
+    p.add_argument("--variant", choices=list(GATE_A_VARIANTS), required=True,
+                   help="판정 조건: A-1 = 14.3 그대로(1,000틱 생존 필요), A-1-life = 제안(A-1′ 조건, 생존 요구 없음, 대상이 모두 죽을 때까지)")
+    p.add_argument("--seeds", type=_arg_type(parse_seeds), default=parse_seeds("1-12"),
+                   help=f'씨앗(기본 1-12 — 판정 문턱은 씨앗 {GATE_A_SEEDS}개 기준, 다르면 값만 적고 판정하지 않음)')
+    p.add_argument("--aux", action="store_true", help="보조 판: 학습·freeze 갈래를 learn.diag_factor=none 으로(판정에 쓰지 않음)")
+    p.add_argument("--out", required=True, help="결과 폴더(갈래마다 <갈래>/seed<N>/, 표 gate_a.csv·gate_a.md)")
+    p.add_argument("--jobs", type=int, default=max(1, min(4, os.cpu_count() or 1)),
+                   help="동시에 돌릴 실행기 수(기본 min(4, CPU 수))")
+    p.add_argument("--godot", default=os.environ.get("GODOT", "godot"), help="godot 실행 파일(run 과 같음)")
+    p.add_argument("--repo", default=str(default_repo()), help="저장소(기본 tools/ 의 부모)")
+    p.add_argument("--timeout", type=float, default=3600.0, help="실행 하나의 시간 제한(초, 기본 3600)")
+    p.set_defaults(func=cmd_gate_a)
+    p = sub.add_parser("baldwin", help="볼드윈 보고서(DESIGN-v0.2 11.2): η·배운 양·동화 지수의 세대 추이, 이식 시험, 학습 끈 대조")
+    p.add_argument("dir", help="학습을 켠 실행 결과 폴더(analyze.py run --lineage — 아래의 summary.json 을 모두 찾음)")
+    p.add_argument("--probe", action="append", default=[], metavar="DIR",
+                   help="이식 시험 폴더(analyze.py ablate --reset-learned --set learn.freeze=true 의 --out, 여러 번 — 평균 세대마다)")
+    p.add_argument("--control-probe", action="append", default=[], metavar="DIR",
+                   help="학습 끈 대조 폴더(학습을 끈 실행의 ablate --out — 그대로 갈래만 읽음, 같은 평균 세대의 --probe 와 견줌)")
+    p.add_argument("--out", default=None, help="보고서 폴더(기본 결과 폴더)")
+    p.set_defaults(func=cmd_baldwin)
     p = sub.add_parser("report", help="결과 폴더를 모아 summary.csv·report.md·그림")
     p.add_argument("dir", help="결과 폴더(아래의 summary.json 을 모두 찾음)")
     p.add_argument("--out", default=None, help="보고서 폴더(기본 결과 폴더)")

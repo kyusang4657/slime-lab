@@ -979,6 +979,7 @@ class FakeAblateRunner:
                 k, _, v = a[len("--fork-set="):].partition("=")
                 forks[k] = json.loads(v)
         out = Path(args["out"])
+        reset = "--fork-reset-learned" in argv
         if "resume" not in args:
             seed = int(args["seed"])
             ext = seed in self.extinct_seeds
@@ -987,7 +988,7 @@ class FakeAblateRunner:
                            end_reason="extinction" if ext else "generations", extinct_tick=380 if ext else -1)
             return subprocess.CompletedProcess(cmd, 0, f"RESULT: seed={seed} reason=generations\n", "")
         base = json.loads((Path(args["resume"]).parent / "summary.json").read_text(encoding="utf-8"))
-        f, end, forked = int(base["tick"]), int(args["max-ticks"]), bool(forks)
+        f, end, forked = int(base["tick"]), int(args["max-ticks"]), bool(forks) or reset
         if forked and int(base["seed"]) in self.fail_fork_seeds:
             # 실행기가 바꾼 설정으로 스냅숏을 열지 못함(배열 길이를 바꾸는 키) → 결과 폴더를 쓰지 않고 종료 코드 2
             return subprocess.CompletedProcess(cmd, 2, "", "Godot Engine v4.4.1.stable - https://godotengine.org\n\n"
@@ -1000,7 +1001,7 @@ class FakeAblateRunner:
                        max_ticks=end, end_reason="max_ticks", lineage=lin,
                        rows_fn=lambda tick: {"births": births if tick > f else 0,
                                              **(acts(gather, total=100) if tick > f else acts())},
-                       summary_extra={"preset": "", "resumed_from": args["resume"], "forked": forks,
+                       summary_extra={"preset": "", "resumed_from": args["resume"], "forked": forks, "reset_learned": reset,
                                       "history_hash": ("ff" if forked else "ee") + "0" * 62})
         return subprocess.CompletedProcess(cmd, 0, "RESULT: reason=max_ticks\n", "")
 
@@ -1081,11 +1082,51 @@ class TestAblate(TempDirCase):
                          ("30", 340, [("learn.freeze", "true"), ("care.enabled", "false")], [("brain.memory_units", "2")]))
         self.assertIsNone(a.out)
         with quiet(), contextlib.redirect_stderr(io.StringIO()):
-            for bad in (["--at-gen", "30", "--ticks", "10"], ["--set", "a=1", "--ticks", "10"],
+            for bad in (["--set", "a=1", "--ticks", "10"],
                         ["--at-gen", "0", "--set", "a=1", "--ticks", "10"], ["--at-gen", "3", "--set", "a=1", "--ticks", "0"],
                         ["--at-gen", "3", "--set", "a", "--ticks", "5"]):
                 with self.assertRaises(SystemExit, msg=str(bad)):
                     p.parse_args(["ablate", "--runs", "r", *bad])
+
+    def test_needs_set_or_reset(self) -> None:
+        """--set 도 --reset-learned 도 없으면 바꾼 갈래가 그대로 갈래와 같아 견줄 것이 없음 → 실행하지 않고 종료 코드 2."""
+        fake = FakeAblateRunner()
+        err = io.StringIO()
+        with mock.patch.object(analyze.subprocess, "run", fake), quiet(), contextlib.redirect_stderr(err):
+            code = analyze.main(["ablate", "--runs", str(self.tmp / "base"), "--at-gen", "30", "--ticks", "100", "--seeds", "1",
+                                 "--godot", "g", "--out", str(self.tmp / "abl")])
+        self.assertEqual((code, fake.calls), (2, []))
+        self.assertIn("--reset-learned", err.getvalue())
+
+    def test_reset_learned_probe(self) -> None:
+        """--reset-learned(이식 시험, DESIGN-v0.2 11.2): 바꾼 갈래에만 실행기 --fork-reset-learned(+ --set 의 --fork-set), 그대로 갈래에는 없음.
+        ablate.json 에 조건(baldwin 이 읽음), 기본 폴더 이름에 reset_learned. 같은 폴더에 reset 없이 다시 돌리면 이전 갈래는 mismatch."""
+        fake = FakeAblateRunner()
+        with mock.patch.object(analyze.subprocess, "run", fake), quiet():
+            code = analyze.main(["ablate", "--runs", str(self.tmp / "base"), "--preset", "learn_basic", "--at-gen", "30",
+                                 "--reset-learned", "--set", "learn.freeze=true", "--ticks", "100", "--seeds", "1-2", "--godot", "g"])
+        self.assertEqual(code, 0)
+        out = self.tmp / "base-ablate" / "learn.freeze=true__reset_learned__g30__t100"
+        branch = [c for c in fake.calls if any(a.startswith("--resume=") for a in c)]
+        fork = [c for c in branch if "--fork-reset-learned" in c]
+        same = [c for c in branch if "--fork-reset-learned" not in c]
+        self.assertEqual((len(fork), len(same)), (2, 2), "씨앗마다 바꾼 갈래 하나에만 --fork-reset-learned")
+        self.assertTrue(all("--fork-set=learn.freeze=true" in c for c in fork) and
+                        not any(a.startswith("--fork-set=") for c in same for a in c))
+        meta = json.loads((out / "ablate.json").read_text(encoding="utf-8"))
+        self.assertEqual((meta["reset_learned"], meta["at_gen"], meta["ticks"], meta["set"], meta["preset"], meta["seeds"]),
+                         (True, "30", 100, [["learn.freeze", "true"]], "learn_basic", [1, 2]))
+        md = (out / "ablate.md").read_text(encoding="utf-8")
+        self.assertIn("`--fork-reset-learned`", md)
+        self.assertEqual(json.loads((out / "fork" / "seed1" / "summary.json").read_text(encoding="utf-8"))["reset_learned"], True)
+        again = FakeAblateRunner()
+        with mock.patch.object(analyze.subprocess, "run", again), quiet():
+            code = analyze.main(["ablate", "--runs", str(self.tmp / "base"), "--preset", "learn_basic", "--at-gen", "30",
+                                 "--set", "learn.freeze=true", "--ticks", "100", "--seeds", "1-2", "--godot", "g", "--out", str(out)])
+        self.assertEqual((code, again.calls), (1, []), "reset 없이 같은 폴더 → 이전 바꾼 갈래(reset_learned true)는 mismatch")
+        runs = read_csv_rows(out / "runs.csv")
+        self.assertEqual(sorted(r["status"] for r in runs if r["cell"] == analyze.ABLATE_FORK), ["mismatch"] * 2)
+        self.assertIn("reset_learned True ≠ False", [r for r in runs if r["cell"] == analyze.ABLATE_FORK][0]["result"])
 
     def test_default_out_is_beside_runs(self) -> None:
         """--out 을 주지 않으면 <runs>-ablate/<키=값>__g<세대>__t<틱> — 기준 실행 폴더 밖(report 가 갈래를 기준 실행과 섞지 않게)."""
@@ -1095,6 +1136,316 @@ class TestAblate(TempDirCase):
         self.assertTrue((self.tmp / "base-ablate" / "learn_x.k=0__g30__t100" / "ablate.md").is_file(),
                         "기본 --out = <runs>-ablate/<키=값>__g<세대>__t<틱>")
         self.assertEqual(sorted(p.name for p in (self.tmp / "base").iterdir()), [".gdignore", "runs.csv", "seed1"])
+
+
+# ── 관문 A 판정 gate-a(가짜 subprocess — DESIGN-v0.2 14.3) ──
+
+## 가짜 결과의 설정(실행기가 summary.json 의 config 에 남기는 값 가운데 gate-a 가 읽는 것)
+GATE_CONFIG = {"repro": {"maturity": 30}, "run": {"max_ticks": float(CONFIG_MAX_TICKS)}}
+
+
+def gate_lineage(eaten: list[float], life: list[int], children: list[int], alive: int = 0) -> list[dict]:
+    """대상(틱 300 에 태어남 — [200, 600) 안) 개체마다 (먹은 양, 죽은 나이, 자식 수). 대상이 아닌 줄도 넣어 거르기를 본다: 처음 개체 2
+    (부모 없음, 먹은 양 999), 틱 199·600 에 태어난 개체(먹은 양 999·자식 9). alive = 끝까지 살아 있는(death_tick −1) 대상 수(앞에서부터)."""
+    rows = [{"id": 0, "parent_a": -1, "parent_b": -1, "gen": 0, "birth_tick": 0, "death_tick": 400, "eaten": 999.0, "children": 9},
+            {"id": 1, "parent_a": -1, "parent_b": -1, "gen": 0, "birth_tick": 0, "death_tick": 500, "eaten": 999.0, "children": 9}]
+    for t in (199, 600):
+        rows.append({"id": len(rows), "parent_a": 0, "parent_b": 1, "gen": 1, "birth_tick": t, "death_tick": t + 1,
+                     "eaten": 999.0, "children": 9})
+    for k, (e, lf, c) in enumerate(zip(eaten, life, children)):
+        rows.append({"id": len(rows), "parent_a": 0, "parent_b": 1, "gen": 1, "birth_tick": 300,
+                     "death_tick": -1 if k < alive else 300 + lf, "eaten": e, "children": c})
+    return rows
+
+
+def gate_spec(seed: int, branch: str) -> dict:
+    """손으로 정한 관문 A 결과(씨앗 12개, 갈래마다 대상 30). 손 계산:
+    먹은 양 — freeze 10, 학습 끔 11, 학습 12(씨앗 1~10)·8(11~12) → 학습 > freeze 10/12, 묶은 중앙값 12 ÷ 10 = 1.2.
+    성숙까지 산 몫(죽은 나이 31 > 성숙 30 · 딱 30 은 아님 — 번식 자격으로 번식 단계에 닿으려면 성숙한 틱을 살아 넘겨야 함) — freeze·학습 끔
+    15/30 = 0.5, 학습 20/30(씨앗 1~8)·15/30 → 8/12, 묶은 값 220/360.
+    자식 수 — freeze·학습 끔 평균 0.5, 학습 1(씨앗 1~5)·0 → 5/12, 묶은 값 150/360. 모두 1,000틱까지 삶 → ①·② 충족 = 통과."""
+    if branch == "learn":
+        e = 12.0 if seed <= 10 else 8.0
+        m = 20 if seed <= 8 else 15
+        c = [1] * 30 if seed <= 5 else [0] * 30
+    else:
+        e = 10.0 if branch == "freeze" else 11.0
+        m = 15
+        c = [1] * 15 + [0] * 15
+    return {"eaten": [e] * 30, "life": [31] * m + [30] * (30 - m), "children": c}
+
+
+class FakeGateRunner:
+    """subprocess.run 대신(gate-a 의 실행기): --set 에서 갈래(learn.enabled·learn.freeze)를 알아내 spec(씨앗, 갈래)의 대상으로 결과 폴더를
+    쓴다. spec 이 extinct(멸종 틱)·alive(살아 있는 대상 수)를 주면 그대로. 처음부터 --max-ticks 까지 산 결과가 기본."""
+
+    def __init__(self, spec=gate_spec):
+        self.calls: list[list[str]] = []
+        self.lock = threading.Lock()
+        self.spec = spec
+
+    def __call__(self, cmd, **kw):
+        with self.lock:
+            self.calls.append(list(cmd))
+        argv = cmd[cmd.index("--") + 1:]
+        args = dict(a[2:].split("=", 1) for a in argv if "=" in a and not a.startswith("--set="))
+        sets = {}
+        for a in argv:
+            if a.startswith("--set="):
+                k, _, v = a[6:].partition("=")
+                sets[k] = json.loads(v) if v[:1] not in "abcdefghijklmnopqrstuvwxyz" or v in ("true", "false") else v
+        branch = "off" if not sets.get("learn.enabled") else ("freeze" if sets.get("learn.freeze") else "learn")
+        seed, cap = int(args["seed"]), int(args["max-ticks"])
+        sp = self.spec(seed, branch)
+        ext = sp.get("extinct", -1)
+        write_fake_run(Path(args["out"]), seed, {}, civ=0, ticks=ext if ext >= 0 else cap, preset=args["preset"],
+                       overrides=sets, generations_target=float(args["generations"]), max_ticks=cap,
+                       end_reason="extinction" if ext >= 0 else "max_ticks", extinct_tick=ext,
+                       lineage=gate_lineage(sp["eaten"], sp["life"], sp["children"], sp.get("alive", 0)),
+                       summary_extra={"config": GATE_CONFIG,
+                                      "history_hash": f"{seed:02d}{'abc'.index(branch[0]) if branch[0] in 'abc' else 9}" + "0" * 61})
+        return subprocess.CompletedProcess(cmd, 0, f"RESULT: seed={seed} reason=max_ticks\n", "")
+
+
+class TestGateA(TempDirCase):
+    def gate(self, fake, variant: str = "A-1", seeds: str = "1-12", *extra: str) -> int:
+        with mock.patch.object(analyze.subprocess, "run", fake), quiet():
+            return analyze.main(["gate-a", "--variant", variant, "--seeds", seeds, "--godot", "/opt/godot",
+                                 "--out", str(self.tmp / "ga"), *extra])
+
+    def md(self) -> str:
+        return (self.tmp / "ga" / "gate_a.md").read_text(encoding="utf-8")
+
+    def test_commands(self) -> None:
+        """갈래마다 같은 씨앗을 틱 0 부터: 예설정 chance_baseline + 학습·몸 자람, 학습(freeze 거짓)·freeze(참)·학습 끔(learn.enabled 거짓),
+        --max-ticks = 변형의 끝(A-1 1,000 · A-1-life 1,500), 세대 끝 조건은 큰 값, lineage.csv 를 씀. A-1-life 는 A-1′ 세계(400·400·1.0)."""
+        fake = FakeGateRunner()
+        self.assertEqual(self.gate(fake, "A-1", "1-2"), 0)
+        self.assertEqual(len(fake.calls), 6)
+        for c in fake.calls:
+            self.assertIn("--preset=chance_baseline", c)
+            self.assertIn("--max-ticks=1000", c)
+            self.assertIn("--generations=1000000000", c)
+            self.assertNotIn("--no-lineage", c)
+            self.assertIn("--set=body.grow_enabled=true", c)
+        sets = sorted(tuple(a for a in c if a.startswith("--set=learn.")) for c in fake.calls)
+        self.assertEqual(sets, sorted([("--set=learn.enabled=true", "--set=learn.freeze=false")] * 2
+                                      + [("--set=learn.enabled=true", "--set=learn.freeze=true")] * 2
+                                      + [("--set=learn.enabled=false",)] * 2))
+        life = FakeGateRunner()
+        shutil.rmtree(self.tmp / "ga")
+        self.assertEqual(self.gate(life, "A-1-life", "3"), 0)
+        for c in life.calls:
+            self.assertIn("--max-ticks=1500", c)
+            for kv in ("population.initial=400", "population.cap=400", "plants.initial_fill=1.0"):
+                self.assertIn("--set=" + kv, c)
+        aux = FakeGateRunner()
+        shutil.rmtree(self.tmp / "ga")
+        self.assertEqual(self.gate(aux, "A-1", "3", "--aux"), 0)
+        with_none = [c for c in aux.calls if "--set=learn.diag_factor=none" in c]
+        self.assertEqual(len(with_none), 2, "보조 판: 학습·freeze 갈래만 learn.diag_factor=none")
+        self.assertIn("보조 판 — 판정에 쓰지 않음", self.md())
+
+    def test_hand_computed_pass(self) -> None:
+        """gate_spec 의 손 계산(세 행·두 차이·효과 크기·씨앗 수, 14.3 보고 꼴) → 통과. 대상이 아닌 개체(처음 개체·틱 199·600 출생)는 빠짐."""
+        self.assertEqual(self.gate(FakeGateRunner()), 0)
+        md = self.md()
+        self.assertIn("- **판정: 통과**", md)
+        self.assertIn("| 평생 먹은 양(중앙값) | 12.00 | 10.00 | 11.00 | 2.00 | 1.00 | 0.200 | 10/12 | 10/12 |", md)
+        self.assertIn("| 성숙까지 산 몫 | 0.611 | 0.500 | 0.500 | 0.111 | 0.111 | 0.222 | 8/12 | 8/12 |", md)
+        self.assertIn("| 평균 자식 수 | 0.417 | 0.500 | 0.500 | -0.083 | -0.083 | -0.167 | 5/12 | 5/12 |", md)
+        self.assertIn("학습 > freeze 씨앗 **10/12**(문턱 10), 묶은 중앙값 비 **1.200**(문턱 1.05) → 충족", md)
+        self.assertIn("성숙까지 산 몫 **8/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 충족", md)
+        self.assertIn("| `GATE_A_WIN` | 10 |", md)
+        rows = read_csv_rows(self.tmp / "ga" / "gate_a.csv")
+        self.assertEqual(list(rows[0]), analyze.GATE_A_COLUMNS)
+        r = [x for x in rows if x["seed"] == "9" and x["branch"] == "learn"][0]
+        self.assertEqual((r["status"], r["targets"], r["eaten_median"], r["matured_share"], r["children_mean"]),
+                         ("ok", "30", "12", "0.5", "0"))
+
+    def test_thresholds(self) -> None:
+        """문턱 경계: 먹은 양 씨앗 9/12 → 실패. 씨앗 10/12 지만 묶은 중앙값 비 1.04 → 실패. 성숙·자식 모두 7/12 → 실패."""
+        cases = {
+            "wins9": lambda s, b: {**gate_spec(s, b), **({"eaten": [9.0] * 30} if b == "learn" and s == 10 else {})},
+            "ratio": lambda s, b: {**gate_spec(s, b), **({"eaten": [10.4] * 30} if b == "learn" and s <= 10 else {})},
+            "second": lambda s, b: {**gate_spec(s, b), **({"life": [31] * 15 + [30] * 15} if b == "learn" and s == 8 else {})},
+        }
+        want = {"wins9": "학습 > freeze 씨앗 **9/12**(문턱 10), 묶은 중앙값 비 **1.200**(문턱 1.05) → 못 함",
+                "ratio": "학습 > freeze 씨앗 **10/12**(문턱 10), 묶은 중앙값 비 **1.040**(문턱 1.05) → 못 함",
+                "second": "성숙까지 산 몫 **7/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 못 함"}
+        for name, spec in cases.items():
+            shutil.rmtree(self.tmp / "ga", ignore_errors=True)
+            self.assertEqual(self.gate(FakeGateRunner(spec)), 0, name)
+            md = self.md()
+            self.assertIn("- **판정: 실패**", md, name)
+            self.assertIn(want[name], md, name)
+
+    def test_unjudgeable_and_variants(self) -> None:
+        """A-1: 한 갈래라도 1,000틱 전에 멸종하거나 대상 < 30 이면 그 씨앗 판정 불가 → 판정 불가(A-1′ 안내). A-1-life 는 생존 요구가 없어
+        같은 멸종 씨앗도 판정하지만 끝에 살아 있는 대상이 있으면 판정 불가. 씨앗 수 ≠ 12 이면 판정 안 함. 학습 끔 갈래는 판정에 안 씀."""
+        def spec(s, b):
+            sp = gate_spec(s, b)
+            if s == 3 and b == "freeze":
+                sp["extinct"] = 900
+            if s == 4 and b == "learn":
+                sp = {k: v[:29] for k, v in sp.items()}
+            if s == 5 and b == "off":
+                sp["extinct"] = 100
+            return sp
+        self.assertEqual(self.gate(FakeGateRunner(spec)), 0)
+        md = self.md()
+        self.assertIn("- **판정: 판정 불가 — 씨앗 2개(3, 4)가 조건을 채우지 못함(14.3 은 이때 A-1′ 를 같은 문턱으로 돌림", md)
+        self.assertIn("| 3 | freeze: 생존 틱 전 멸종(900틱 멸종) |", md)
+        self.assertIn("| 4 | 학습: 대상 모자람(대상 29) |", md)
+        self.assertIn("| 5 | 학습 끔 | 생존 틱 전 멸종 | 100 멸종 |", md)
+        shutil.rmtree(self.tmp / "ga")
+
+        def spec_life(s, b):
+            sp = spec(s, b)
+            if s == 6 and b == "learn":
+                sp["alive"] = 2
+            return sp
+        self.assertEqual(self.gate(FakeGateRunner(spec_life), "A-1-life"), 0)
+        md = self.md()
+        self.assertIn("- **판정: 판정 불가 — 씨앗 2개(4, 6)", md)
+        self.assertIn("| 6 | 학습: 끝에 대상이 살아 있음(대상 2명이 끝에 살아 있음) |", md)
+        self.assertNotIn("| 3 | freeze:", md)
+        shutil.rmtree(self.tmp / "ga")
+        self.assertEqual(self.gate(FakeGateRunner(), "A-1", "1-11"), 0)
+        self.assertIn("- **판정: 판정 안 함 — 씨앗 11개(문턱은 씨앗 12개 기준, 14.3)**", self.md())
+
+    def test_rerun_reuses_and_same_report(self) -> None:
+        """같은 명령을 다시 돌리면 실행 없이 같은 보고서. 실패한 실행(결과 없음)이 있으면 그 씨앗은 판정 불가·종료 코드 1."""
+        self.assertEqual(self.gate(FakeGateRunner(), "A-1", "1-2"), 0)
+        first = self.md()
+        again = FakeGateRunner()
+        self.assertEqual(self.gate(again, "A-1", "1-2"), 0)
+        self.assertEqual((again.calls, self.md()), ([], first))
+        shutil.rmtree(self.tmp / "ga")
+
+        def failing(cmd, **kw):
+            if "--seed=2" in cmd and "--set=learn.freeze=true" in cmd:
+                return subprocess.CompletedProcess(cmd, 2, "", "설정 오류: 시험\n")
+            return FakeGateRunner()(cmd, **kw)
+        self.assertEqual(self.gate(failing, "A-1", "1-2"), 1)
+        self.assertIn("| 2 | freeze: 실행 실패(결과 없음 (종료 코드 2 — 설정 오류: 시험)) |", self.md())
+
+    def test_variant_names(self) -> None:
+        """변형 이름은 정해진 둘(사용자가 판정 조건을 다시 정하는 중 — 이름 붙은 변형), 문턱은 14.3 표의 값."""
+        self.assertEqual(list(analyze.GATE_A_VARIANTS), ["A-1", "A-1-life"])
+        self.assertEqual((analyze.GATE_A_WIN, analyze.GATE_A_RATIO, analyze.GATE_A_SECONDARY_WIN, analyze.GATE_A_MIN_BIRTHS,
+                          analyze.GATE_A_SEEDS, analyze.GATE_A_BIRTH_WINDOW, analyze.GATE_A_TICKS), (10, 1.05, 8, 30, 12, (200, 600), 1000))
+        with quiet(), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                analyze.build_parser().parse_args(["gate-a", "--variant", "A-2", "--out", "x"])
+
+
+# ── 볼드윈 보고서 baldwin(손으로 만든 결과 폴더 — DESIGN-v0.2 11.2) ──
+
+## 실행마다 개체 세대 구간별 죽은 개체 값: (세대, 죽은 수, η, 배운 양, 어린 동안 배운 양, 동화 지수, 먹은 양, 자식 수)
+BALDWIN_HAND = {
+    1: [(5, 30, 0.05, 0.01, 0.005, 0.5, 10.0, 1), (15, 30, 0.04, 0.02, 0.01, 0.7, 20.0, 2), (25, 5, 0.09, 0.0, 0.0, 0.1, 1.0, 0)],
+    2: [(5, 30, 0.05, 0.01, 0.005, 0.6, 12.0, 1), (15, 30, 0.03, 0.03, 0.01, 0.65, 22.0, 2)],
+}
+
+
+def baldwin_lineage(seed: int) -> list[dict]:
+    rows = []
+    for gen, n, eta, dw, juv, assim, eaten, ch in BALDWIN_HAND[seed]:
+        for _ in range(n):
+            rows.append({"id": len(rows), "parent_a": 0, "parent_b": 0, "gen": gen, "birth_tick": 10, "death_tick": 50,
+                         "eta": eta, "dw": dw, "dw_juv": juv, "assim": assim, "eaten": eaten, "children": ch})
+    # 살아 있는 개체(death_tick −1 — 평생 값이 아직 정해지지 않음)는 빠져야 함
+    rows.append({"id": len(rows), "parent_a": 0, "parent_b": 0, "gen": 5, "birth_tick": 10, "death_tick": -1,
+                 "eta": 9.0, "dw": 9.0, "dw_juv": 9.0, "assim": 0.0, "eaten": 999.0, "children": 9})
+    return rows
+
+
+def write_probe(d: Path, at_gen: str, values: dict[int, tuple[float, float]], reset: bool = True) -> None:
+    """ablate 결과 흉내: ablate.json(조건) + ablate.csv(씨앗마다 대상 평균 먹은 양 (그대로, 바꿈) — 자식 수는 그대로 1 · 바꿈 0.5)."""
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "ablate.json").write_text(json.dumps({"at_gen": at_gen, "ticks": 340, "reset_learned": reset,
+                                               "set": [["learn.freeze", "true"]]}), encoding="utf-8")
+    rows = []
+    for seed, (same, fork) in values.items():
+        rows.append({"seed": seed, "fork_tick": 1000, "metric": "target_eaten", "same": same, "fork": fork, "diff": fork - same})
+        rows.append({"seed": seed, "fork_tick": 1000, "metric": "target_children", "same": 1.0, "fork": 0.5, "diff": -0.5})
+    analyze.write_csv(pd.DataFrame(rows, columns=analyze.ABLATE_COLUMNS), d / "ablate.csv")
+
+
+class TestBaldwin(TempDirCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.root = self.tmp / "learn"
+        feats = {"features": ["body.grow_enabled", "learn.enabled"]}
+        for seed in (1, 2):
+            write_fake_run(self.root / f"seed{seed}", seed, {}, civ=0, preset="learn_basic", lineage=baldwin_lineage(seed),
+                           summary_extra=feats)
+        # 학습을 끈 실행(features 에 learn.enabled 없음)은 빠지고 까닭이 적힘
+        write_fake_run(self.root / "seed3", 3, {}, civ=0, preset="learn_basic", lineage=baldwin_lineage(1),
+                       summary_extra={"features": ["body.grow_enabled"]})
+        write_probe(self.tmp / "probe_g10", "10", {1: (8.0, 5.0), 2: (9.0, 6.0)})
+        write_probe(self.tmp / "probe_g30", "30", {1: (8.0, 7.0), 2: (9.0, 8.0)})
+        write_probe(self.tmp / "control_g30", "30", {1: (7.5, 0.0), 2: (7.0, 0.0)}, reset=False)
+        write_probe(self.tmp / "not_reset", "20", {1: (1.0, 1.0)}, reset=False)
+        (self.tmp / "empty").mkdir()
+
+    def baldwin(self, *extra: str) -> tuple[int, str]:
+        with quiet(), contextlib.redirect_stderr(io.StringIO()):
+            code = analyze.main(["baldwin", str(self.root), *extra])
+        md = (self.root / "baldwin.md").read_text(encoding="utf-8") if (self.root / "baldwin.md").exists() else ""
+        return code, md
+
+    def test_generation_trend(self) -> None:
+        """세대 구간별(죽은 개체만) 값 = 손 계산, 실행끼리 중앙값. 첫 → 끝 방향은 죽은 개체 ≥ 30 인 구간만(세대 20–30 구간 5명은 뺌)."""
+        code, md = self.baldwin()
+        self.assertEqual(code, 0)
+        self.assertIn("| `learn_basic` | 0–10 | 0.0500 | 0.550 | 0.0100 | 0.0050 | 11.0 | 2 · 60 |", md)
+        self.assertIn("| `learn_basic` | 10–20 | 0.0350 | 0.675 | 0.0250 | 0.0100 | 21.0 | 2 · 60 |", md)
+        self.assertIn("| `learn_basic` | 20–30 | 0.0900 | 0.100 | 0.0000 | 0.0000 | 1.0 | 1 · 5 |", md)
+        self.assertIn("| η 평균 | 2 · 0 (2) |", md)
+        self.assertIn("| 동화 지수 | 0 · 2 (2) |", md)
+        self.assertIn("`seed3` — 학습을 켜지 않은 실행", md)
+        rows = read_csv_rows(self.root / "baldwin.csv")
+        self.assertEqual(list(rows[0]), analyze.BALDWIN_COLUMNS)
+        r = [x for x in rows if x["seed"] == "1" and x["gen_lo"] == "10"][0]
+        self.assertEqual((r["dead"], r["eta_mean"], r["assim_mean"], r["eaten_median"], r["children_mean"]), ("30", "0.04", "0.7", "20", "2"))
+        self.assertIn("- **동화**(셋 모두): 판단할 자료 없음", md)
+        self.assertIn("- 이식 시험의 타고난 능력이 오름: 자료 없음", md)
+
+    def test_probe_and_control(self) -> None:
+        """이식 시험(평균 세대 10·30): 배우는 대 타고난 — 타고난 능력이 오름(2/2 씨앗). η 내림·동화 지수 오름과 함께 동화 = 예.
+        학습 끈 대조(30세대): 타고난 < 학습 끔 씨앗 1/2 → 감춤 아니오. 이식 시험이 아닌 폴더·ablate 결과가 아닌 폴더는 뺀 까닭."""
+        code, md = self.baldwin("--probe", str(self.tmp / "probe_g30"), "--probe", str(self.tmp / "probe_g10"),
+                                "--probe", str(self.tmp / "not_reset"), "--probe", str(self.tmp / "empty"),
+                                "--control-probe", str(self.tmp / "control_g30"))
+        self.assertEqual(code, 0)
+        self.assertIn("| `probe_g10` | 10.0 | 340 | 대상 평균 먹은 양 | 2 | 8.50 | 5.50 | 3.00 | 2 |", md)
+        self.assertIn("| `probe_g30` | 30.0 | 340 | 대상 평균 먹은 양 | 2 | 8.50 | 7.50 | 1.00 | 2 |", md)
+        self.assertIn("| `probe_g10` | 10.0 | 340 | 대상 평균 자식 수 | 2 | 1.00 | 0.50 | 0.50 | 2 |", md)
+        self.assertIn("| `not_reset` | 이식 시험이 아님(ablate.json 의 reset_learned 가 false) |", md)
+        self.assertIn("| `empty` | ablate.json 를 읽을 수 없음(analyze.py ablate 의 결과 폴더가 아님) |", md)
+        self.assertIn("| `control_g30` | 30.0 | 7.50 | 7.25 | 1/2 |  |", md)
+        self.assertIn("- η 가 세대에 따라 줄어듦: 예(2/2 실행)", md)
+        self.assertIn("- 동화 지수가 오름: 예(2/2 실행)", md)
+        self.assertIn("- 이식 시험의 타고난 능력이 오름(평균 세대 10.0 → 30.0, 대상 평균 먹은 양): 예(2/2 씨앗)", md)
+        self.assertIn("- **동화**(셋 모두): 예", md)
+        self.assertIn("- **감춤**(가장 늦은 평균 세대에서 타고난 능력 < 학습 끔인 씨앗이 과반): 아니오(평균 세대 30.0, 1/2 씨앗)", md)
+        # 타고난 능력이 내리면 동화가 아님, 학습 끔이 더 높으면 감춤
+        write_probe(self.tmp / "probe_g30", "30", {1: (8.0, 4.0), 2: (9.0, 5.0)})
+        code, md = self.baldwin("--probe", str(self.tmp / "probe_g10"), "--probe", str(self.tmp / "probe_g30"),
+                                "--control-probe", str(self.tmp / "control_g30"))
+        self.assertIn("- 이식 시험의 타고난 능력이 오름(평균 세대 10.0 → 30.0, 대상 평균 먹은 양): 아니오(0/2 씨앗)", md)
+        self.assertIn("- **동화**(셋 모두): 아니오", md)
+        self.assertIn("- **감춤**(가장 늦은 평균 세대에서 타고난 능력 < 학습 끔인 씨앗이 과반): 예(평균 세대 30.0, 2/2 씨앗)", md)
+
+    def test_no_learning_runs(self) -> None:
+        """학습을 켠 실행이 없으면 종료 코드 1(보고서는 쓰되 그렇다고)."""
+        root = self.tmp / "off"
+        write_fake_run(root / "seed1", 1, {}, civ=0, lineage=baldwin_lineage(1))
+        with quiet(), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(analyze.main(["baldwin", str(root)]), 1)
+        self.assertIn("학습을 켠 실행의 lineage.csv 가 없습니다", (root / "baldwin.md").read_text(encoding="utf-8"))
 
 
 # ── 올린 예시 ──
