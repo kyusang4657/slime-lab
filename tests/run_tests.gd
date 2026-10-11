@@ -18,7 +18,7 @@ const NUM_PATTERN := "(?<![A-Za-z_0-9.])(0[xX][0-9a-fA-F_]+|0[bB][01_]+|[0-9][0-
 ## 같은 비트인지(사칙연산·sqrt·비교·정수 연산뿐인지) 확인할 것 — README·DESIGN D10 "사칙연산·sqrt 만".
 const ALLOWED_GLOBAL_CALLS: Array[String] = [
 	"int", "float", "str", "bool", "typeof", "type_string", "range", "String", "PackedByteArray", "PackedInt32Array",
-	"PackedFloat32Array", "PackedFloat64Array", "PackedStringArray", "absf", "absi", "minf", "maxf", "mini", "maxi",
+	"PackedInt64Array", "PackedFloat32Array", "PackedFloat64Array", "PackedStringArray", "absf", "absi", "minf", "maxf", "mini", "maxi",
 	"clampf", "clampi", "floorf", "sqrt", "snappedf", "is_finite", "is_inf", "is_nan", "push_error", "error_string",
 ]
 ## 받는 이가 있는 메서드 호출(.이름()의 허용 목록 — 배열·사전·글자·파일·JSON·정규식 다루기와 SimRng 안의 RandomNumberGenerator.randi 뿐.
@@ -30,7 +30,7 @@ const ALLOWED_METHODS: Array[String] = [
 	"keys", "length", "make_dir_recursive_absolute", "merge", "new", "num", "open", "parse", "parse_string", "path_join",
 	"randi", "raw_to_base64", "remove_absolute", "rename_absolute", "replace", "resize", "search_all", "sha256_text", "size",
 	"slice", "split", "store_buffer", "store_string", "stringify", "to_byte_array", "to_float32_array", "to_float64_array",
-	"to_int", "to_int32_array", "to_utf8_buffer",
+	"to_int", "to_int32_array", "to_int64_array", "to_utf8_buffer",
 ]
 ## 뒤에 괄호가 와도 함수 호출이 아닌 GDScript 낱말(func 는 이름 없는 함수).
 const GD_KEYWORDS: Array[String] = ["if", "elif", "while", "for", "match", "return", "and", "or", "not", "in", "is", "as", "func"]
@@ -1764,6 +1764,12 @@ func test_snapshot_corrupt() -> void:
 	wd._put_dropped(p.y * wd.w + p.x + 1, 2.0)
 	var text := SimSnapshot.to_text(wd)
 	var big := SimSnapshot.b64(PackedInt32Array([0, 999999]))
+	var dead_id := -1
+	for id in wd.lin_death.size():
+		if wd.lin_death[id] >= 0:
+			dead_id = id
+			break
+	check(dead_id >= 0 and wd.population() > 0, "300틱 세계에 죽은 개체(#%d)와 산 개체가 있음(먹은 양 범위 사례용)" % dead_id)
 	var cases := {
 		"civ.discovery_tick 없음": func(d): d.civ.erase("discovery_tick"),
 		"civ.discovery_tick 길이 1": func(d): d.civ.discovery_tick = [-1],
@@ -1794,12 +1800,25 @@ func test_snapshot_corrupt() -> void:
 		"slimes.eaten 숫자": func(d): d.slimes.eaten = 3.0,
 		"lineage.eaten 짧음": func(d): d.lineage.eaten = SimSnapshot.b64(PackedFloat64Array([1.0])),
 		"lineage.eaten NaN": func(d): d.lineage.eaten = SimSnapshot.b64(_nan_tail(wd.lin_pa.size())),
-		"stats.period_act 길이 7": func(d): d.stats.period_act = SimSnapshot.b64(PackedInt32Array([0, 0, 0, 0, 0, 0, 0])),
-		"stats.period_eff > period_act": func(d): d.stats.period_eff = SimSnapshot.b64(PackedInt32Array([999999, 0, 0, 0, 0, 0, 0, 0])),
+		"stats.period_act 길이 7": func(d): d.stats.period_act = SimSnapshot.b64(PackedInt64Array([0, 0, 0, 0, 0, 0, 0])),
+		"stats.period_eff > period_act": func(d): d.stats.period_eff = SimSnapshot.b64(PackedInt64Array([999999, 0, 0, 0, 0, 0, 0, 0])),
 		"stats.led_eaten_open 짧은 16진": func(d): d.stats.led_eaten_open = "00",
 		"stats.led_eaten_open NaN": func(d): d.stats.led_eaten_open = SimSnapshot.f64_hex(NAN),
+		# 범위(검증 지적): 먹은 양은 음수가 아니고, 살아 있는 개체의 계통 값은 0(죽을 때 씀), 장부 시작점은 0~led_eaten, 첫 개체 id 는 계통 안
+		"slimes.eaten 음수": func(d): d.slimes.eaten = _f64_set(wd.s_eaten, 0, -1e6),
+		"lineage.eaten 음수(죽은 개체)": func(d): d.lineage.eaten = _f64_set(wd.lin_eaten, dead_id, -5.0),
+		"lineage.eaten 살아 있는 개체 ≠ 0": func(d): d.lineage.eaten = _f64_set(wd.lin_eaten, wd.s_id[0], 1.0),
+		"stats.led_eaten_open > led_eaten": func(d): d.stats.led_eaten_open = SimSnapshot.f64_hex(wd.led_eaten + 1.0),
+		"stats.led_eaten_open 음수": func(d): d.stats.led_eaten_open = SimSnapshot.f64_hex(-1.0),
+		"stats.eaten_from_id 계통 밖": func(d): d.stats.eaten_from_id = float(wd.lin_pa.size() + 1),
+		"stats.eaten_from_id 음수": func(d): d.stats.eaten_from_id = -1.0,
+		"stats.eaten_from_id 글자": func(d): d.stats.eaten_from_id = "0",
 	}
-	var reason := {"format 숫자": "형식", "format 사전": "형식", "rng.world 숫자": "rng.world", "rng.life 배열": "rng.life", "rng.world null": "rng.world"}
+	var reason := {"format 숫자": "형식", "format 사전": "형식", "rng.world 숫자": "rng.world", "rng.life 배열": "rng.life", "rng.world null": "rng.world",
+		"stats.period_act 길이 7": "행동 셈", "stats.period_eff > period_act": "행동 셈",
+		"slimes.eaten 음수": "음수", "lineage.eaten 음수(죽은 개체)": "음수", "lineage.eaten 살아 있는 개체 ≠ 0": "살아 있는",
+		"stats.led_eaten_open > led_eaten": "시작점", "stats.led_eaten_open 음수": "시작점",
+		"stats.eaten_from_id 계통 밖": "eaten_from_id", "stats.eaten_from_id 음수": "eaten_from_id", "stats.eaten_from_id 글자": "eaten_from_id"}
 	var leaked: Array[String] = []
 	for name: String in cases:
 		var d = JSON.parse_string(text)
@@ -1849,6 +1868,13 @@ static func _filled_bytes(n: int, v: int) -> PackedByteArray:
 	b.resize(n)
 	b.fill(v)
 	return b
+
+
+## 실수 배열 사본의 i 번째를 v 로 바꾼 base64(스냅숏 값).
+static func _f64_set(arr: PackedFloat64Array, i: int, v: float) -> String:
+	var a := arr.duplicate()
+	a[i] = v
+	return SimSnapshot.b64(a)
 
 
 ## 길이 n 의 실수 배열(마지막만 NaN).
@@ -2646,6 +2672,8 @@ const V01_FIXTURE_TICKS := 100
 const V01_FIXTURE_GOLDEN: Array[String] = [
 	"6bd975acd1c93346dc0ecc07569cd44c71e2757c37d6d5f1c1454c67e9b0ac2d", "09419527150c16c265a4ec4811f2d10a080fbd154b19bcf259c91548e95dc56d",
 ]
+## 32비트 부호 있는 정수의 최댓값(행동 셈이 이것을 넘어도 넘치지 않는지 — test_snapshot_v02_roundtrip).
+const I32_MAX := 2147483647
 ## v0.1 의 timeseries.csv 22열(순서 그대로 — v0.2 의 열은 이 뒤에 붙음, DESIGN-v0.2 9.3). 금 값의 사영은 이 열만 잇는다.
 const V01_TIMESERIES_COLUMNS: Array[String] = [
 	"tick", "day", "season", "light", "population", "births", "deaths", "mean_gen", "mean_energy",
@@ -2702,12 +2730,13 @@ func test_v01_golden() -> void:
 	done()
 
 
-## 행동 셈을 볼 흐름(DESIGN-v0.2 14.1 검사 기준 2): [덮어쓰기, 씨앗, 예설정, 틱]. 둘째는 판단 3틱(되풀이 틱)·argmax·혼자 분열,
-## 셋째는 채집·저장·농사를 모두 여는 흐름(263틱에 농사).
+## 행동 셈을 볼 흐름(DESIGN-v0.2 14.1 검사 기준 2): [덮어쓰기, 씨앗, 예설정, 틱, 농사까지 가야 하는가]. 둘째는 판단 3틱(되풀이 틱)·
+## argmax·혼자 분열, 셋째는 채집·저장·농사를 모두 여는 흐름(263틱에 농사 — 농사에 닿지 못하면 실패: 문명 행동의 효과 검사가 말없이
+## 빠지지 않게).
 const ACT_FLOWS := [
-	[{}, 3, "default", 600],
-	[{"brain.policy": "argmax", "brain.think_every": 3, "repro.asexual_when_alone": true}, 7, "default", 270],
-	[{}, 2, "demo_fast", 1000],
+	[{}, 3, "default", 600, false],
+	[{"brain.policy": "argmax", "brain.think_every": 3, "repro.asexual_when_alone": true}, 7, "default", 270, false],
+	[{}, 2, "demo_fast", 1000, true],
 ]
 
 
@@ -2741,6 +2770,8 @@ func test_act_counts() -> void:
 		var totals := PackedInt32Array()
 		totals.resize(SimBrain.BASE_OUTPUTS * 2)
 		var think_skips := 0
+		var born_bad := 0
+		var born_first := -1
 		while wd.tick < int(f[3]):
 			# 진행 전 개체 상태(id → [x, y, 먹은 양, 운반])
 			var before := {}
@@ -2754,7 +2785,9 @@ func test_act_counts() -> void:
 				var id := wd.s_id[i]
 				if not before.has(id):
 					if wd.s_last_eff[i] != 0:
-						per_bad.append("갓 태어난 #%d 의 효과 표시 %d" % [id, wd.s_last_eff[i]])
+						born_bad += 1
+						if born_first < 0:
+							born_first = id
 					continue
 				var b: Array = before[id]
 				var a := wd.s_last_action[i]
@@ -2792,13 +2825,16 @@ func test_act_counts() -> void:
 			pop_sum = 0
 		check(rows > 0 and bad.is_empty(), "%s·씨앗 %d %s: 기록 줄 %d개의 Σ act = 진행 전 개체 수 합, eff ≤ act, 돌기·쉬기 eff = act, 발견 전 줍기·심기 효과 0(%s)" % [
 				f[2], f[1], str(f[0]), rows, "; ".join(bad.slice(0, 4))])
+		# 갓 태어난 개체는 아직 행동하지 않았으므로 표시 0. 틀린 개체는 수만 센다(실패 문장이 개체마다 길어지지 않게)
+		if born_bad > 0:
+			per_bad.append("갓 태어난 개체 %d마리의 효과 표시가 0 이 아님(첫 #%d)" % [born_bad, born_first])
 		check(per_bad.is_empty(), "%s·씨앗 %d: 개체마다 효과 표시 = 진행 전후로 다시 센 효과(%s)" % [f[2], f[1], "; ".join(per_bad)])
 		if wd._think_every > 1:
 			check(think_skips > 0, "판단 %d틱 세계: 판단하지 않은 틱의 되풀이도 셈(되풀이 %d번)" % [wd._think_every, think_skips])
-		if wd.stage == SimWorld.STAGE_FARM:
-			check(totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_GATHER] > 0 and totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_DROP] > 0
+		if f[4]:
+			check(wd.stage == SimWorld.STAGE_FARM and totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_GATHER] > 0 and totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_DROP] > 0
 					and totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_PLANT] > 0 and totals[SimBrain.BASE_OUTPUTS + SimBrain.ACT_EAT] > 0,
-					"%s·씨앗 %d(농사): 줍기·내려놓기·심기·먹기 효과가 셈에 잡힘(효과 %s)" % [f[2], f[1], str(totals.slice(SimBrain.BASE_OUTPUTS))])
+					"%s·씨앗 %d·%d틱: 농사에 닿고 줍기·내려놓기·심기·먹기 효과가 셈에 잡힘(단계 %d, 효과 %s)" % [f[2], f[1], f[3], wd.stage, str(totals.slice(SimBrain.BASE_OUTPUTS))])
 	# 손 장면: 효과가 아닌 경우·효과인 경우
 	var wd2 := empty_world()
 	var p := grass_spot(wd2)
@@ -2920,7 +2956,7 @@ func test_snapshot_v02_roundtrip() -> void:
 		if wd.tick == 500 or wd.tick == 510:
 			snaps[wd.tick] = SimSnapshot.to_text(wd)
 	var mid = JSON.parse_string(snaps[510])
-	var mid_act := Marshalls.base64_to_raw(str(mid.stats.get("period_act", ""))).to_int32_array()
+	var mid_act := Marshalls.base64_to_raw(str(mid.stats.get("period_act", ""))).to_int64_array()
 	var mid_sum := 0
 	for v in mid_act:
 		mid_sum += v
@@ -2946,6 +2982,22 @@ func test_snapshot_v02_roundtrip() -> void:
 		check(want.size() > 0 and a == b, "%d틱 → 열기 → 1,000틱의 timeseries.csv(%d열·%d줄) = 곧장 1,000틱" % [t, SimRecorder.TIMESERIES_COLUMNS.size(), want.size()])
 		check(SimRecorder.lineage_csv(w2) == SimRecorder.lineage_csv(wd) and SimSnapshot.to_text(w2) == SimSnapshot.to_text(wd)
 				and w2.history_hash == wd.history_hash, "%d틱 → 열기 → 1,000틱의 lineage.csv(eaten 포함)·전체 상태·해시 = 곧장 1,000틱" % t)
+	# 행동 셈은 64비트(9.1): 한 구간의 개체·틱 합이 2^31 을 넘는 설정(개체 상한 × record.every — 검사를 통과하는 범위 안)에서도
+	# 넘쳐 음수가 되지 않고, 그 세계를 저장·열 수 있음(예전 32비트는 음수 → validate_world 가 "행동 셈이 잘못" 으로 거부)
+	var wb := world({}, 21)
+	wb.step_n(20)
+	wb.period_act.fill(I32_MAX)
+	wb.period_eff.fill(I32_MAX)
+	var pop0 := wb.population()
+	wb.step()
+	var over := 0
+	var all_big := true
+	for a in SimBrain.BASE_OUTPUTS:
+		over += wb.period_act[a] - I32_MAX
+		all_big = all_big and wb.period_act[a] >= I32_MAX and wb.period_eff[a] >= I32_MAX
+	var rb := SimSnapshot.from_text(SimSnapshot.to_text(wb))
+	check(all_big and over == pop0 and rb.world != null and rb.world.period_act == wb.period_act and rb.world.period_eff == wb.period_eff,
+			"행동 셈이 2^31 − 1 을 넘어도(한 틱 더 — 개체 %d) 넘치지 않고 저장·열기 왕복(고름 합 증가 %d, %s)" % [pop0, over, str(rb.error)])
 	done()
 
 
@@ -2973,12 +3025,24 @@ func test_snapshot_v01_fixture() -> void:
 		zeros = zeros and v == 0.0
 	for a in SimBrain.BASE_OUTPUTS:
 		zeros = zeros and w.period_act[a] == 0 and w.period_eff[a] == 0
-	check(str(w.cfg.repro.inherit) == SimWorld.INHERIT_GENOME and zeros and w.s_last_eff.size() == w.population() and w.lin_eaten.size() == w.lin_pa.size()
-			and SimSnapshot.f64_hex(w.led_eaten_open) == str(d.stats.led_eaten) and w.led_eaten > 0.0,
-			"옛 파일에 없는 키: repro.inherit = genome, last_eff·eaten·lineage eaten·행동 셈 = 0, led_eaten_open = 연 틱의 led_eaten(%.1f)" % w.led_eaten)
+	var lc0 := w.lin_pa.size()
+	check(str(w.cfg.repro.inherit) == SimWorld.INHERIT_GENOME and zeros and w.s_last_eff.size() == w.population() and w.lin_eaten.size() == lc0
+			and SimSnapshot.f64_hex(w.led_eaten_open) == str(d.stats.led_eaten) and w.led_eaten > 0.0 and w.eaten_from_id == lc0,
+			"옛 파일에 없는 키: repro.inherit = genome, last_eff·eaten·lineage eaten·행동 셈 = 0, led_eaten_open = 연 틱의 led_eaten(%.1f), eaten_from_id = 연 틱의 계통 수 %d(%d)" % [
+			w.led_eaten, lc0, w.eaten_from_id])
 	w.step_n(300)
 	check(eaten_gap(w) < 1e-9 and w.led_eaten > w.led_eaten_open, "픽스처에서 300틱 이어 돌린 세계의 먹은 양 장부 상대 오차 %s(연 뒤 먹은 양 %.1f)" % [
 			String.num_scientific(eaten_gap(w)), w.led_eaten - w.led_eaten_open])
+	# lineage.csv: 연 틱 전에 태어난 개체(평생 값을 모름 — 0 이거나 연 뒤의 몫)는 eaten 칸이 비고, 연 뒤에 태어난 개체는 값이 있음(검증 지적)
+	var col := SimRecorder.LINEAGE_COLUMNS.find("eaten")
+	var lines := SimRecorder.lineage_csv(w).split("\n", false)
+	var wrong := PackedStringArray()
+	for id in w.lin_pa.size():
+		var cell := lines[id + 1].split(",")[col]
+		if (cell == "") != (id < lc0) and wrong.size() < 3:
+			wrong.append("#%d '%s'" % [id, cell])
+	check(w.lin_pa.size() > lc0 and wrong.is_empty(), "이어 돌린 lineage.csv 의 eaten: 연 틱 전 개체 %d명은 빈 칸, 그 뒤 %d명은 값(%s)" % [
+			lc0, w.lin_pa.size() - lc0, ", ".join(wrong)])
 	var t2 := SimSnapshot.to_text(w)
 	var r2 := SimSnapshot.from_text(t2)
 	check(r2.world != null and SimSnapshot.to_text(r2.world) == t2 and str(JSON.parse_string(t2).config.repro.inherit) == "genome",

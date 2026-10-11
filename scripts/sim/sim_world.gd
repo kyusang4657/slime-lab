@@ -123,13 +123,17 @@ var led_died := 0.0
 ## 먹은 양 장부의 시작점: 이 세계에서 개체별로 세기 시작할 때의 led_eaten(setup = 0, 개체별 셈이 없던 옛 스냅숏을 연 세계 = 연 때의 값).
 ## 죽은 개체 lin_eaten 합 + 살아 있는 s_eaten 합 = led_eaten − led_eaten_open(DESIGN-v0.2 12.2).
 var led_eaten_open := 0.0
+## 평생 먹은 양(s_eaten·lin_eaten)을 태어날 때부터 센 첫 개체 id(DESIGN-v0.2 9.1·12.2). setup 한 세계 = 0. 개체별 셈이 없던 옛 스냅숏을
+## 연 세계 = 열 때의 계통 수 — 그보다 앞 개체의 값은 0(연 틱 전에 죽음)이거나 연 뒤에 먹은 몫뿐이라 lineage.csv 의 eaten 을 비워 둔다.
+var eaten_from_id := 0
 var total_births := 0
 var total_deaths := 0
 var period_births := 0
 var period_deaths := 0
 ## 구간(앞 기록 줄 뒤) 행동별 고른 횟수·효과가 난 횟수(행동 번호 SimBrain.ACT_* 가 첨자, DESIGN-v0.2 11.1). sample() 이 0 으로 되돌림.
-var period_act := PackedInt32Array()
-var period_eff := PackedInt32Array()
+## 64비트 정수: 한 구간의 개체·틱 합은 개체 상한 × record.every 까지 커질 수 있어 32비트로는 넘침(검사를 통과하는 설정에서도 — 9.1).
+var period_act := PackedInt64Array()
+var period_eff := PackedInt64Array()
 var peak_population := 0
 var next_milestone := 0
 var extinct_tick := -1

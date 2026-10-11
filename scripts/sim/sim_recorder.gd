@@ -18,6 +18,7 @@ const ACT_COLUMNS: Array[String] = ["act_forward", "act_left", "act_right", "act
 const EFF_COLUMNS: Array[String] = ["eff_forward", "eff_left", "eff_right", "eff_eat", "eff_rest", "eff_gather", "eff_drop", "eff_plant"]
 const CHRONICLE_COLUMNS: Array[String] = ["tick", "mean_gen", "kind", "actor_id", "text"]
 ## 계통 열: v0.1 11열 뒤에 v0.2 열(DESIGN-v0.2 9.4). eaten = 평생 먹은 에너지(죽은 개체는 죽을 때, 살아 있는 개체는 쓸 때의 값).
+## 개체별 셈이 없던 옛 스냅숏에서 이어 돌린 세계는 그때까지 태어난 개체(id < SimWorld.eaten_from_id)의 eaten 을 비워 둔다(평생 값을 모름).
 const LINEAGE_COLUMNS: Array[String] = ["id", "parent_a", "parent_b", "gen", "birth_tick", "death_tick", "death_cause", "children", "size", "sense", "hue", "eaten"]
 ## CSV 실수 소수 자릿수
 const DECIMALS := 6
@@ -63,14 +64,15 @@ static func chronicle_csv(world: SimWorld) -> String:
 
 static func lineage_csv(world: SimWorld) -> String:
 	var lines := PackedStringArray([",".join(LINEAGE_COLUMNS)])
-	# 평생 먹은 양: 죽은 개체는 lin_eaten, 살아 있는 개체는 지금의 s_eaten
+	# 평생 먹은 양: 죽은 개체는 lin_eaten, 살아 있는 개체는 지금의 s_eaten. 셈을 시작하기 전에 태어난 개체는 빈 칸
 	var eaten := world.lin_eaten.duplicate()
 	for i in world.s_id.size():
 		eaten[world.s_id[i]] = world.s_eaten[i]
 	for id in world.lin_pa.size():
 		lines.append(",".join([str(id), str(world.lin_pa[id]), str(world.lin_pb[id]), str(world.lin_gen[id]),
 				str(world.lin_birth[id]), str(world.lin_death[id]), str(world.lin_cause[id]), str(world.lin_children[id]),
-				fmt(float(world.lin_size[id])), fmt(float(world.lin_sense[id])), fmt(float(world.lin_hue[id])), fmt(eaten[id])]))
+				fmt(float(world.lin_size[id])), fmt(float(world.lin_sense[id])), fmt(float(world.lin_hue[id])),
+				fmt(eaten[id]) if id >= world.eaten_from_id else ""]))
 	return "\n".join(lines) + "\n"
 
 

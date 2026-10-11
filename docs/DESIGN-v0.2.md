@@ -514,7 +514,7 @@ craft 모드는 단계 문·`_check_civ`·구역 저장 셈을 끕니다. 먹이
 이 절의 표는 열·키 이름을 줄임표('…')로 줄이지 않고 모두 백틱으로 적습니다. 0단계부터 `tools/test_design_format.py` 가 이 표들을 코드 상수와 견주기 때문입니다(14.1 범위 9).
 
 ### 9.1 스냅숏 형식 1 의 확장
-`format = 1` 그대로, `app_version = "0.2.0"`. 아래 키를 더합니다. 길이 기호는 DESIGN-v0.1 8.3 과 같고(n·L·C·S), H = `learn.ring_len`, D = `culture.demo_slots`, R = `craft.recipe_slots`, h = `brain.hidden`. 장치가 꺼진 세계의 배열은 길이 0(`""` — 지금의 `mem` 과 같은 방식).
+`format = 1` 그대로, `app_version = "0.2.0"`(릴리스 때 — 아래 구현 메모). 아래 키를 더합니다. 꼴·길이 기호는 DESIGN-v0.1 8.3 과 같고(n·L·C·S — 더한 꼴 `i64` 는 리틀엔디언 부호 있는 64비트 정수), H = `learn.ring_len`, D = `culture.demo_slots`, R = `craft.recipe_slots`, h = `brain.hidden`. 장치가 꺼진 세계의 배열은 길이 0(`""` — 지금의 `mem` 과 같은 방식).
 
 | 절 | 키 | 꼴 | 길이(켰을 때) | 단계 | 옛 파일에 없으면 |
 |---|---|---|---|---|---|
@@ -534,8 +534,9 @@ craft 모드는 단계 문·`_check_civ`·구역 저장 셈을 끕니다. 먹이
 | | `eta`, `dw`, `dw_juv`, `assim` | f32 | L | 1 | 빈 배열 |
 | | `cparent`, `tribe`, `know_birth`, `know_death` | i32, i32, u8, u8 | L | 3 | 빈 배열 |
 | | `best_depth` | u8 | L | 5 | 빈 배열 |
-| `stats` | `period_act`, `period_eff` | i32 | 8 | 0 | 0 8개 |
+| `stats` | `period_act`, `period_eff` | i64 | 8 | 0 | 0 8개 |
 | | `led_eaten_open` | 16진 | | 0 | 연 틱의 `led_eaten`(v0.2 에서 setup 한 세계는 0) |
+| | `eaten_from_id` | 정수 | | 0 | 연 틱의 계통 수 L(v0.2 에서 setup 한 세계는 0) |
 | | `led_learn`, `period_pmax` | 16진 | | 1 | 0 |
 | | `period_learn`, `period_think` | 정수 | | 1 | 0 |
 | | `period_rint` | 16진 | | 2 | 0 |
@@ -554,8 +555,11 @@ craft 모드는 단계 문·`_check_civ`·구역 저장 셈을 끕니다. 먹이
 | | `struct_kind`, `struct_first_t` | u8, i32 | C, C | 6 | 빈 배열 |
 | `rng` | `culture`, `innov` | 64비트 글자 | | 3 | 씨앗 ^ 소금으로 새로 |
 
-- 키 목록 상수: `SLIMES_B64_ADDED`, `LINEAGE_B64_ADDED`, `STATS_B64_ADDED`, `STATS_HEX_ADDED`, `STATS_INT_ADDED`, `CIV_B64_ADDED`, `MAP_B64_ADDED`, `RNG_KEYS_ADDED`(`CIV_INT_ADDED`·sim_snapshot.gd:210 선례). 있으면 꼴·길이를 검사하고, 없으면 위 열대로 채웁니다. 0단계에 생긴 것은 앞의 넷(`tools/test_design_format.py` 가 이 표와 견주고, 새 `*_ADDED` 상수를 그 검사의 목록에 더하게 강제).
-- `period_act`·`period_eff` 는 i32 입니다. 한 구간(앞 기록 줄 뒤)의 개체·틱 합이 2^31 을 넘으면 넘칩니다 — 개체 상한 × `record.every` 가 그만큼인 설정(기본 250 × 20 = 5,000, 범위 끝 100,000 × 1,000,000). 관찰용이라 역사에는 닿지 않습니다.
+- 키 목록 상수: `SLIMES_B64_ADDED`, `LINEAGE_B64_ADDED`, `STATS_B64_ADDED`, `STATS_HEX_ADDED`, `STATS_INT_ADDED`, `CIV_B64_ADDED`, `MAP_B64_ADDED`, `RNG_KEYS_ADDED`(`CIV_INT_ADDED`·sim_snapshot.gd:210 선례). 있으면 꼴·길이·범위를 검사하고, 없으면 위 열대로 채웁니다. 0단계에 생긴 것은 앞의 다섯(`tools/test_design_format.py` 가 이 표와 견주고, 새 `*_ADDED` 상수를 그 검사의 목록에 더하게 강제).
+  - 구현(0단계) 범위 검사: `last_eff` 는 0·1, `eaten`(개체·계통)은 음수가 아님, 살아 있는 개체의 계통 `eaten` 은 0(죽을 때 씀), `period_eff` ≤ `period_act`, 0 ≤ `led_eaten_open` ≤ `led_eaten`, 0 ≤ `eaten_from_id` ≤ L. 어긋난 파일은 열지 않고 오류 문장으로 거부합니다(12.2 장부가 소리 없이 깨지지 않게 — `test_snapshot_corrupt`).
+- `period_act`·`period_eff` 는 i64 입니다. 한 구간(앞 기록 줄 뒤)의 개체·틱 합은 개체 상한 × `record.every` 까지 커지고, 검사를 통과하는 설정(범위 끝 100,000 × 1,000,000)에서는 2^31 을 넘습니다. i32 였을 때는 넘쳐 음수가 되고 그 세계를 저장·열 수 없었습니다(검증 지적 — `test_snapshot_v02_roundtrip` 이 2^31 − 1 을 넘긴 셈을 왕복). 관찰용이라 역사에는 닿지 않습니다. 정적 검사 허용 목록에 `PackedInt64Array`·`to_int64_array` 를 더했습니다(32비트 판과 같은 바이트 다루기).
+- `eaten_from_id`: 평생 먹은 양을 태어날 때부터 센 첫 개체 id 입니다. 개체별 셈이 없던 옛 파일을 연 세계에서는 그때까지 태어난 개체의 값이 0(연 틱 전에 죽음)이거나 연 뒤의 몫뿐이라, `lineage.csv` 의 `eaten` 을 비워 둡니다(9.4). 저장했다 다시 열어도 이어지도록 스냅숏 키로 둡니다.
+- 구현(0단계) 판: `project.godot` 의 판은 릴리스 때 올립니다. 그래서 지금은 v0.2 키가 든 스냅숏·`summary.json` 도 `app_version` 이 "0.1.0" 입니다. 옛 형식과 새 형식은 판 글자가 아니라 **키가 있는지**로 가릅니다(`from_dict` 의 채우기, 분석 도구는 `timeseries_columns`).
 - 길이는 모두 설정에서 계산하므로(유전체 길이 검사 sim_snapshot.gd:351-352 와 같은 방식) 스냅숏이 스스로를 설명합니다.
 - 다시 만드는 것(저장 안 함): 생애 단계, 유효 크기·최대 에너지(유전체 + 나이), 손 물건 쓸모 배수, 거리장, `_lam`, 아는 개체 수 `know_count`(`from_dict` 끝에서 `s_know` 로 다시 셈 — 세계 변수라 `test_snapshot_roundtrip` 의 전체 변수 왕복에 걸림).
 - 계산 자리(`SNAPSHOT_SCRATCH`, run_tests.gd:1126 에 더함): `_pick_total`, `_obs_act`·`_obs_eff`·`_obs_cue`·`_obs_tribe`·`_obs_x`, 돌봄 사본, 모방 비용 모음.
@@ -592,6 +596,8 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 ### 9.4 계통(`lineage.csv`) 새 열
 `eaten`(0 — 평생 먹은 에너지), `eta`(1 — 태어날 때 η 평균), `dw`(1 — 배운 양), `dw_juv`(1 — 어린 동안 배운 양, 3.5), `assim`(1 — 동화 지수, 11.2), `cparent`·`tribe`·`know_birth`·`know_death`(3), `best_depth`(5). 죽은 개체는 죽을 때의 값, 살아 있는 개체는 기록할 때(파일을 쓸 때)의 값입니다. 꺼진 장치의 열은 0(문화 부모는 −1).
 
+- 구현(0단계): 개체별 셈이 없던 옛 스냅숏에서 이어 돌린 실행은 id < `eaten_from_id`(9.1)인 개체의 `eaten` 칸을 **비워 둡니다**(평생 값을 모름 — 0 으로 쓰면 '정말 0 을 먹음'과 가를 수 없어 `analyze.py` 의 `eaten.csv` 앞 세대 중앙값이 0 이 됐음, 검증 지적). `analyze.py` 는 빈 칸을 뺍니다.
+
 ### 9.5 사건·`inventions.csv`·`summary.json`
 | 사건 `kind` | 단계 | 생기는 곳 | `tick`·`mean_gen` 기준(DESIGN-v0.1 8.4) |
 |---|---|---|---|
@@ -608,12 +614,12 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 
 ## 10. 화면
 
-- **정보 창:** 생애 단계 표시(어린·젊은·어른·늙은 + 나이 막대에 단계 경계 눈금). 학습을 켜면 두뇌 열지도에 탭 **타고난 / 배운 / 차이**(출력층 행동 행만 다름), 행동 행 옆에 η. 2단계 ρ 6개, 3단계 시범 기억 목록("먹기 · 점수 0.8"), 앎 비트 칩·문화 부모 #id·표지 색. 4단계 손 물건 성질 막대, 5단계 수첩("돌 + 바위 —갈기→ …"). "고른 행동"에 효과 여부를 함께("줍기 (효과 없음)") — `s_last_eff`.
+- **정보 창:** 생애 단계 표시(어린·젊은·어른·늙은 + 나이 막대에 단계 경계 눈금). 학습을 켜면 두뇌 열지도에 탭 **타고난 / 배운 / 차이**(출력층 행동 행만 다름), 행동 행 옆에 η. 2단계 ρ 6개, 3단계 시범 기억 목록("먹기 · 점수 0.8"), 앎 비트 칩·문화 부모 #id·표지 색. 4단계 손 물건 성질 막대, 5단계 수첩("돌 + 바위 —갈기→ …"). "고른 행동"에 효과 여부를 함께("줍기 (효과 없음)") — `s_last_eff`(자료는 0단계, 화면 표시는 아직 — 아래 '0단계' 줄).
 - **지도:** 색 방식 고르기 — 계통 색(hue, 기본)·생애 단계·배운 양·부족 표지·앎. 몸 자람을 켜면 어린 개체가 작게(이미 `s_size` 로 그림). 4단계 물건은 가장 큰 성질에 따른 절차적 작은 메시(굳 각진 돌·오 그릇·엮 고리·온 털뭉치·생 싹, 날은 뾰족한 조각), 6단계 쉼터 메시. 외부 모델 없음.
-- **그래프:** "행동" 그래프(행동별 고른 비율과 효과 비율 — 0단계), "학습" 그래프(η·배운 양·동화 지수·`pmax_mean`), "앎" 그래프(기술별 아는 개체 수, 기능 깊이). 기존 계단선은 그대로.
+- **그래프:** "행동" 그래프(행동별 고른 비율과 효과 비율 — 자료 `act_*`·`eff_*` 는 0단계, 그래프는 아직), "학습" 그래프(η·배운 양·동화 지수·`pmax_mean`), "앎" 그래프(기술별 아는 개체 수, 기능 깊이). 기존 계단선은 그대로.
 - **연대기:** 새 사건 거르기 묶음(앎·발명). 소리는 기존 3종 가운데에서 고름.
 - **계약:** 화면이 새로 읽는 이름을 먼저 [`SIM-API.md`](SIM-API.md)에 적습니다(`tools/test_repo_rules.py` 가 강제 — :248-299). 지금 SIM-API 의 읽기 전용 표에는 개체 나이·수명·유전체 배열이 없으므로(나이는 `slime_info(id)` 로만), 매 프레임 모든 개체를 칠하는 색 방식은 세계의 질의 함수로 읽습니다.
-  - 0단계: `s_last_eff`.
+  - 0단계: `s_last_eff`(계약만 — 0단계 범위(14.1)에 화면 일은 없어서, 정보 창의 효과 표시와 "행동" 그래프는 아직 만들지 않았습니다. 자료는 시계열 `act_*`·`eff_*` 와 `s_last_eff` 로 준비됨).
   - 1단계: `life_stage_of(i) -> int`(생애 단계 색), `learned_amount_of(i) -> float`(배운 양 색 — 64 행동 가중치의 abs(배운 − 타고난) 평균), `s_w2`(정보 창의 배운·차이 탭), `slime_info(id)` 의 새 키 `life_stage`·`eta`·`eaten`, 정적 `SimBrain.forward_phen`·`SimBrain.LIFE_STAGE_NAMES`·`SimBrain.life_stage`. `world.L` 키 표를 `{n_in, n_hid, n_out, n_mem, n_act, w2_offset, trait_offset, eta_offset, eta_len, genes}` 로 고칩니다.
   - 2단계: `world.L` 에 `rho_offset`·`rho_len`. 3단계: `world.L` 에 `cult_offset`·`cult_len`(ι·τ), `s_know`, `s_tribe`, `know_count`, 시범 목록은 `slime_info(id)` 의 `demos`. 4단계 이후: `s_item`, `tile_item`, `struct_kind`.
   - 구성 요소 계약은 VIEW-API.md, 검사는 `tests/view/*_checks.gd`.
@@ -644,7 +650,8 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 - `repro.inherit = "random"`: 자식이 `SimBrain.random_genome`(rng_life)으로 새 두뇌를 받습니다. 가중치는 균등 뽑기, 크기·감지는 `traits.size_init`·`traits.sense_init`, 색은 random_genome 의 균등 뽑기(같은 씨앗이면 같은 값), η 는 `learn.eta_init`(학습을 켰을 때)입니다. 유전이 없으므로 행동 분포가 무작위 두뇌 수준에 머뭅니다. 예설정 `chance_baseline`.
 - 문명 지표 가운데 act/eff 비율·기능 깊이는 같은 틱의 이 기준과의 차이로 보고합니다 — 첫 세대 폭발(진단 7)을 진보로 읽지 않기 위해서입니다. 앎 유지는 이 기준이 아니라 전달을 끈 반사실 재생과의 차이로 봅니다(관문 B, 14.6).
 - 이 세계가 오래 살아남는지는 0단계 기준선 보고(14.1 범위 10)에서 씨앗마다 생존 틱과 틱 구간별 출생 수를 먼저 잽니다 — 관문 A-1 이 이 세계에 기대기 때문입니다. 멸종하면 그대로 기록합니다.
-  - **잰 값(0단계):** 씨앗 1~12 **모두 멸종**, 469~663틱(중앙값 574). 틱 [200, 600) 출생은 7~43(중앙값 17, 30 이상은 씨앗 2·7 둘). 14.3 의 A-1′ 조건(`population.initial` 400·`plants.initial_fill` 1.0)도 모두 499~730틱에 멸종, 출생 9~50(중앙값 23). 출생이 처음 개체 수에 못 미칩니다(전체 출생 125~198 — 처음 250마리, A-1′ 은 66~115 — 처음 400마리). 그래서 같은 틱의 이 기준과 견줄 수 있는 것은 처음 약 600틱뿐입니다(근거 TEST-REPORT "v0.2 0단계" 절).
+  - **잰 값(0단계):** 씨앗 1~12 **모두 멸종**, 469~663틱(중앙값 574). 틱 [200, 600) 출생은 7~43(중앙값 17, 30 이상은 씨앗 2·7 둘). 전체 출생 125~198 로 처음 개체 수(200마리, 상한 250)에 못 미칩니다. 14.3 의 A-1′ 조건(`population.initial` 400·`population.cap` 400·`plants.initial_fill` 1.0)은 11/12 가 543~704틱에 멸종하고 씨앗 3 만 1,000틱을 넘깁니다(1,028틱 멸종). 출생은 33~81(중앙값 58, 12/12 가 30 이상), 전체 출생 182~254 입니다. 그래서 같은 틱의 이 기준과 견줄 수 있는 것은 처음 약 600틱뿐입니다(근거 TEST-REPORT "v0.2 0단계" 절).
+  - 처음 잰 A-1′ 은 상한을 250 그대로 두어 처음 약 170틱 동안(개체가 250 아래로 내려올 때까지) 번식이 막혔습니다(출생 9~50·전체 66~115 — 학습 없는 세계의 성질이 아니라 상한 탓, 검증 지적). 그래서 A-1′ 에 `population.cap` 400 을 넣었습니다.
 
 ### 11.4 반사실 재생(ablate)
 - 실행기에 `--fork-set=절.키=값`(여러 번)과 `--fork-reset-learned` 를 더합니다. 둘 다 `--resume` 과만 씁니다(지금은 `--resume` 과 `--set` 을 함께 주면 오류, run_experiment.gd:97-98). 스냅숏을 연 뒤 설정 키만 바꿔 이어 돌립니다. 바꾼 설정으로 `SimSnapshot.from_dict` 의 길이 검사를 다시 통과해야 하고(유전체 배치·지도·고리 길이를 바꾸는 키 — 예: `learn.enabled`·`reward.enabled`·`culture.enabled`·`brain.hidden` — 는 종료 코드 2), `summary.json` 에 `forked = {키: 값}`.
@@ -692,7 +699,7 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 
 ### 12.2 장부
 - 에너지: `test_energy_ledger` 를 학습 비용·가르침·모방·돌봄 손실·만들기 비용까지. `led_learn` ≤ `led_spent`, `learn.cost_per_eta = 0` 이면 `led_learn = 0`.
-- 먹은 양: 죽은 개체 `lin_eaten` 합 + 살아 있는 `s_eaten` 합 = `led_eaten` − `led_eaten_open`(상대 오차 1e-9 안 — 더하는 순서만 다르고 모두 float64). `lin_eaten` 은 PackedFloat64Array, 스냅숏 꼴도 f64(9.1)입니다. v0.2 에서 setup 한 세계는 `led_eaten_open` = 0 이고, 옛 파일에서 연 세계는 열 때의 `led_eaten` 이라 그 뒤 먹은 양만 견줍니다.
+- 먹은 양: 죽은 개체 `lin_eaten` 합 + 살아 있는 `s_eaten` 합 = `led_eaten` − `led_eaten_open`(상대 오차 1e-9 안 — 더하는 순서만 다르고 모두 float64). `lin_eaten` 은 PackedFloat64Array, 스냅숏 꼴도 f64(9.1)입니다. v0.2 에서 setup 한 세계는 `led_eaten_open` = 0 이고, 옛 파일에서 연 세계는 열 때의 `led_eaten` 이라 그 뒤 먹은 양만 견줍니다. 그런 세계의 `lineage.csv` 는 연 틱 전에 태어난 개체(id < `eaten_from_id`)의 `eaten` 을 비워 둡니다(9.1·9.4 — 장부는 세계 배열로 보고, 빈 칸은 '모름').
 - 물건(4단계): `items_made`(원재료 + 점액 + 만든 결과) = 땅 + 손 + `items_rotted` + `items_broken` + `items_used`(결합 소모) + `items_to_struct` + `items_lost`(자리 없어 사라짐), 매 틱.
 - 레시피(5단계): 채운 칸 = `recipes_inherited` + `recipes_invented` + `recipes_from_trace` − `recipes_overwritten` − `recipes_died`(같은 레시피의 이득 고침은 세지 않음 — 6.4).
 
@@ -778,7 +785,7 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 9. 문서·계약: SIM-API(`s_last_eff`), CONFIG.md, `test_design_format` 이 이 문서 9.1·9.3·9.4 표도 읽게.
 10. 기준선 보고: 기본·`fast_civ`·`chance_baseline` × 씨앗 1~12 × 100세대의 세대 구간별 act/eff 비율, 그리고 `chance_baseline` 의 씨앗별 생존 틱과 틱 [200, 600) 출생 수(관문 A-1 이 판정 가능한지 미리 봄) → TEST-REPORT 새 절.
 
-**구현(0단계) 메모 — 범위 6·7·10:** 반사실 재생은 11.4 의 '구현(0단계)' 두 줄. 손 사본 검사는 `TestHandCopies`(analyze.py 의 `TIMESERIES_COLUMNS`·`ACT_COLUMNS`·`EFF_COLUMNS`·`LINEAGE_COLUMNS`·`CHRONICLE_COLUMNS`·`STAGE_NAMES_KO`·`STAGES`·`ACTION_NAMES_KO`·`CIV_ACTIONS` 를 sim_recorder.gd·sim_world.gd·sim_brain.gd·info_panel.gd 의 상수와 견줌). `analyze.py report` 는 `actions.csv`(세대 구간 — 행동이 열린 뒤 — 과 처음 1,000틱의 틱 구간), `eaten.csv`(개체 세대별 평생 먹은 양), `summary.csv` 의 `window_births`(틱 [200, 600) 출생)와 관문 A-1 판정 가능성 표를 냅니다. 기준선은 저장소 밖 결과 폴더에서 `analyze.py run --lineage` 로 돌렸고, A-1′ 조건 12개를 더 돌렸습니다(우연 기준이 모두 1,000틱 전에 멸종해서 — 11.3 의 잰 값, 14.3).
+**구현(0단계) 메모 — 범위 6·7·10:** 반사실 재생은 11.4 의 '구현(0단계)' 두 줄. 손 사본 검사는 `TestHandCopies`(analyze.py 의 `TIMESERIES_COLUMNS`·`ACT_COLUMNS`·`EFF_COLUMNS`·`LINEAGE_COLUMNS`·`CHRONICLE_COLUMNS`·`STAGE_NAMES_KO`·`STAGES`·`ACTION_NAMES_KO`·`CIV_ACTIONS` 를 sim_recorder.gd·sim_world.gd·sim_brain.gd·info_panel.gd 의 상수와 견줌). `analyze.py report` 는 `actions.csv`(세대 구간 — 행동이 열린 뒤 — 과 처음 1,000틱의 틱 구간), `eaten.csv`(개체 세대별 평생 먹은 양), `summary.csv` 의 `window_births`(틱 [200, 600) 출생)와 관문 A-1 판정 가능성 표를 냅니다. 기준선은 저장소 밖 결과 폴더에서 `analyze.py run --lineage` 로 돌렸고, A-1′ 조건 12개를 더 돌렸습니다(우연 기준이 모두 1,000틱 전에 멸종해서 — 11.3 의 잰 값, 14.3. 처음엔 상한 250, 검증 뒤 상한 400 으로 다시). 검증 뒤 `report` 에 같은 실행의 첫 구간 → 끝 구간 방향 수 표를 더했습니다(세대 구간 중앙값은 구간마다 씨앗 묶음이 달라서).
 
 **연구 질문:** 지금(세계 공유) 방식에서 문명 행동(줍기·내려놓기·심기)을 고르는 비율과 효과 비율은 열린 뒤 세대에 따라 오르나, 내리나(DESIGN-v0.1 :179)? 우연 기준과 얼마나 다른가?
 
@@ -842,8 +849,8 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 - 보고 꼴: 지표(먹은 양·성숙까지 산 몫·자식 수)마다 세 행(학습, freeze, 학습 끈 우연 기준)과 두 차이 — 학습 − freeze(학습이 한 몫), 학습 − 학습 끔(비용까지 뺀 순 득). 효과 크기는 (학습 − freeze) ÷ freeze 로 적습니다.
 - 두 갈래는 같은 씨앗·같은 출발(A-1 은 틱 0, A-2 는 같은 스냅숏)에서 갈라 돌린 쌍입니다. 행동이 달라지면 `rng_life` 뽑기·출생·먹이 고갈도 갈라지므로, 차이에는 학습 자체뿐 아니라 학습이 바꾼 생태 되먹임도 들어 있습니다.
 - 보조 판: A-1 을 `learn.diag_factor = none` 으로 같은 씨앗에 한 번 더 돌려 보고만 합니다(판정에 쓰지 않음, 3.5).
-- **판정 불가:** 어느 갈래든 1,000틱 전에 멸종하거나 대상 출생이 30 미만인 씨앗이 하나라도 있으면 A-1 은 '판정 불가'입니다. 그때는 `population.initial` 400·`plants.initial_fill` 1.0 으로 올린 A-1′ 를 같은 문턱으로 돌립니다(우연 기준 세계의 생존은 0단계 기준선 보고에서 먼저 봄 — 14.1 범위 10). A-1′ 도 판정 불가면 그대로 보고하고 사용자에게 묻습니다. A-2 의 씨앗 단위 판정 불가는 표에 그대로 적습니다.
-- **0단계 미리 보기(학습 없는 세계):** `chance_baseline` 은 씨앗 1~12 모두 1,000틱 전에 멸종했고(469~663틱), A-1′ 조건도 모두 멸종했습니다(499~730틱, 11.3). 학습·몸 자람을 켠 A-1 세계는 아직 없어 잴 수 없지만, 학습이 생존을 크게 바꾸지 않는다면 A-1 과 A-1′ 은 위 규칙대로 **판정 불가**가 됩니다. 그때는 이 절의 규칙대로 사용자에게 묻습니다(1단계를 시작하기 전에 대상 구간·조건을 다시 정할지 — 0단계에서는 정하지 않음).
+- **판정 불가:** 어느 갈래든 1,000틱 전에 멸종하거나 대상 출생이 30 미만인 씨앗이 하나라도 있으면 A-1 은 '판정 불가'입니다. 그때는 `population.initial` 400·`population.cap` 400·`plants.initial_fill` 1.0 으로 올린 A-1′ 를 같은 문턱으로 돌립니다(우연 기준 세계의 생존은 0단계 기준선 보고에서 먼저 봄 — 14.1 범위 10). 상한도 함께 올립니다 — 상한(기본 250)이 처음 개체 수보다 작으면 개체가 상한 아래로 내려올 때까지 번식이 막힙니다(0단계에서 처음 잰 A-1′ 이 그랬음, 11.3). A-1′ 도 판정 불가면 그대로 보고하고 사용자에게 묻습니다. A-2 의 씨앗 단위 판정 불가는 표에 그대로 적습니다.
+- **0단계 미리 보기(학습 없는 세계):** `chance_baseline` 은 씨앗 1~12 모두 1,000틱 전에 멸종했고(469~663틱), A-1′ 조건은 대상 출생이 12/12 모두 30 이상(33~81)이지만 11/12 가 1,000틱 전에 멸종했습니다(543~704틱, 씨앗 3 만 1,028틱 — 11.3). 학습·몸 자람을 켠 A-1 세계는 아직 없어 잴 수 없지만, 학습이 생존을 크게 바꾸지 않는다면 A-1 과 A-1′ 은 위 규칙대로 **판정 불가**가 됩니다(A-1′ 은 출생이 아니라 1,000틱 생존에서 걸림). 그때는 이 절의 규칙대로 사용자에게 묻습니다(1단계를 시작하기 전에 대상 구간·조건을 다시 정할지 — 0단계에서는 정하지 않음).
 - 고정 문턱(`analyze.py`): `GATE_A_WIN` 10, `GATE_A_RATIO` 1.05, `GATE_A_SECONDARY_WIN` 8, `GATE_A_MIN_BIRTHS` 30(씨앗 12개 기준). 0단계에는 판정 가능성 미리 보기에 쓰는 `GATE_A_BIRTH_WINDOW`(200, 600)·`GATE_A_TICKS`(1,000)·`GATE_A_MIN_BIRTHS` 만 있습니다.
 - 실행 시간: A-1 은 실행당 수 초, A-2 는 씨앗당 1분 안팎 **(추정)**.
 - **A-1 실패**(무작위 두뇌도 못 고침) → 규칙·값 문제입니다. 1주 안에서 `learn.min_surprise`·η 범위·H·λ·`learn.diag_factor` 를 씨앗 1~12 로 고치고, 고친 값의 판정은 새 씨앗 13~24 로 같은 문턱에서 합니다. 그래도 실패면 2단계로 가지 않고 사용자에게 보고합니다(선택지: 2배 비용인 전체 적격 흔적 시험, 또는 신경망 학습 없이 앎 비트 문화만으로 3단계).

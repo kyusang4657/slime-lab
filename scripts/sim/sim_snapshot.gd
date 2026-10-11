@@ -68,7 +68,8 @@ static func to_dict(wd: SimWorld) -> Dictionary:
 		stats = {
 			led_initial = f64_hex(wd.led_initial), led_eaten = f64_hex(wd.led_eaten), led_spent = f64_hex(wd.led_spent),
 			led_repro_loss = f64_hex(wd.led_repro_loss), led_died = f64_hex(wd.led_died),
-			led_eaten_open = f64_hex(wd.led_eaten_open), period_act = b64(wd.period_act), period_eff = b64(wd.period_eff),
+			led_eaten_open = f64_hex(wd.led_eaten_open), eaten_from_id = wd.eaten_from_id,
+			period_act = b64(wd.period_act), period_eff = b64(wd.period_eff),
 			total_births = wd.total_births, total_deaths = wd.total_deaths, period_births = wd.period_births,
 			period_deaths = wd.period_deaths, peak_population = wd.peak_population, next_milestone = wd.next_milestone,
 			extinct_tick = wd.extinct_tick,
@@ -169,12 +170,13 @@ static func from_dict(d: Variant) -> Dictionary:
 	wd.led_spent = hex_f64(st.led_spent)
 	wd.led_repro_loss = hex_f64(st.led_repro_loss)
 	wd.led_died = hex_f64(st.led_died)
-	# 개체별 먹은 양이 없던 옛 파일: 연 틱부터 셈(그때까지 먹은 양은 장부의 시작점으로)
+	# 개체별 먹은 양이 없던 옛 파일: 연 틱부터 셈(그때까지 먹은 양은 장부의 시작점으로, 그때까지 태어난 개체는 평생 값을 모름)
 	wd.led_eaten_open = hex_f64(st.led_eaten_open) if st.has("led_eaten_open") else wd.led_eaten
+	wd.eaten_from_id = int(st.eaten_from_id) if st.has("eaten_from_id") else wd.lin_pa.size()
 	if st.has("period_act"):
-		wd.period_act = _bytes(st, "period_act").to_int32_array()
+		wd.period_act = _bytes(st, "period_act").to_int64_array()
 	if st.has("period_eff"):
-		wd.period_eff = _bytes(st, "period_eff").to_int32_array()
+		wd.period_eff = _bytes(st, "period_eff").to_int64_array()
 	wd.total_births = int(st.total_births)
 	wd.total_deaths = int(st.total_deaths)
 	wd.period_births = int(st.period_births)
@@ -240,12 +242,14 @@ const SLIMES_B64: Array[String] = ["id", "x", "y", "head", "age", "gen", "max_ag
 const LINEAGE_B64: Array[String] = ["pa", "pb", "gen", "birth", "death", "cause", "children", "size", "sense", "hue"]
 const STATS_HEX: Array[String] = ["led_initial", "led_eaten", "led_spent", "led_repro_loss", "led_died"]
 const STATS_INT: Array[String] = ["total_births", "total_deaths", "period_births", "period_deaths", "peak_population", "next_milestone", "extinct_tick"]
-## v0.2 에서 더한 키(DESIGN-v0.2 9.1). 있으면 꼴·길이를 검사하고, 옛 스냅숏에 없으면 9.1 표의 '옛 파일에 없으면' 값으로 채운다:
-## slimes.last_eff·eaten = 0, lineage.eaten = 0, stats.period_act·period_eff = 0 8개, stats.led_eaten_open = 연 틱의 led_eaten.
+## v0.2 에서 더한 키(DESIGN-v0.2 9.1). 있으면 꼴·길이·범위를 검사하고, 옛 스냅숏에 없으면 9.1 표의 '옛 파일에 없으면' 값으로 채운다:
+## slimes.last_eff·eaten = 0, lineage.eaten = 0, stats.period_act·period_eff = 0 8개(i64), stats.led_eaten_open = 연 틱의 led_eaten,
+## stats.eaten_from_id = 연 틱의 계통 수.
 const SLIMES_B64_ADDED: Array[String] = ["last_eff", "eaten"]
 const LINEAGE_B64_ADDED: Array[String] = ["eaten"]
 const STATS_B64_ADDED: Array[String] = ["period_act", "period_eff"]
 const STATS_HEX_ADDED: Array[String] = ["led_eaten_open"]
+const STATS_INT_ADDED: Array[String] = ["eaten_from_id"]
 ## 연대기 사건의 필수 키(글자·수)와, 있으면 수여야 하는 키.
 const EVENT_TEXT: Array[String] = ["kind", "text"]
 const EVENT_NUM: Array[String] = ["tick", "actor", "mean_gen"]
@@ -311,7 +315,7 @@ static func validate(d: Variant) -> String:
 	if e == "":
 		e = _check_keys(d.lineage, "lineage", _present(d.lineage, LINEAGE_B64_ADDED), [], [])
 	if e == "":
-		e = _check_keys(d.stats, "stats", _present(d.stats, STATS_B64_ADDED), [], _present(d.stats, STATS_HEX_ADDED))
+		e = _check_keys(d.stats, "stats", _present(d.stats, STATS_B64_ADDED), _present(d.stats, STATS_INT_ADDED), _present(d.stats, STATS_HEX_ADDED))
 	if e != "":
 		return e
 	for k in CIV_INT_ADDED:
@@ -420,6 +424,10 @@ static func validate_world(wd: SimWorld) -> String:
 			return "개체의 효과 표시(last_eff)가 0·1 이 아닙니다"
 	if not _finite(wd.s_eaten) or not _finite(wd.lin_eaten):
 		return "먹은 양(eaten)에 유한하지 않은 수가 있습니다"
+	for arr in [wd.s_eaten, wd.lin_eaten]:
+		for v in arr:
+			if v < 0.0:
+				return "먹은 양(eaten)에 음수가 있습니다: %s" % str(v)
 	if wd.period_act.size() != SimBrain.BASE_OUTPUTS or wd.period_eff.size() != SimBrain.BASE_OUTPUTS:
 		return "행동 셈(period_act·period_eff)은 행동 %d개의 배열이어야 합니다" % SimBrain.BASE_OUTPUTS
 	for a in SimBrain.BASE_OUTPUTS:
@@ -434,6 +442,10 @@ static func validate_world(wd: SimWorld) -> String:
 			return "계통의 부모 id 가 잘못되었습니다(개체 %d)" % id
 		if wd.lin_cause[id] > SimWorld.CAUSE_OLD:
 			return "계통의 사망 원인이 잘못되었습니다(개체 %d)" % id
+		if wd.lin_cause[id] == SimWorld.CAUSE_ALIVE and wd.lin_eaten[id] != 0.0:
+			return "살아 있는 개체의 계통 먹은 양(lineage.eaten)은 0 이어야 합니다(개체 %d: %s — 죽을 때 씀)" % [id, str(wd.lin_eaten[id])]
+	if wd.eaten_from_id < 0 or wd.eaten_from_id > lc:
+		return "먹은 양을 센 첫 개체 id(eaten_from_id %d)가 계통 0~%d 밖입니다" % [wd.eaten_from_id, lc]
 	var prev := -1
 	for i in n:
 		if wd.s_id[i] <= prev or wd.s_id[i] >= lc:
@@ -460,6 +472,8 @@ static func validate_world(wd: SimWorld) -> String:
 	for v in [wd.led_initial, wd.led_eaten, wd.led_spent, wd.led_repro_loss, wd.led_died, wd.store_drops_total, wd.led_eaten_open]:
 		if not is_finite(v):
 			return "장부 값이 유한한 수가 아닙니다"
+	if wd.led_eaten_open < 0.0 or wd.led_eaten_open > wd.led_eaten:
+		return "먹은 양 장부의 시작점(led_eaten_open %s)이 0~led_eaten(%s) 밖입니다" % [str(wd.led_eaten_open), str(wd.led_eaten)]
 	return ""
 
 
