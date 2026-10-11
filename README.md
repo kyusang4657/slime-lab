@@ -8,6 +8,8 @@ Godot 4.4.1 · GDScript · 오프라인 · 서버·로그인·광고·결제·�
 
 > **v0.2 0단계(관찰 바닥, 규칙 불변) 구현됨 — main, 아직 릴리스·푸시 전.** 행동별 고른 횟수·효과 횟수 열과 평생 먹은 양, v0.1 금 값 검사(새 장치를 끈 세계 = v0.1 역사, 씨앗 1·100세대 `171a3a4f1a5f`), 우연 기준 예설정 `chance_baseline`, 반사실 재생(실행기 `--fork-set`·`analyze.py ablate`), 옛 스냅숏 열기 수리. 이 컨테이너에서 규칙 검사(`--skip-slow`)·파이썬·화면 검사가 통과했고, GitHub Actions 에서는 아직 돌리지 않았습니다. 기준선 결과(우연 기준 세계는 씨앗 1~12 모두 1,000틱 전에 멸종 등)와 검증한 것·못 한 것은 [`docs/TEST-REPORT.md`](docs/TEST-REPORT.md) 맨 앞 절, 설계는 [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md).
 
+> **v0.2 1단계(성장 + 스스로 학습, 세계 규칙은 그대로) — 시뮬레이션·기록·분석 도구 구현됨, 화면은 이어서(main, 푸시 전).** 생애 단계·몸 자람·평생 학습(배운 두뇌·학습률 유전자 η)은 모두 스위치로 기본 끔이라 끈 세계는 v0.1 역사 그대로입니다. 예설정 `learn_basic`, 시계열의 생애·학습 열과 계통의 `eta`·`dw`·`dw_juv`·`assim`, `summary.json` 의 `features`, 이식 시험(실행기 `--fork-reset-learned`·`analyze.py ablate --reset-learned`), 관문 A 도구 `analyze.py gate-a`(판정 조건은 이름 붙은 변형 `A-1`·`A-1-life` — 사용자가 다시 정하는 중이라 **판정 실행은 아직**), 볼드윈 보고서 `analyze.py baldwin`. 기록은 [`docs/TEST-REPORT.md`](docs/TEST-REPORT.md) 맨 앞 절들.
+
 | 바로 해 보기 | |
 | --- | --- |
 | **브라우저 체험판** | **아직 배포되지 않았습니다.** 주소는 https://kyusang4657.github.io/slime-lab/ 로 정해 두었지만 이 저장소의 GitHub Pages 가 꺼져 있어 Actions 의 `pages` 잡이 실패합니다(Pages 단계가 처음 돈 #9 부터 매번). 저장소 소유자가 Settings → Pages → Build and deployment → Source 를 "GitHub Actions" 로 한 번 바꾸고 main 에서 다시 돌려야(새 푸시 또는 Actions 탭 "Run workflow") 올라갑니다 — 그 전에는 이 주소가 열리지 않습니다. 직접 띄우려면 아래 "빌드" 로 만든 `build/web` 을 로컬 웹 서버로 엽니다(PC 브라우저, WebGL2). |
@@ -91,7 +93,7 @@ PowerShell 예시와 자세한 규칙은 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) 
 
 - 수 인자에 글자가 섞이면(`1e5`·`10k`·`abc`) 앞 숫자만 쓰지 않고 인자 오류입니다. 모르는 인자도 오류.
 - `--resume` 은 스냅숏의 설정·씨앗으로 이어 돌립니다(끊김 없이 돌린 것과 같은 해시 — 검사). 그래서 `--seed`·`--preset`·`--set` 과 함께 줄 수 없습니다. 이어 돌린 `summary.json` 은 `preset = ""`·`overrides = {}` 와 실제로 읽은 파일(`resumed_from`)을 적습니다.
-- `--fork-set` 은 반사실 재생입니다: 스냅숏을 연 뒤 설정 키만 바꿔 이어 돌립니다(`summary.json` 의 `forked`). 유전체 배치·기억·지도 크기처럼 저장된 배열의 길이를 바꾸는 키(`brain.hidden` 등)는 거부(2). 씨앗마다 그대로·바꿈 두 갈래를 돌려 견주는 일은 `analyze.py ablate`([`docs/ANALYSIS.md`](docs/ANALYSIS.md)).
+- `--fork-set` 은 반사실 재생입니다: 스냅숏을 연 뒤 설정 키만 바꿔 이어 돌립니다(`summary.json` 의 `forked`). 유전체 배치·기억·지도 크기처럼 저장된 배열의 길이를 바꾸는 키(`brain.hidden` 등)는 거부(2). 씨앗마다 그대로·바꿈 두 갈래를 돌려 견주는 일은 `analyze.py ablate`([`docs/ANALYSIS.md`](docs/ANALYSIS.md)) — `--reset-learned` 를 주면 바꾼 갈래가 이식 시험(`--fork-reset-learned`)입니다. 관문 A 는 `analyze.py gate-a`, 동화·감춤 보고는 `analyze.py baldwin`.
 - 같은 `--out` 을 다시 쓰면 실행기가 쓰는 파일만 지우고 새로 씁니다. 모르는 파일이나 하위 폴더가 하나라도 있으면 아무것도 지우지 않고 거부합니다.
 - 종료 코드: 정상 0, 인자·설정·결과 폴더 오류 2, 파일 쓰기 실패 3(마지막 `RESULT:` 줄 끝에 `write_failed=…`). 자세한 규칙은 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) "헤드리스 실행기를 직접 쓸 때".
 
@@ -136,7 +138,7 @@ tests/ui_driver.gd         실험실 화면 동작 확인·캡처(가상 디스�
 export_presets.cfg         Linux·Windows·웹 내보내기(검사·도구·문서는 실행 파일에서 뺌)
 assets/icon.png            앱 아이콘(슬라임 모델을 렌더링한 것)
 docs/                      설계·계약·분석·검수 문서, docs/media/ 타임랩스(webm·mp4·gif·포스터 jpg), docs/screenshots/v0.1/ 캡처
-tools/analyze.py           오프라인 분석(씨앗 묶음·파라미터 격자·반사실 재생 → 표·보고서·그림)
+tools/analyze.py           오프라인 분석(씨앗 묶음·파라미터 격자·반사실 재생·관문 A·볼드윈 → 표·보고서·그림)
 tools/build_dist.sh        배포판 만들기(세 판 내보내기·고지 파일·zip), fetch_godot.sh(Godot·템플릿 받기 + SHA-512 확인),
                            smoke_run.sh(내보낸 실행 파일 헤드리스 확인), godot_license.gd(GODOT-LICENSE.txt 만들기)
 tools/make_timelapse.sh    타임랩스 프레임을 webm·mp4·gif·포스터로 묶기(ffmpeg), render_sounds.gd(효과음을 WAV 로 — 저장소에는 넣지 않음)
