@@ -423,6 +423,9 @@ GRAPH_CLAIM_LINE = "- 색: A = `ui.graph.series_a`"
 GRAPH_CLAIM_RE = r"색각 이상 (?:시뮬레이션|모의)[^,\n]*?ΔE ≥ ([0-9.]+), 정상 ΔE ≥ ([0-9.]+)"
 CHRONICLE_CLAIM_LINE = "- 띠 색 `ui.chronicle.colors`"
 CHRONICLE_CLAIM_RE = r"색각 이상 모의 모든 쌍 ΔE ≥ ([0-9.]+), 빨강·주황\(위험·경고 뜻 색\)은 정상 시각 ΔE ([0-9.]+)"
+SLIME_CLAIM_LINE = "- 슬라임 색 방식 색:"
+SLIME_CLAIM_RE = (r"색각 이상 모의 모든 쌍 ΔE ≥ ([0-9.]+), 풀밭 색\(`ui\.map\.grass_rich`·`ui\.map\.grass_poor`\)과 색각 이상 ΔE ≥ ([0-9.]+)"
+                  r".*?띠 위 ([0-9]+)점 모두 풀밭 색과 색각 이상 ΔE ≥ ([0-9.]+)")
 
 
 def _srgb(h: str) -> tuple[float, float, float]:
@@ -529,6 +532,41 @@ class TestPaletteClaims(unittest.TestCase):
             self.assertGreaterEqual(round(cvd, 1), cvd_min, f"{a}↔{b} 색각 이상 ΔE {cvd:.2f} < 문서 {cvd_min}")
         wd = delta_e(colors["farm_lost"], colors["extinction"])
         self.assertGreaterEqual(round(wd, 1), warn_danger_min, f"밭 잃음↔멸종 정상 시각 ΔE {wd:.2f} < 문서 {warn_danger_min}")
+
+    def test_slime_mode_colors(self) -> None:
+        """VIEW-API 지도 절(v0.2 1단계 색 방식): 생애 단계 네 색은 모든 쌍 색각 이상 ΔE ≥ X·풀밭 색과 ≥ Y·명도가 어린 → 늙은 차례로
+        줄어듦(차례가 있는 단계), 배운 양 띠는 명도가 0 → 상한 차례로 늘고 띠 위 N점(sRGB 선형 보간 — Color.lerp·Gradient 와 같음)이
+        모두 풀밭 색과 ≥ Z(슬라임이 풀밭 위에서 읽히게)."""
+        pair_min, grass_min, n_pts, ramp_min = self._claims(SLIME_CLAIM_LINE, SLIME_CLAIM_RE)
+        sl = self.ui["slime"]
+        grass = [str(self.ui["map"]["grass_rich"]), str(self.ui["map"]["grass_poor"])]
+        stages = [str(c) for c in sl["life_stage_colors"]]
+        self.assertEqual(len(stages), 4, "생애 단계 색은 넷(어린·젊은·어른·늙은)")
+        for i in range(len(stages)):
+            for j in range(i + 1, len(stages)):
+                cvd = cvd_delta_e(stages[i], stages[j])
+                self.assertGreaterEqual(round(cvd, 1), pair_min, f"생애 단계 {i}↔{j} 색각 이상 ΔE {cvd:.2f} < 문서 {pair_min}")
+            g = min(cvd_delta_e(stages[i], c) for c in grass)
+            self.assertGreaterEqual(round(g, 1), grass_min, f"생애 단계 {i} {stages[i]} ↔ 풀밭 색각 이상 ΔE {g:.2f} < 문서 {grass_min}")
+        ls = [oklch_lc(c)[0] for c in stages]
+        self.assertEqual(ls, sorted(ls, reverse=True), f"생애 단계 색 명도가 어린 → 늙은 차례로 줄지 않음: {ls}")
+        ramp = [str(c) for c in sl["learned_colors"]]
+        lr = [oklch_lc(c)[0] for c in ramp]
+        self.assertEqual(lr, sorted(lr), f"배운 양 띠 명도가 0 → 상한 차례로 늘지 않음: {lr}")
+
+        def lerp_hex(a: str, b: str, t: float) -> str:
+            x, y = _srgb(a), _srgb(b)
+            return "#" + "".join("%02x" % round((x[k] + (y[k] - x[k]) * t) * 255.0) for k in range(3))
+
+        worst = 1e9
+        n = int(n_pts)
+        for k in range(n):
+            f = k / (n - 1) * (len(ramp) - 1)
+            i = min(int(f), len(ramp) - 2)
+            c = lerp_hex(ramp[i], ramp[i + 1], f - i)
+            worst = min(worst, min(cvd_delta_e(c, gc) for gc in grass))
+        self.assertGreaterEqual(round(worst, 1), ramp_min, f"배운 양 띠 위 가장 나쁜 점 ↔ 풀밭 색각 이상 ΔE {worst:.2f} < 문서 {ramp_min}")
+
 
 if __name__ == "__main__":
     unittest.main()

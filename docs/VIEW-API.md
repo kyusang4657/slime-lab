@@ -1,4 +1,4 @@
-# 화면 구성 요소 계약 (v0.1, 3~4단계)
+# 화면 구성 요소 계약 (v0.1, 3~4단계 + v0.2 1단계)
 
 실험실 화면을 구성 요소로 나누고, 각 요소가 서로 기대하는 이름·시그니처·동작을 고정합니다. 각 요소는 이 문서와 [`SIM-API.md`](SIM-API.md)의 질의만 써서 시뮬레이션을 읽습니다.
 
@@ -116,7 +116,7 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 |---|---|
 | `signal slime_requested(id: int)` | 부모·조부모·자식 항목을 눌렀을 때 |
 | `signal follow_toggled(on: bool)` | "따라가기" 단추 |
-| `func show_slime(world: SimWorld, id: int) -> void` | 개체 정보 표시(id, 살아 있음/죽음·원인, 세대, 나이/최대 나이, 에너지 막대, 운반(`carry_text`), 고른 행동(`action_text`), 크기·감지·색 견본, 부모·조부모(2대), 자식 목록 `children_of(id, ui.info.children_max)`, 두뇌 그림) |
+| `func show_slime(world: SimWorld, id: int) -> void` | 개체 정보 표시(id, 살아 있음/죽음·원인, 세대, 나이/최대 나이, 에너지 막대, 운반(`carry_text`), 고른 행동(`action_text`), 크기·감지·색 견본, 부모·조부모(2대), 자식 목록 `children_of(id, ui.info.children_max)`, 두뇌 그림). v0.2 1단계: 나이 막대(생애 단계)·먹은 양·학습 절·두뇌 탭 — 아래 "v0.2 1단계 더함" |
 | `func clear() -> void` | "슬라임을 눌러 고르세요" 안내(`set_empty_text` 로 바꾼 문구가 있으면 그것) |
 | `func refresh() -> void` | 같은 개체의 바뀐 값 다시 표시(LabMain 이 `ui.info.refresh_frames` 마다 부름). 그사이 죽었으면 죽음 표시 |
 | `func current_id() -> int` | 표시 중인 id(-1 없음) |
@@ -199,7 +199,7 @@ SubViewport 안에 하나씩 둡니다(4단계 비교 모드에서 두 개). 자
 - 선택: `map_view.slime_clicked(id)` → `select_slime(id)`(-1·없는 id = 해제; 죽은 개체 id 는 기록으로 표시), `info_panel.slime_requested(id)` → `select_slime(id)` + `map_view.focus_on(id)`, `info_panel.follow_toggled(on)` → `map_view.follow_selected = on`.
 - 단축키는 `_input` 에서 받아 처리하면 소비한다(초점 있는 단추가 스페이스를 먹지 않게). **글자를 적을 수 있는 `LineEdit`·`TextEdit` 에 초점이 있거나 Ctrl·Alt·Meta 가 눌렸으면 무시**(읽기 전용 칸은 해당 없음) — 단 **Ctrl(맥은 Cmd, `is_command_or_control_pressed`)+N·S·O·E** 는 글 칸에 초점이 있어도 패널 단추(`COMMAND_KEYS` → `ParamPanel.control("apply"/"start_compare"/"save"/"open"/"export")`, 보이고 켜진 첫 단추)를 누른 것과 같다(`pressed` — 입력 중인 칸 확정·오래 돈 실험이면 먼저 묻기도 단추와 같음, 자리를 접어 단추가 화면에 없어도 들음, 웹에서 숨긴 "스냅숏 열기" 는 아무것도 안 함, 대화 상자가 떠 있으면 무시). 단추 말풍선에는 단축키("새 실험 (Ctrl+N)" — `Button.shortcut`, 누름은 `_input` 이 먼저 받음). **아무것도 초점이 없을 때 Tab** 은 `first_focus()` 로(엔진은 초점이 없으면 Tab 을 옮기지 않음). 검토 J16: 예전엔 단추가 모두 초점을 받지 않고 Ctrl 조합을 버려 마우스 없이 새 실험·저장·열기·내보내기를 할 수 없었음(검사 `lab_checks._command_keys`, 패널 단추들의 초점은 ParamPanel 몫). 1~7 은 숫자판 키도. F 는 `map_view.follow_selected` 를 뒤집고 알림, 정보 창의 따라가기 단추도 `info_panel.set_follow()` 로 맞춘다(통합 때 연결). 단 고른 개체가 죽었으면(기록만 — 지도에 없음) 켜지 않고 알림 `FOLLOW_DEAD_TEXT` "죽은 개체는 따라갈 수 없습니다"(정보 창 따라가기 단추가 꺼지는 규칙과 같게, 켜진 따라가기를 끄는 것은 됨 — 검토 I41: 예전엔 "따라가기 켬" 이라 알리고 실제로는 따라가지 않았으며, 켜진 채 남아 같은 지도에서 다음에 고른 개체를 바로 따라갔음, 검사 `lab_checks._follow_dead`).
 - **글 칸 초점 풀기(4단계 검토 반영):** 글 칸에 초점이 있을 때 그 칸 밖(지도·단추·다른 패널)을 마우스(왼쪽·오른쪽·가운데 단추, 휠은 아님)로 누르면 `_input` 이 초점을 푼다(씨앗 칸도 글 칸 — 4단계 검토 고침 g4 뒤 패널에 SpinBox 는 없음. 초점이 빠지면 패널이 그 칸을 확정하고, 같은 누름의 새 실험·나란히 시작은 그 확정의 해석 오류가 있으면 시작하지 않음 — ParamPanel "검사"). 지도는 초점을 받지 않아 엔진이 초점을 풀지 않으므로, 고치기 전에는 씨앗을 적고 새 실험·지도를 눌러도 단축키가 꺼진 채 스페이스·숫자가 칸에 들어가 다음 실험에 확정됐다("42" → "42 4"). 검사 `lab_checks._focus_release`(실제 마우스·키 입력).
-- 날 표시에 하루 틱 수가 필요해 `world.cfg.time.day_ticks` 를 읽기만 한다(SIM-API 의 읽기 전용 `cfg` 항목). InfoPanel 도 `cfg.brain.weight_clamp` 만 읽는다. `tools/test_repo_rules.py` 가 화면이 쓰는 세계 멤버가 모두 SIM-API 에 있는지 검사한다.
+- 날 표시에 하루 틱 수가 필요해 `world.cfg.time.day_ticks` 를 읽기만 한다(SIM-API 의 읽기 전용 `cfg` 항목). InfoPanel 은 `cfg.brain.weight_clamp` 와(v0.2 1단계) 나이 막대 눈금의 `cfg.repro.maturity`·`cfg.life.adult_frac`·`cfg.life.old_frac` 만 읽는다. `tools/test_repo_rules.py` 가 화면이 쓰는 세계 멤버가 모두 SIM-API 에 있는지 검사한다.
 - 창 크기·화면 배율은 아래 "화면 크기·배율" 절(헤드리스에서는 건너뜀). 창 제목 = "프로젝트 이름 — 예설정 · 씨앗 N"(씨앗은 `str()` — 엔진 4.4 의 `"%d"` 는 INT64_MIN 에 부호를 두 번 붙여 "--9223…" 이었음, 검토 J31: 실험 이름·기본 내보내기 폴더·내려받기 이름도).
 - 스냅숏을 열면 알림: "스냅숏을 열었습니다: 파일 — 그래프·시계열 기록은 틱 T 부터"(스냅숏에는 세계와 연대기만 있어 그래프·내보낸 timeseries 가 연 틱부터 — 검토 J19), 백업에서 살렸으면 경고 "원본이 깨져 백업에서 열었습니다(원본이 깨진 이유) — …"(검토 I04: 예전엔 이유가 비었음).
 
@@ -374,7 +374,7 @@ func run(t) -> void:
 - `func bind_lab(lab)` — `experiments_changed` → 지우고 `rows()` 를 처음부터, `recorded(index, row)` → 덧붙임, `cursor_tick_requested(tick)` → 세로 표시선.
 - 그래프 3개(가로로 나란히, 각 제목·축·범례):
   1. **개체 수**: `population` 선(+ `births`·`deaths` 얇은 선, 켜고 끔).
-  2. **평균 특성**: 고르기(OptionButton) — `mean_size`·`mean_sense`·`mean_energy`·`mean_age`·`mean_gen`.
+  2. **평균 특성**: 고르기(OptionButton) — `mean_size`·`mean_sense`·`mean_energy`·`mean_age`·`mean_gen`, v0.2 1단계에 `mean_size_eff`(실제 크기)·`eta_mean`(학습률)·`dw_mean`(배운 양)·`pmax_mean`(행동 쏠림 — 학습 셋은 평생 학습을 켠 실험이 있을 때만, 아래 "v0.2 1단계 더함").
   3. **기술 단계**: `civ_stage` 계단선(세로축에 `SimWorld.STAGE_NAMES`) + `storehouses`·`farms` 수(보조 축), 발견 시점 세로선과 이름.
 - 가로축: 틱 ↔ 평균 세대(한 단추로 셋 모두). 비교 모드: A 실선(`ui.graph.series_a`), B 점선(`series_b`), 범례에 `display_name()`.
 - 마우스를 올리면 세로선 + 가장 가까운 기록 줄의 값(A·B 함께).
@@ -491,3 +491,64 @@ func run(t) -> void:
 - **데스크톱**: 창 모드이고 창이 처음 크기(project.godot 1600×900)면 `plan_window` 대로 최소 창 크기·창 크기를 정하고, 몇 프레임 뒤 위치를 둔다(창 관리자가 크기 바꾸기를 끝낸 뒤 — 장식까지 넣은 창 왼쪽 위가 작업 영역 밖이면 1px 옆을 거쳐 한 번 더: openbox 에서 첫 이동이 무시돼 제목 표시줄이 화면 위에 남았음). 창 장식은 창 관리자가 알려 주면 그 값, 아직 모르면 `ui.lab.window_frame_px`[왼쪽, 위, 오른쪽, 아래] × 배율. 최대화·전체 화면이면 창은 그대로 두고 배율만, 창이 처음 크기가 아니면(명령줄 `--resolution` — 캡처·검사 — 이나 창 관리자가 이미 정한 크기; 엔진 인자는 `OS.get_cmdline_args` 에 오지 않아 크기로 가림) 크기는 그대로 두고 배율만 맞추고 장식까지 넣은 창 왼쪽 위가 작업 영역 밖이면 그만큼 안으로만 옮긴다.
 - **웹**: 배율 = `devicePixelRatio`(`JavaScriptBridge`, 못 읽으면 `screen_get_scale`), 브라우저 창이 바뀔 때마다(`size_changed`) 다시 — 브라우저 확대·축소도 따라감. 폭 1280 보다 좁은 창은 배율을 1 아래로 줄여 잘리지 않게(1024×700 → 0.8, `ui_scale_min` 0.5 아래로는 안 줄임).
 - **검사** `lab_checks._screen_fit`: OS 배율·창에 맞는 배율·첫 창(768 높이 노트북은 배율 1 그대로 작업 영역 안·제목 표시줄 화면 안, 1920×1080 150%, 2560×1440 가운데, 둘째 모니터, 레티나, 아주 작은 화면)을 OS 없이 확인하고, 실제 배치를 배율 2 최소 창·웹 1366×768 dpr 2·웹 1024×700·768 높이 노트북 창에서 재 모두 창 안(`_fits_window`·`_fits_height`). lab_checks·integration4_checks 는 새 최소 창(1280×640)에서 돌고, 비교 배치는 1280×720 에서도 잰다. 실제 화면 확인(검사 밖): xvfb 1366×768 + openbox(아래 작업 표시줄 40px 흉내)에서 창 1364×703·제목 표시줄 화면 안·모든 패널이 작업 영역 안, 창 관리자 없는 1366×768 에서 1350×728, 2732×1536 + `ui_scale` 2 에서 논리 1365×735·실제 마우스로 지도 개체 고르기, 고친 웹판을 Chromium 1366×768 dpr 2(UI 가 CSS 크기 그대로)·1024×700(배율 0.8, 정보 창·배속 표시 보임)·1280×600 dpr 1.5 에서 봄. Windows 150%·macOS 레티나 실기는 미검증.
+
+## v0.2 1단계 더함 — 생애 단계·몸 자람·평생 학습 보기 (InfoPanel·BrainView·MapView·LabMain·GraphPanel)
+
+[`DESIGN-v0.2.md`](DESIGN-v0.2.md) 10절의 1단계 목록. 시뮬레이션은 [`SIM-API.md`](SIM-API.md) 의 1단계 이름(`life_stage_of`·`learned_amount_of`·`assim_of`·`s_w2`·`eaten_from_id`, `slime_info` 의 `life_stage`·`eta`·`eaten`, `SimBrain.LIFE_*`·`LIFE_STAGE_NAMES`·`life_stage`, `world.L` 의 `n_act`·`eta_offset`·`eta_len`)만 읽는다. **학습·몸 자람을 끈 세계는 예전 그림 그대로**(두뇌 탭·학습 절·학습률 열 없음, 지도 색 = 계통 색) — 생애 단계는 끈 세계에도 있어(시계열 `stage_*` 처럼 늘 계산) 나이 막대에 나온다.
+
+**InfoPanel**
+
+| 멤버 | 뜻 |
+|---|---|
+| `func set_brain_mode(m: int) -> void` · `func brain_mode() -> int` | 두뇌 탭 `BrainView.MODE_*`(타고난·배운·차이). 고른 탭은 개체를 바꿔도 유지, 배운 두뇌가 없으면(학습 끔·기록만 남은 개체) 그림은 타고난 |
+| `func brain_view() -> BrainView` · `func brain_tabs_visible() -> bool` | 두뇌 열지도, 탭 단추 줄(`BrainTabs`, 단추 메타 `META_BRAIN_MODE`)이 보이나(학습을 켠 세계에서 두뇌를 그릴 때만) |
+| `static stage_bounds(max_age, maturity, adult_frac, old_frac) -> PackedInt32Array` | 단계가 바뀌는 나이 [성숙, 어른 시작, 늙음 시작] — `SimBrain.life_stage` 와 같은 판정(어린 먼저, 그다음 늙은 → 어른 → 젊은)이라 어른·늙음 시작 = max(성숙, 몫 × 수명 이상인 첫 정수 나이), 어른 시작 ≤ 늙음 시작(빈 구간은 같은 값) |
+| `static age_text(age, max_age, stage) -> String` · `static stage_ranges_text(bounds, max_age) -> String` | 나이 막대 글 "54 / 209틱 · 젊은", 말풍선 "생애 단계(나이, 틱): 어린 0~29 · 젊은 30~83 · …"(빈 구간은 뺌) |
+| `static eaten_text(d, eaten_from_id) -> String` · `EATEN_UNKNOWN` · `UNKNOWN_TEXT` | 먹은 양 "에너지 14.4"(살아 있으면 지금까지, 죽었으면 평생), 옛 스냅숏을 연 세계에서 그 전에 태어난 개체(id < `eaten_from_id`)는 "모름(옛 스냅숏 전 출생)". 모르는 학습 값은 "—" |
+
+- **나이 막대**(현재 상태 "나이" 줄, `AgeBar` — ProgressBar): 채움 = 나이 ÷ 자기 수명, 채움 색 = 생애 단계 색(`ui.slime.life_stage_colors` 를 `FILL_DARKEN` 만큼 어둡게 — 지도 색 방식과 같은 색), 단계 경계 눈금 = `stage_bounds` ÷ 수명(0 과 수명 끝은 뺌)을 위·아래 가장자리의 짧은 금(`STAGE_TICK_LEN` × 높이 — 가운데 글을 가로질러 '|' 로 읽히지 않게)으로. 높이 `ui.info.age_bar_height`(16 = 글 줄 높이 — 줄이 높아지지 않게).
+- **먹은 양** 줄은 현재 상태(살아 있음)와 죽음 절(평생) 둘 다. 줄을 하나 더한 만큼 **위치·방향은 한 줄**("위치·방향  (41, 4)  서 ←" — `_v_head` 는 따로 둔 Label 이라 화살표 갱신·검사는 그대로). 1600×900 에서 보통 개체가 스크롤 없이 두뇌 범례까지 보이는 여유(V07)는 예전과 같은 9px.
+- **학습 절**(학습을 켠 세계만, 특성 아래): 학습률(`slime_info` 의 `eta` — 행동 8개 평균, 태어날 때 정해짐), 배운 양(`learned_amount_of`), 동화 지수(`assim_of` — 고리 칸 × 2 × 행동 × 은닉 곱이라 고른 개체 하나에만, `refresh` 마다). 기록만 남은 개체는 학습률만(계통 기록), 지켜보던 개체가 죽으면 마지막 값을 남긴다.
+- **두뇌 탭**(학습을 켠 세계만, "두뇌 가중치" 제목 아래): 단추 셋(`InfoSmallButton`, `ButtonGroup`, 키보드 초점 받음). `refresh` 는 배운 두뇌(`s_w2` 의 그 개체분 — `slice`)가 바뀌었을 때만 열지도에 다시 넣는다. 지켜보던 개체가 죽으면 마지막 배운 두뇌·탭을 남긴다("죽기 직전의 두뇌").
+
+**BrainView**
+
+| 멤버 | 뜻 |
+|---|---|
+| `func set_learned(w2: PackedFloat64Array) -> void` · `func has_learned() -> bool` | 배운 두뇌 = 행동 행 n_act × 은닉(`s_w2` 의 한 개체분, 같은 배치). 빈 배열 = 학습 끔. 길이가 구조와 맞지 않으면 쓰지 않음 |
+| `func set_mode(m: int)` · `func mode() -> int` · `MODE_INNATE`·`MODE_LEARNED`·`MODE_DIFF`·`MODE_NAMES` | 탭: 타고난 = 유전체 그대로, 배운 = 행동 행만 배운 두뇌(입력층 W1·기억 출력 행은 타고난), 차이 = 배운 − 타고난(행동 행만 — 배우지 않는 W1·기억 행은 0, W1 덩어리 가운데에 "입력층은 배우지 않음"). 배운 두뇌가 없으면 타고난만 |
+| `func weight_of(block, row, col) -> float` | 지금 탭의 칸 값(그리기·풍선·검사가 같은 함수) |
+| `func color_scale() -> float` · `func diff_scale() -> float` · `static diff_scale_for(max_abs) -> float` · `var last_scale` | 색 상한: 타고난·배운 = `weight_clamp`, 차이 = 가장 큰 abs(배운 − 타고난) 이상의 1·2·5 × 10^k(아래는 `ui.info.heatmap_diff_min` 0.01 — 배운 양은 ±4 보다 훨씬 작아 같은 눈금이면 보이지 않음). 범례 양 끝 글도 이 상한 |
+| `func has_eta()` · `func eta_of(q) -> float` · `static eta_extra(L) -> float` · `BLOCK_ETA` | 학습률 열: 행동 행 오른쪽에 그 행의 학습률 유전자(`L.eta_offset + q`, 소수 셋째 자리), 머리 "학습률"(η 는 나눔고딕에 없어 웹에서 네모 — 낱말로). 폭 = 틈 + `ui.info.heatmap_eta_width`. `size_for`·`cell_width_for` 가 이 폭을 더해 창 안에 맞춘다(학습 끔이면 0 — 크기 그대로). `cell_at` 은 이 열에서 `{block = "eta", row = q, weight = η}` |
+
+- 풍선 도움말: 학습을 켠 세계의 행동 행 칸은 "타고난 +0.123 · 배운 +0.140 / 차이 +0.0170", 기억 출력 행은 "(기억 출력은 배우지 않음)".
+
+**MapView**
+
+| 멤버 | 뜻 |
+|---|---|
+| `func set_color_mode(m: int) -> void` · `var color_mode` · `COLOR_LINEAGE`·`COLOR_LIFE_STAGE`·`COLOR_LEARNED`·`COLOR_MODE_NAMES` | 슬라임 색 방식: 계통 색(기본, 예전 그대로 — `Color.from_hsv(lin_hue, ui.slime.saturation, ui.slime.value)`) · 생애 단계(`ui.slime.life_stage_colors[life_stage_of(i)]`) · 배운 양(`learned_color(learned_amount_of(i))`). 밤 밝힘 배수는 셋 모두 곱함. 세계를 다시 붙여도 방식은 그대로, 모르는 번호는 계통 색 |
+| `func learned_color(v) -> Color` · `func life_stage_color(stage) -> Color` | 배운 양 색: `ui.slime.learned_colors` 띠(sRGB 선형 보간)를 0 ~ `ui.slime.learned_full`(0.08 — learn_basic 300~1,800틱 개체 평균 약 0.03, 90% 약 0.06~0.07, 가장 큰 값 약 0.14) 에 고르게, 넘으면 끝 색 |
+| `func slime_instance_color(k) -> Color` | (검사용) k 번째 슬라임 인스턴스의 칠한 색 |
+
+- 배운 양은 개체마다 행동 × 은닉 번 빼기(약 7µs — 250마리면 약 2ms)라 프레임마다 다시 재지 않고 `ui.map.learned_refresh_ticks`(10)틱마다(세계가 되돌아가면 바로) 잰 값을 id 로 맞춘다(그사이 태어난 개체는 0 — 태어날 때 배운 두뇌 = 타고난). 배운 양 색 슬라임 갱신 평균 약 0.7ms/프레임(216마리, 헤드리스 — `map_checks` 가 출력).
+- 몸 자람을 켜면 그린 몸 = 유효 크기 `s_size` × 표시 배율(예전부터 `s_size` 로 그림 — 어린 개체가 작게, 검사).
+- 슬라임 색 방식 색: 생애 단계 `ui.slime.life_stage_colors` 는 색각 이상 모의 모든 쌍 ΔE ≥ 18.3, 풀밭 색(`ui.map.grass_rich`·`ui.map.grass_poor`)과 색각 이상 ΔE ≥ 24.9, OKLCH 명도가 어린 → 늙은 차례로 줄어듦(흰 → 노랑 → 하늘 → 보라). 배운 양 띠 `ui.slime.learned_colors`(남보라 → 파랑 → 노랑)는 명도가 0 → 상한 차례로 늘고, 띠 위 21점 모두 풀밭 색과 색각 이상 ΔE ≥ 15.4(초록을 지나지 않음 — 처음 고른 가운데 색 자홍 `#c4417f` 은 풀밭과 7.0 이라 바꿈). `tools/test_repo_rules.py` 가 이 문장의 수를 읽어 ui.json 의 색에서 다시 잰다.
+
+**LabMain**
+
+| 멤버 | 뜻 |
+|---|---|
+| `func set_map_color(mode: int) -> void` · `func map_color() -> int` | 모든 지도(비교 모드 둘 다)의 색 방식 `MapView.COLOR_*`. 학습을 켠 실험이 없으면 배운 양 → 계통 색 |
+
+- 지도 오른쪽 아래(접기 단추가 있으면 그 위, `ui.lab.overlay_stack_gap`)에 상자 `MapColor`(지도 표지 모양): "색 [계통 색 ▾]"(`MapColorOption`, 초점 없음) + 계통 색이 아니면 범례 줄 `MapLegend` — 생애 단계 = 단계마다 색 칸(`ui.lab.legend_swatch_px`) + 이름, 배운 양 = "0 [색 띠(`ui.lab.legend_gradient_px`)] 0.08+". '배운 양' 항목은 학습을 켠 실험이 있을 때만 켜짐(`_adopt` 가 실험을 바꿀 때마다 맞춤 — 학습 끈 실험만 남으면 계통 색으로). 조작 도움말(왼쪽 아래)은 상자·접기 단추 가운데 넓은 쪽의 왼쪽까지(여백 `lab.map_overlay_margin`).
+
+**GraphPanel**
+
+- 평균 특성 고르기 뒤에 넷: 실제 크기(`mean_size_eff` — 몸 자람을 켜면 어린 개체가 작아 유전자 크기 `mean_size` 보다 작음), 학습률(`eta_mean`), 배운 양(`dw_mean`), 행동 쏠림(`pmax_mean` — 판단마다 가장 큰 행동 확률의 구간 평균, 1 에 가까울수록 정책이 굳음). 열 번호 `C_SIZE_EFF`·`C_ETA`·`C_DW`·`C_PMAX`, 모두 평균 열(개체가 없으면 끊김). 학습 셋(`LEARN_TRAIT_COLS`)은 평생 학습을 켠 실험이 있을 때만 고를 수 있고(`any_learning`, `trait_enabled(i)`), 학습 끈 실험만 남으면 '크기' 로 돌아감. 항목마다 말풍선(`TRAIT_TIPS`). DESIGN-v0.2 10절의 "학습" 그래프는 따로 두지 않았다(아래 자리 그래프 칸 셋 그대로 — 1280 창 폭, 동화 지수는 시계열 열이 아니라 계통 `assim` 뿐이라 정보 창에 개체별로).
+
+**ui.json 키(1단계):** `info` — `heatmap_eta_width`·`heatmap_diff_min`·`age_bar_height`. `slime` — `life_stage_colors`(4)·`learned_colors`(3)·`learned_full`. `map` — `learned_refresh_ticks`. `lab` — `overlay_stack_gap`·`legend_swatch_px`·`legend_gradient_px`.
+
+**캡처:** `tests/ui_driver.gd` ⑦ `lab-07-learn` — learn_basic·씨앗 1 을 600틱, 지도 색 생애 단계 + 범례, 배운 양이 가장 큰 개체를 골라 두뇌 탭 차이(그 뒤 배운 양 범례도 확인하고 계통 색으로 되돌림). `tests/info_capture.gd --extra` 에 `info-learn.png`(배운 탭)·`info-learn-diff.png`(차이 탭).
+
+**검사:** `info_checks._stage1`(생애 단계 경계 표 8경우 × 나이 0~수명 = `SimBrain.life_stage`, 나이 막대 글·눈금·채움 색, 먹은 양·모름, 학습 끈 세계 = 예전(탭·학습 절·학습률 열 없음, 칸 = 유전체, 크기 그대로), 차이 탭 상한 9가지, 학습 켠 세계(learn_basic + 기억 2)의 탭 셋 칸 값·다른 칸 있음·상한·범례·학습률 열·탭 유지·refresh·세계 그대로·죽음·기록만 남은 개체), `map_checks._check_stage1`(몸 자람 세계의 그린 몸 = `s_size`, 색 방식 셋, 다시 재는 간격, 세계 = 헤드리스, 시간), `lab_checks._map_color`(고르기·범례·학습 끈 실험·비교 모드·1280×720·창 폭 58가지 × 자리 빔·참의 겹침과 여백), `graph_checks._learn_trait_checks`, `param_checks._stage1`(고급 설정의 1단계 키 17개·learn_basic·체크 상자로 켠 새 실험·관계 오류). 각 검사는 구현을 잠시 깨뜨려 실패함을 확인했다(TEST-REPORT "v0.2 1단계 — 화면" 절).
