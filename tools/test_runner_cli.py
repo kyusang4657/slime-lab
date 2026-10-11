@@ -19,9 +19,13 @@ godot 은 환경 변수 GODOT 또는 PATH 의 godot(tools/test_analyze.py 와 �
   돌린 것과 같은 해시, summary.json 의 forked. 저장된 배열 길이를 바꾸는 키(brain.hidden 등)·모르는 키·범위 밖 값은 2(앞 결과 그대로),
   --resume 없이 주면 인자 오류. analyze.py ablate 를 실제 실행기로: 그대로 갈래 = 끊김 없이 돌린 것, 같은 명령이면 같은 표.
 - summary.json 의 timeseries_columns·lineage_columns = CSV 머리 = analyze.py 손 사본(DESIGN-v0.2 9.5·14.1 범위 7).
+- --fork-reset-learned(이식 시험, DESIGN-v0.2 11.2·14.2 검사 기준 14): 되돌린 뒤 살아 있는 모든 개체의 배운 두뇌(스냅숏 slimes.w2) = 유전체 W2
+  행동 행, 기준선 0, 고리 빔, 어린 동안 배운 양 그대로. learn.freeze 와 함께면 그 뒤에도 그대로. --resume 없이 주면 인자 오류, 학습 끈 스냅숏은 2
+  (앞 결과 그대로). summary.json 의 reset_learned·features. analyze.py ablate --reset-learned 를 실제 실행기로.
 """
 from __future__ import annotations
 
+import base64
 import contextlib
 import csv
 import io
@@ -35,6 +39,8 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import analyze  # noqa: E402
@@ -80,6 +86,11 @@ def summary(d: Path) -> dict:
 def data_rows(csv_path: Path) -> list[list[str]]:
     with csv_path.open(encoding="utf-8-sig", newline="") as f:
         return list(csv.reader(f))[1:]
+
+
+def dict_rows(csv_path: Path) -> list[dict]:
+    with csv_path.open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
 
 
 def listing(d: Path) -> dict[str, bytes]:
@@ -351,6 +362,128 @@ class TestAblateReal(RunnerCase):
             self.assertEqual(analyze.main(cmd), 0)
         self.assertNotIn("ok ", buf.getvalue().split("②")[1].split("표:")[0], "다시 돌리면 실행 없이(모두 건너뜀)")
         self.assertEqual((out / "ablate.md").read_bytes(), table, "같은 명령이면 같은 표")
+
+
+# ── 이식 시험(--fork-reset-learned) ──
+
+SIM_BRAIN_GD = (REPO / "scripts/sim/sim_brain.gd").read_text(encoding="utf-8")
+## SimBrain 의 구조 수(유전체 배치 — DESIGN-v0.2 3.7): 입력·출력(행동) 수, 특성 유전자 수
+BRAIN = {k: int(re.search(rf"^const {k} := (\d+)$", SIM_BRAIN_GD, re.M).group(1)) for k in ("BASE_INPUTS", "BASE_OUTPUTS", "TRAIT_GENES")}
+
+
+def b64(slimes: dict, key: str, dtype: str) -> np.ndarray:
+    """스냅숏의 base64 배열(리틀엔디언 — DESIGN-v0.1 8.3)."""
+    return np.frombuffer(base64.b64decode(slimes[key]), dtype=dtype)
+
+
+def learned_state(snap: Path) -> dict:
+    """스냅숏의 살아 있는 개체마다 배운 두뇌·유전체 W2 행동 행(float32 → float64)·기준선·고리·어린 동안 배운 양."""
+    d = json.loads(snap.read_text(encoding="utf-8"))
+    sl, br = d["slimes"], d["config"]["brain"]
+    n, hid, mem = int(sl["count"]), int(br["hidden"]), int(br["memory_units"])
+    n_in, n_out = BRAIN["BASE_INPUTS"] + mem, BRAIN["BASE_OUTPUTS"] + mem
+    genes = hid * n_in + n_out * hid + BRAIN["TRAIT_GENES"] + (BRAIN["BASE_OUTPUTS"] if d["config"]["learn"]["enabled"] else 0)
+    g = b64(sl, "genome", "<f4").reshape(n, genes)
+    w2n = BRAIN["BASE_OUTPUTS"] * hid
+    return {"n": n, "tick": int(d["tick"]), "w2": b64(sl, "w2", "<f8").reshape(n, w2n),
+            "innate": g[:, hid * n_in: hid * n_in + w2n].astype(np.float64), "rbar": b64(sl, "rbar", "<f8"),
+            "ring_a": b64(sl, "ring_a", "<i4"), "ring_pos": b64(sl, "ring_pos", "<i4"), "ring_e": b64(sl, "ring_e", "<f4"),
+            "ring_h": b64(sl, "ring_h", "<f4"), "dw_juv": b64(sl, "dw_juv", "<f8"), "id": b64(sl, "id", "<i4")}
+
+
+class TestResetLearned(RunnerCase):
+    """원본: learn_basic(학습·몸 자람) 씨앗 3, 120틱, 60틱마다 스냅숏. 학습 끈 원본: 기본 씨앗 3, 20틱."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.orig, cls.off = cls.tmp / "learn_orig", cls.tmp / "off_orig"
+        with ThreadPoolExecutor(2) as pool:
+            cls.cps = list(pool.map(lambda a: run_runner(*a), [
+                ("--seed=3", "--preset=learn_basic", "--max-ticks=120", "--snapshot-every=60", f"--out={cls.orig}", "--quiet"),
+                ("--seed=3", "--max-ticks=20", f"--out={cls.off}", "--quiet")]))
+        cls.snap = cls.orig / "snapshot-60.json"
+
+    def setUp(self) -> None:
+        for cp in self.cps:
+            self.ok(cp)
+
+    def test_reset_state(self) -> None:
+        """기준 14: 되돌린 직후(--max-ticks = 스냅숏 틱 — 곧바로 끝나 그 상태를 final.snapshot.json 에 씀) 모든 개체의 배운 두뇌 =
+        유전체 W2 행동 행, 기준선 0, 고리 빔(행동 −1·다음 자리 0·보정·은닉 0), 어린 동안 배운 양 그대로. 시계열·계통도 배운 양 0."""
+        before = learned_state(self.snap)
+        self.assertGreater(int((before["w2"] != before["innate"]).any(axis=1).sum()), 0, "60틱 학습 세계에 배운 개체가 있어야 의미가 있음")
+        self.assertTrue((before["ring_a"] >= 0).any() and (before["rbar"] != 0).any())
+        out = self.tmp / "reset_now"
+        self.ok(run_runner(f"--resume={self.snap}", "--fork-reset-learned", "--max-ticks=60", f"--out={out}", "--quiet"))
+        after = learned_state(out / "final.snapshot.json")
+        self.assertEqual((after["tick"], after["n"]), (60, before["n"]))
+        self.assertEqual(int((after["w2"] != after["innate"]).sum()), 0, "배운 두뇌 = 유전체 W2 행동 행(비트)")
+        self.assertTrue(np.array_equal(after["innate"], before["innate"]), "유전체는 그대로")
+        self.assertTrue((after["rbar"] == 0).all() and (after["ring_a"] == -1).all() and (after["ring_pos"] == 0).all()
+                        and (after["ring_e"] == 0).all() and (after["ring_h"] == 0).all(), "기준선 0, 고리 빔")
+        self.assertTrue(np.array_equal(after["dw_juv"], before["dw_juv"]), "어린 동안 배운 양(지난 기록)은 그대로")
+        s = summary(out)
+        self.assertEqual((s["reset_learned"], s["forked"], s["features"]), (True, {}, ["body.grow_enabled", "learn.enabled"]))
+        ts = dict_rows(out / "timeseries.csv")
+        self.assertEqual([(r["tick"], float(r["dw_mean"]), float(r["rbar_mean"])) for r in ts], [("60", 0.0, 0.0)])
+        alive = set(after["id"].tolist())
+        lin = [r for r in dict_rows(out / "lineage.csv") if int(r["id"]) in alive]
+        self.assertEqual(len(lin), after["n"])
+        self.assertTrue(all(float(r["dw"]) == 0.0 for r in lin), "살아 있는 개체의 계통 dw(쓸 때의 배운 양) = 0")
+
+    def test_probe_branch(self) -> None:
+        """이식 시험 갈래(--fork-reset-learned --fork-set=learn.freeze=true): 60틱 뒤에도 모든 개체(새로 태어난 개체 포함)의 배운 두뇌 =
+        유전체, 갱신 0. 그대로 갈래(되돌리지 않음) = 끊김 없이 돌린 것(해시), 이식 시험 갈래는 다른 역사."""
+        probe, same = self.tmp / "probe", self.tmp / "same"
+        with ThreadPoolExecutor(2) as pool:
+            cps = list(pool.map(lambda a: run_runner(*a), [
+                (f"--resume={self.snap}", "--fork-reset-learned", "--fork-set=learn.freeze=true", "--max-ticks=120", f"--out={probe}", "--quiet"),
+                (f"--resume={self.snap}", "--max-ticks=120", f"--out={same}", "--quiet")]))
+        for cp in cps:
+            self.ok(cp)
+        st = learned_state(probe / "final.snapshot.json")
+        self.assertEqual((st["tick"], int((st["w2"] != st["innate"]).sum())), (120, 0), "학습을 멈춘 채 60틱 — 배운 두뇌 = 유전체")
+        rows = [r for r in dict_rows(probe / "timeseries.csv") if int(r["tick"]) > 60]
+        self.assertTrue(rows and all(int(r["learn_events"]) == 0 and float(r["dw_mean"]) == 0.0 for r in rows), "갱신 0·배운 양 0")
+        p, sm, o = summary(probe), summary(same), summary(self.orig)
+        self.assertEqual((p["reset_learned"], p["forked"]), (True, {"learn.freeze": True}))
+        self.assertEqual((sm["reset_learned"], sm["history_hash"]), (False, o["history_hash"]), "그대로 갈래 = 끊김 없이")
+        self.assertNotEqual(p["history_hash"], o["history_hash"])
+
+    def test_bad_uses(self) -> None:
+        """--resume 없이 주면 인자 오류 2(결과 폴더 없음). 학습 끈 스냅숏은 2 — 결과 폴더를 보기 전에 거르므로 앞 결과 그대로."""
+        out = self.tmp / "reset_noresume"
+        cp = run_runner("--seed=3", "--fork-reset-learned", f"--out={out}", "--quiet")
+        self.assertEqual(cp.returncode, 2)
+        self.assertIn("인자 오류", cp.stderr)
+        self.assertIn("--fork-reset-learned", cp.stderr)
+        self.assertFalse(out.exists())
+        keep = self.tmp / "reset_keep"
+        shutil.copytree(self.off, keep)
+        before = listing(keep)
+        cp = run_runner(f"--resume={self.off / 'final.snapshot.json'}", "--fork-reset-learned", "--max-ticks=40", f"--out={keep}", "--quiet")
+        self.assertEqual(cp.returncode, 2, cp.stderr[-300:])
+        self.assertIn("학습을 켠 세계", cp.stderr)
+        self.assertEqual(listing(keep), before, "앞 결과 그대로")
+
+    def test_ablate_reset_learned_real(self) -> None:
+        """analyze.py ablate --reset-learned --set learn.freeze=true(learn_basic, 평균 0.3세대에서 갈라 60틱)를 실제 실행기로: 바꾼 갈래의
+        summary.json 에 reset_learned·forked, 끝에 배운 두뇌 = 유전체. 그대로 갈래 = 끊김 없이 그 틱까지 돌린 것."""
+        runs, out = self.tmp / "abr_base", self.tmp / "abr_out"
+        cmd = ["ablate", "--runs", str(runs), "--preset", "learn_basic", "--at-gen", "0.3", "--reset-learned", "--set", "learn.freeze=true",
+               "--ticks", "60", "--seeds", "1", "--out", str(out), "--godot", godot_path(), "--timeout", str(TIMEOUT), "--jobs", "2"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(analyze.main(cmd), 0)
+        f = summary(runs / "seed1")["tick"]
+        fork, same = summary(out / "fork" / "seed1"), summary(out / "same" / "seed1")
+        self.assertEqual((fork["reset_learned"], fork["forked"], same["reset_learned"]), (True, {"learn.freeze": True}, False))
+        st = learned_state(out / "fork" / "seed1" / "final.snapshot.json")
+        self.assertEqual((st["tick"], int((st["w2"] != st["innate"]).sum())), (f + 60, 0))
+        direct = self.tmp / "abr_direct"
+        self.ok(run_runner("--seed=1", "--preset=learn_basic", f"--max-ticks={f + 60}", "--no-lineage", f"--out={direct}", "--quiet"))
+        self.assertEqual(same["history_hash"], summary(direct)["history_hash"])
+        self.assertTrue(json.loads((out / "ablate.json").read_text(encoding="utf-8"))["reset_learned"])
 
 
 # ── 결과 폴더 ──
