@@ -8,7 +8,8 @@
   python3 tools/analyze.py sweep  --param mutation.rate=0.02,0.1 --seeds 1-4 --generations 50 --out results/sweep
   python3 tools/analyze.py report results/batch [--out 보고서폴더]
   python3 tools/analyze.py ablate --runs results/base --at-gen 30 --set mutation.rate=0.2 --ticks 340 --seeds 1-12
-  python3 tools/analyze.py gate-a --variant A-1 --seeds 1-12 --out results/gate-a1
+  python3 tools/analyze.py gate-a --seeds 1-12 --prereg COMMIT --out results/gate-a1-life      # 공식 A-1(= --variant A-1-life)
+  python3 tools/analyze.py gate-a --variant A-2 --seeds 1-12 --prereg COMMIT --out results/gate-a2
   python3 tools/analyze.py baldwin results/learn [--probe 이식시험폴더 …] [--control-probe 대조폴더 …]
 
 Windows(cmd·PowerShell): python3 대신 py, 인자는 큰따옴표(cmd 는 작은따옴표를 벗기지 않음), 줄잇기는 cmd ^·PowerShell `,
@@ -117,8 +118,9 @@ ACT_GEN_BIN = 10
 ACT_TICK_EDGES = [0, 200, 400, 600, 800, 1000]
 ## 먹은 양 표의 개체 세대 구간 폭(lineage.csv 의 gen)
 EATEN_GEN_BIN = 10
-## 관문 A-1(DESIGN-v0.2 14.3)의 대상 출생 틱 구간 [시작, 끝), 판정에 필요한 틱(그 전에 멸종하면 판정 불가), 씨앗마다 필요한 대상
-## 출생 수(GATE_A_MIN_BIRTHS). 0단계 기준선 보고가 우연 기준 세계에서 판정이 가능한지 미리 본다(판정 자체는 1단계 gate-a).
+## 관문 A-1(DESIGN-v0.2 14.3)의 대상 출생 틱 구간 [시작, 끝), 처음 정의(A-1)의 판정에 필요한 틱(그 전에 멸종하면 판정 불가 — 공식
+## A-1-life 에는 이 요구가 없음, 사용자 결정 2026-10-11), 씨앗마다 필요한 대상 출생 수(GATE_A_MIN_BIRTHS). 0단계 기준선 보고가 우연 기준
+## 세계에서 처음 정의의 판정이 가능한지 미리 본다(판정 자체는 gate-a).
 GATE_A_BIRTH_WINDOW = (200, 600)
 GATE_A_TICKS = 1000
 GATE_A_MIN_BIRTHS = 30
@@ -950,47 +952,90 @@ def write_ablate_md(path: Path, args, runs_root: Path, pairs: list, md_rows: lis
 # ── 관문 A 판정(gate-a — DESIGN-v0.2 14.3) ──
 
 ## 판정 문턱(실행 전 고정 — 14.3·11.5, 명령 인자로 바꿀 수 없음. 보고서 머리에 그대로 인쇄). 씨앗 GATE_A_SEEDS 개 기준이라 씨앗 수가
-## 다르면 판정하지 않는다(값만 적음). 대상 출생 틱 구간·필요 생존 틱·대상 수 하한은 위의 GATE_A_BIRTH_WINDOW·GATE_A_TICKS·GATE_A_MIN_BIRTHS.
+## 다르면 판정하지 않는다(값만 적음). A-1 의 대상 출생 틱 구간·대상 수 하한은 위의 GATE_A_BIRTH_WINDOW·GATE_A_MIN_BIRTHS(A-2 의 대상 수
+## 하한도 같음), GATE_A_TICKS 는 처음 정의(A-1)의 생존 틱.
 GATE_A_WIN = 10
+## ① 의 묶은 먹은 양 중앙값 비(학습 ÷ freeze) 하한 — A-1(공식 A-1-life 와 처음 정의 A-1)만. A-2 의 통과 기준(14.3)에는 비 문턱이 없음(보고)
 GATE_A_RATIO = 1.05
 GATE_A_SECONDARY_WIN = 8
 GATE_A_SEEDS = 12
+## ② 생존·번식의 지표(지표마다 부호 셈 — 하나라도 학습 쪽이 높은 씨앗 ≥ GATE_A_SECONDARY_WIN 이면 충족). 생존 = 평균 산 나이(대상의 죽은
+## 나이 death_tick − birth_tick 의 평균, 묶은 값도 평균). 사전 결정(설계 운영자 2026-10-11, 판정 실행 전 — 14.3): 처음 정의의 '성숙까지
+## 산 몫'은 기본값에서 늘 1.000 이라 갈래를 가르지 못해(1단계 검증) 표에 보고만 한다.
+GATE_A_SECONDARY = ("life", "children")
 ## A-1-life 의 틱 상한: 대상(틱 GATE_A_BIRTH_WINDOW 출생)이 모두 죽을 때까지 — 최대 수명(life.max_age 200 + 흔들림 30)이면 830틱 전에
 ## 모두 죽으므로 넉넉한 끝. 그 전에 멸종하면 실행기가 멈춤. 끝에 살아 있는 대상이 있으면 그 씨앗은 판정 불가(평생 값이 잘림)
 GATE_A_LIFE_MAX_TICKS = 1500
-## 관문 A 세계(14.3 A-1): 우연 기준 예설정 + 학습 + 몸 자람(A-2 의 learn_basic 과 같은 몸)
+## 관문 A 세계(14.3 A-1): 우연 기준 예설정 + 학습 + 몸 자람(A-2 의 learn_basic 과 같은 몸). A-2 의 기준 행(우연 기준)도 이 세계
 GATE_A_PRESET = "chance_baseline"
 GATE_A_BASE_SETS = [("learn.enabled", "true"), ("body.grow_enabled", "true")]
-## 판정 조건의 이름 붙은 변형(사용자가 다시 정하는 중 — 2026-10-11 작업 지시). need_ticks = 대상과 상관없이 그 틱까지 살아야 판정
-## (0 = 요구 없음), max_ticks = 실행기 --max-ticks(틱 0 부터, 그 전에 멸종하면 멈춤).
+## 공식 A-1 판정 조건(사용자 결정 2026-10-11 — 14.3) = gate-a 의 기본 --variant
+GATE_A_OFFICIAL = "A-1-life"
+## A-2(14.3 — 보고): 예설정 GATE_A2_PRESET 을 평균 GATE_A2_AT_GEN 세대까지(끝 스냅숏의 틱 = F), 그 스냅숏에서 두 갈래를 F + GATE_A2_TICKS
+## 까지, 대상 = 틱 [F, F + GATE_A2_WINDOW) 출생(F + 330 전에 모두 죽음). 기준 실행은 OUT/GATE_A2_BASE/seed<N>
+GATE_A2_PRESET = "learn_basic"
+GATE_A2_AT_GEN = "30"
+GATE_A2_TICKS = 340
+GATE_A2_WINDOW = 100
+GATE_A2_BASE = "base"
+## 판정 조건의 이름 붙은 변형. kind = "start"(틱 0 부터 세 갈래) · "fork"(A-2 — 기준 실행의 끝 스냅숏에서 갈라짐). need_ticks = 대상과
+## 상관없이 그 틱까지 살아야 판정(0 = 요구 없음), max_ticks = 실행기 --max-ticks(틱 0 부터, 그 전에 멸종하면 멈춤). ratio = ① 에
+## GATE_A_RATIO 문턱을 쓰나. strict = 판정 불가 씨앗이 하나라도 있으면 변형 전체가 판정 불가(A-1) — 거짓이면 남은 씨앗으로 문턱을 세고
+## 판정 불가 씨앗은 높은 씨앗으로 세지 않음(A-2 — 14.3 '씨앗 단위 판정 불가는 표에 그대로').
 GATE_A_VARIANTS = {
-    "A-1": {"sets": GATE_A_BASE_SETS, "max_ticks": GATE_A_TICKS, "need_ticks": GATE_A_TICKS,
-            "text": f"14.3 그대로 — 틱 0 부터 {GATE_A_TICKS:,}틱, 두 갈래 모두 {GATE_A_TICKS:,}틱까지 살고 대상 ≥ {GATE_A_MIN_BIRTHS}"},
-    "A-1-life": {"sets": GATE_A_BASE_SETS + [("population.initial", "400"), ("population.cap", "400"),
-                                             ("plants.initial_fill", "1.0")],
-                 "max_ticks": GATE_A_LIFE_MAX_TICKS, "need_ticks": 0,
-                 "text": f"제안(A-1′ 조건에서 {GATE_A_TICKS:,}틱 생존 요구를 뺌) — 두 갈래 모두 대상 ≥ {GATE_A_MIN_BIRTHS}, "
+    "A-1": {"kind": "start", "sets": GATE_A_BASE_SETS, "max_ticks": GATE_A_TICKS, "need_ticks": GATE_A_TICKS,
+            "ratio": True, "strict": True,
+            "text": f"처음 정의(공식 아님 — 0단계 미리 보기에서 판정 불가로 보여 바꿈, 14.3) — 틱 0 부터 {GATE_A_TICKS:,}틱, "
+                    f"두 갈래 모두 {GATE_A_TICKS:,}틱까지 살고 대상 ≥ {GATE_A_MIN_BIRTHS}"},
+    "A-1-life": {"kind": "start", "sets": GATE_A_BASE_SETS + [("population.initial", "400"), ("population.cap", "400"),
+                                                              ("plants.initial_fill", "1.0")],
+                 "max_ticks": GATE_A_LIFE_MAX_TICKS, "need_ticks": 0, "ratio": True, "strict": True,
+                 "text": f"공식 A-1(사용자 결정 2026-10-11 — A-1′ 세계에서 생존 틱 요구를 뺌) — 두 갈래 모두 대상 ≥ {GATE_A_MIN_BIRTHS}, "
                          f"대상이 모두 죽을 때까지(또는 멸종까지, 최대 {GATE_A_LIFE_MAX_TICKS:,}틱)"},
+    "A-2": {"kind": "fork", "ratio": False, "strict": False,
+            "text": f"A-2(보고 — 진화한 두뇌에서도 득인가) — `{GATE_A2_PRESET}` 을 평균 {GATE_A2_AT_GEN}세대까지(끝 스냅숏의 틱 = F), "
+                    f"그 스냅숏에서 그대로·freeze 를 F + {GATE_A2_TICKS} 까지, 두 갈래 모두 대상 ≥ {GATE_A_MIN_BIRTHS}"},
 }
 ## 갈래: (폴더·csv 이름, 보고서 이름, 더하는 설정). 학습 = 배우는 쪽, freeze = 학습을 멈춘 대조(비용은 냄), 학습 끔 = 비용까지 뺀 셋째 행
 GATE_A_BRANCHES = [("learn", "학습", [("learn.freeze", "false")]), ("freeze", "freeze", [("learn.freeze", "true")]),
                    ("off", "학습 끔", [("learn.enabled", "false")])]
+## A-2 의 갈래: 학습 = 스냅숏을 그대로 이어 돌림, freeze = 스냅숏에서 --fork-set(이 설정), 우연 기준(셋째 행 — 기준 행) = 같은 씨앗의
+## 우연 기준 세계(GATE_A_PRESET + 이 설정 — learn_basic 과 유전만 다름)를 틱 0 부터 F + GATE_A2_TICKS 까지 따로 돌림
+GATE_A2_BRANCHES = [("learn", "학습(그대로)", []), ("freeze", "freeze", [("learn.freeze", "true")]),
+                    ("chance", "우연 기준", GATE_A_BASE_SETS)]
 ## 판정에 쓰는 두 갈래(셋째 행은 보고만)
 GATE_A_JUDGED = ("learn", "freeze")
-## 보조 판(--aux, 14.3): 학습·freeze 갈래를 learn.diag_factor = none 으로 — 보고만, 판정에 쓰지 않음
+## 보조 판(--aux, 14.3): 학습·freeze 갈래를 learn.diag_factor = none 으로 — 보고만, 판정에 쓰지 않음(A-1 계열만)
 GATE_A_AUX_SETS = [("learn.diag_factor", "none")]
-## gate_a.csv 열(씨앗·갈래마다 한 줄)
-GATE_A_COLUMNS = ["seed", "branch", "status", "end_reason", "ticks", "extinct_tick", "targets", "targets_alive",
-                  "eaten_median", "eaten_mean", "matured_share", "children_mean", "history_hash"]
-## 지표: (키, 보고서 이름, 소수 자리)
-GATE_A_METRICS = [("eaten", "평생 먹은 양(중앙값)", 2), ("matured", "성숙까지 산 몫", 3), ("children", "평균 자식 수", 3)]
+## gate_a.csv 열(씨앗·갈래마다 한 줄). birth_lo·birth_hi = 대상 출생 틱 [lo, hi)
+GATE_A_COLUMNS = ["seed", "branch", "status", "birth_lo", "birth_hi", "end_reason", "ticks", "extinct_tick", "targets",
+                  "targets_alive", "eaten_median", "eaten_mean", "life_mean", "children_mean", "matured_share", "history_hash"]
+GATE_A_INT_COLUMNS = ["seed", "birth_lo", "birth_hi", "ticks", "extinct_tick", "targets", "targets_alive"]
+## 지표: (키, 보고서 이름, 소수 자리). 판정에서의 쓰임은 gate_a_role(① 먹은 양 · ② GATE_A_SECONDARY · 나머지는 보고만)
+GATE_A_METRICS = [("eaten", "평생 먹은 양(중앙값)", 2), ("life", "평균 산 나이(틱)", 2), ("children", "평균 자식 수", 3),
+                  ("matured", "성숙까지 산 몫", 3)]
+## 지표 → gate_a.csv 의 씨앗·갈래 값 열
+GATE_A_METRIC_COLUMNS = {"eaten": "eaten_median", "life": "life_mean", "children": "children_mean", "matured": "matured_share"}
+## 사전 고정 줄(prereg_text)의 git 명령 하나의 시간 제한(초)
+PREREG_GIT_TIMEOUT = 60
 ## 씨앗·갈래 상태 → 보고서 표기
-GATE_A_RUN_STATUS_KO = {"ok": "판정 가능", "extinct": "생존 틱 전 멸종", "short": "생존 틱 전에 끝남", "few": "대상 모자람",
-                        "alive": "끝에 대상이 살아 있음", "nolineage": "lineage.csv 없음", "failed": "실행 실패"}
+GATE_A_RUN_STATUS_KO = {"ok": "조건 채움", "extinct": "생존 틱 전 멸종", "short": "생존 틱 전에 끝남", "few": "대상 모자람",
+                        "alive": "끝에 대상이 살아 있음", "nolineage": "lineage.csv 없음", "failed": "실행 실패",
+                        "nobase": "기준 실행 없음(갈래 안 돌림)"}
+
+
+def gate_a_role(key: str) -> str:
+    """지표의 판정 쓰임: "①"(먹은 양) · "②"(GATE_A_SECONDARY) · "보고"(판정에 쓰지 않음)."""
+    return "①" if key == "eaten" else ("②" if key in GATE_A_SECONDARY else "보고")
+
+
+def gate_a_branches(variant: str) -> list:
+    """변형의 갈래 목록(A-2 는 GATE_A2_BRANCHES, 나머지는 GATE_A_BRANCHES). 셋째 갈래 = 보고만 하는 셋째 행."""
+    return GATE_A2_BRANCHES if GATE_A_VARIANTS[variant]["kind"] == "fork" else GATE_A_BRANCHES
 
 
 def gate_a_branch_sets(variant: str, branch: str, aux: bool) -> list[tuple[str, str]]:
-    """갈래 하나의 덮어쓰기(변형의 설정 → 갈래 설정 → 보조 판 설정 순, 같은 키는 뒤의 값 — 실행기와 같은 규칙)."""
+    """A-1 계열 갈래 하나의 덮어쓰기(변형의 설정 → 갈래 설정 → 보조 판 설정 순, 같은 키는 뒤의 값 — 실행기와 같은 규칙)."""
     sets = dict(GATE_A_VARIANTS[variant]["sets"])
     sets.update(dict(next(b[2] for b in GATE_A_BRANCHES if b[0] == branch)))
     if aux and branch in GATE_A_JUDGED:
@@ -998,35 +1043,37 @@ def gate_a_branch_sets(variant: str, branch: str, aux: bool) -> list[tuple[str, 
     return list(sets.items())
 
 
-def gate_a_run(run_dir: Path, variant: str) -> tuple[dict, dict[str, np.ndarray]]:
-    """결과 폴더 하나(끝까지 쓴 실행) → (gate_a.csv 한 줄의 값, 대상 개체 값 배열 {eaten, matured, children}).
-    대상 = 틱 GATE_A_BIRTH_WINDOW 에 태어난 개체(처음 개체 제외). 성숙까지 산 = 죽은 나이(death_tick − birth_tick) > repro.maturity
-    — 나이를 더한 뒤 번식 자격(나이 ≥ 성숙)을 갖고 그 틱의 번식 단계에 살아서 닿음(DESIGN-v0.1 8.4 틱 기준, sim_world.gd _act·_eligible).
-    상태: ok · extinct(need_ticks 전 멸종) · short(멸종 없이 need_ticks 전에 끝남) · few(대상 < GATE_A_MIN_BIRTHS) ·
-    alive(끝에 살아 있는 대상 — 평생 값이 잘림) · nolineage."""
+def gate_a_run(run_dir: Path, window: tuple[int, int], need: int) -> tuple[dict, dict[str, np.ndarray]]:
+    """결과 폴더 하나(끝까지 쓴 실행) → (gate_a.csv 한 줄의 값, 대상 개체 값 배열 {eaten, life, children, matured}).
+    대상 = 틱 [window) 에 태어난 개체(처음 개체 제외). 산 나이 = 죽은 나이(death_tick − birth_tick — 끝에 살아 있으면 끝 틱까지, 그런 대상이
+    있으면 상태 alive 라 판정에 쓰지 않음). 성숙까지 산 = 산 나이 > repro.maturity — 나이를 더한 뒤 번식 자격(나이 ≥ 성숙)을 갖고 그 틱의
+    번식 단계에 살아서 닿음(DESIGN-v0.1 8.4 틱 기준, sim_world.gd _act·_eligible).
+    상태: ok · extinct(need 틱 전 멸종) · short(멸종 없이 need 틱 전에 끝남) · few(대상 < GATE_A_MIN_BIRTHS) ·
+    alive(끝에 살아 있는 대상 — 평생 값이 잘림) · nolineage. need = 0 이면 생존 틱 요구 없음."""
     s = json.loads((run_dir / "summary.json").read_text(encoding="utf-8-sig"))
-    need = int(GATE_A_VARIANTS[variant]["need_ticks"])
     ext, ticks = _int_or(s.get("extinct_tick")), _int_or(s.get("tick"), 0)
-    row = {"status": "ok", "end_reason": s.get("end_reason", ""), "ticks": ticks, "extinct_tick": ext,
-           "targets": 0, "targets_alive": 0, "eaten_median": float("nan"), "eaten_mean": float("nan"),
-           "matured_share": float("nan"), "children_mean": float("nan"), "history_hash": str(s.get("history_hash", ""))[:12]}
-    vals = {"eaten": np.zeros(0), "matured": np.zeros(0), "children": np.zeros(0)}
+    lo, hi = window
+    row = {"status": "ok", "birth_lo": lo, "birth_hi": hi, "end_reason": s.get("end_reason", ""), "ticks": ticks,
+           "extinct_tick": ext, "targets": 0, "targets_alive": 0, "eaten_median": float("nan"), "eaten_mean": float("nan"),
+           "life_mean": float("nan"), "children_mean": float("nan"), "matured_share": float("nan"),
+           "history_hash": str(s.get("history_hash", ""))[:12]}
+    vals = {k: np.zeros(0) for k, _, _ in GATE_A_METRICS}
     lin = read_lineage(run_dir / "lineage.csv")
     if lin is None or "eaten" not in lin.columns:
         row["status"] = "nolineage"
         return row, vals
-    lo, hi = GATE_A_BIRTH_WINDOW
     tg = lin[(lin["parent_a"] >= 0) & (lin["birth_tick"] >= lo) & (lin["birth_tick"] < hi)]
     maturity = int(((s.get("config", {}) or {}).get("repro", {}) or {}).get("maturity", 0))
     dead = tg["death_tick"].to_numpy(dtype=int) >= 0
     life = np.where(dead, tg["death_tick"].to_numpy(dtype=int), ticks) - tg["birth_tick"].to_numpy(dtype=int)
-    vals = {"eaten": pd.to_numeric(tg["eaten"], errors="coerce").to_numpy(dtype=float),
-            "matured": (life > maturity).astype(float), "children": tg["children"].to_numpy(dtype=float)}
+    vals = {"eaten": pd.to_numeric(tg["eaten"], errors="coerce").to_numpy(dtype=float), "life": life.astype(float),
+            "children": tg["children"].to_numpy(dtype=float), "matured": (life > maturity).astype(float)}
     n = len(tg)
     row.update({"targets": n, "targets_alive": int((~dead).sum())})
     if n:
         row.update({"eaten_median": float(np.nanmedian(vals["eaten"])), "eaten_mean": float(np.nanmean(vals["eaten"])),
-                    "matured_share": float(vals["matured"].mean()), "children_mean": float(vals["children"].mean())})
+                    "life_mean": float(vals["life"].mean()), "children_mean": float(vals["children"].mean()),
+                    "matured_share": float(vals["matured"].mean())})
     if need and 0 <= ext < need:
         row["status"] = "extinct"
     elif need and ext < 0 and ticks < need:
@@ -1039,7 +1086,7 @@ def gate_a_run(run_dir: Path, variant: str) -> tuple[dict, dict[str, np.ndarray]
 
 
 def _pooled(vals: list[dict], key: str) -> float:
-    """씨앗들의 대상 값을 묶은 값: 먹은 양은 중앙값, 성숙까지 산 몫·자식 수는 평균. 대상이 없으면 NaN."""
+    """씨앗들의 대상 값을 묶은 값: 먹은 양은 중앙값, 나머지(평균 산 나이·자식 수·성숙까지 산 몫)는 평균. 대상이 없으면 NaN."""
     arr = np.concatenate([v[key] for v in vals]) if vals else np.zeros(0)
     arr = arr[~np.isnan(arr)]
     if not arr.size:
@@ -1047,38 +1094,59 @@ def _pooled(vals: list[dict], key: str) -> float:
     return float(np.median(arr)) if key == "eaten" else float(arr.mean())
 
 
+def _status_detail(row: dict) -> str:
+    """판정 불가·셋째 행 없음의 까닭에 붙이는 자세한 값."""
+    return {"extinct": f"{row.get('extinct_tick')}틱 멸종", "short": f"{row.get('ticks')}틱에 끝남",
+            "few": f"대상 {row.get('targets')}", "alive": f"대상 {row.get('targets_alive')}명이 끝에 살아 있음",
+            "nolineage": "lineage.csv 없음", "failed": row.get("why", ""), "nobase": row.get("why", "")}.get(row["status"], "")
+
+
 def gate_a_evaluate(seeds: list[int], runs: dict[tuple[str, int], tuple[dict, dict]], variant: str, aux: bool) -> dict:
-    """씨앗·갈래 결과 → 판정. runs[(갈래, 씨앗)] = gate_a_run 의 결과(실행 실패면 ({status: failed, why}, {})).
-    판정 가능한 씨앗 = 판정 갈래(GATE_A_JUDGED) 둘 다 ok. 결과: {verdict, judged, unjudged{씨앗: 까닭}, wins{지표: (학습 > freeze, 학습 > 끔)},
-    pooled{(갈래, 지표): 값}, ratio, crit1, crit2}."""
+    """씨앗·갈래 결과 → 판정. runs[(갈래, 씨앗)] = gate_a_run 의 결과(실행 실패면 ({status: failed, why}, {}), A-2 의 기준 실행이 없으면
+    ({status: nobase, why}, {})). 판정 가능한 씨앗 = 판정 갈래(GATE_A_JUDGED) 둘 다 ok. 셋째 행(A-1 학습 끔 · A-2 우연 기준)은 그 갈래도
+    ok 인 판정 가능 씨앗만 묶고 셈(못 채운 씨앗은 third_missing). 결과: {verdict, judged, unjudged{씨앗: 까닭}, third, third_missing,
+    wins{지표: (학습 > freeze, 학습 > 셋째)}, pooled{(갈래, 지표): 값}, ratio, crit1, crit2, ties}."""
+    spec = GATE_A_VARIANTS[variant]
+    branches = gate_a_branches(variant)
+    names = {b: n for b, n, _ in branches}
+    third = branches[2][0]
+    missing = ({"status": "failed", "why": "결과 없음"}, {})
     unjudged: dict[int, str] = {}
     for seed in seeds:
+        rows = [runs.get((b, seed), missing)[0] for b in GATE_A_JUDGED]
+        nobase = [r for r in rows if r["status"] == "nobase"]
+        if nobase:
+            unjudged[seed] = nobase[0].get("why", "") or GATE_A_RUN_STATUS_KO["nobase"]
+            continue
         why = []
-        for b in GATE_A_JUDGED:
-            row = runs.get((b, seed), ({"status": "failed", "why": "결과 없음"}, {}))[0]
+        for b, row in zip(GATE_A_JUDGED, rows):
             if row["status"] != "ok":
-                name = dict((x[0], x[1]) for x in GATE_A_BRANCHES)[b]
-                detail = {"extinct": f"{row.get('extinct_tick')}틱 멸종", "short": f"{row.get('ticks')}틱에 끝남",
-                          "few": f"대상 {row.get('targets')}", "alive": f"대상 {row.get('targets_alive')}명이 끝에 살아 있음",
-                          "nolineage": "lineage.csv 없음", "failed": row.get("why", "")}.get(row["status"], "")
-                why.append(f"{name}: {GATE_A_RUN_STATUS_KO[row['status']]}" + (f"({detail})" if detail else ""))
+                detail = _status_detail(row)
+                why.append(f"{names[b]}: {GATE_A_RUN_STATUS_KO[row['status']]}" + (f"({detail})" if detail else ""))
         if why:
             unjudged[seed] = "; ".join(why)
     judged = [s for s in seeds if s not in unjudged]
+    third_ok = [s for s in judged if runs.get((third, s), missing)[0]["status"] == "ok"]
+    third_missing = {}
+    for s in judged:
+        if s not in third_ok:
+            row = runs.get((third, s), missing)[0]
+            detail = _status_detail(row)
+            third_missing[s] = GATE_A_RUN_STATUS_KO.get(row["status"], str(row["status"])) + (f"({detail})" if detail else "")
     pooled = {}
-    for b, _, _ in GATE_A_BRANCHES:
-        vs = [runs[(b, s)][1] for s in judged if (b, s) in runs and runs[(b, s)][1]]
+    for b, _, _ in branches:
+        vs = [runs[(b, s)][1] for s in (third_ok if b == third else judged) if (b, s) in runs and runs[(b, s)][1]]
         for key, _, _ in GATE_A_METRICS:
             pooled[(b, key)] = _pooled(vs, key)
-    col = {"eaten": "eaten_median", "matured": "matured_share", "children": "children_mean"}
+    col = GATE_A_METRIC_COLUMNS
     wins = {}
     for key, _, _ in GATE_A_METRICS:
         w = []
-        for other in ("freeze", "off"):
+        for other, among in (("freeze", judged), (third, third_ok)):
             k = 0
-            for s in judged:
+            for s in among:
                 a = runs[("learn", s)][0][col[key]]
-                o = runs.get((other, s), ({col[key]: float("nan")}, {}))[0].get(col[key], float("nan"))
+                o = runs[(other, s)][0][col[key]]
                 k += int(not (math.isnan(a) or math.isnan(o)) and a > o)
             w.append(k)
         wins[key] = tuple(w)
@@ -1086,35 +1154,94 @@ def gate_a_evaluate(seeds: list[int], runs: dict[tuple[str, int], tuple[dict, di
     # 없음 — 1단계 검증: 기본값에서는 자식이 부모에게 받은 에너지만으로 성숙 나이보다 오래 살아 성숙까지 산 몫이 늘 1). 값 = 그 같은 값들
     ties = {}
     for key, _, _ in GATE_A_METRICS:
-        pairs = [(runs[("learn", s)][0][col[key]], runs.get(("freeze", s), ({}, {}))[0].get(col[key], float("nan"))) for s in judged]
+        pairs = [(runs[("learn", s)][0][col[key]], runs[("freeze", s)][0][col[key]]) for s in judged]
         same = bool(pairs) and all(not (math.isnan(a) or math.isnan(o)) and a == o for a, o in pairs)
         ties[key] = sorted({float(a) for a, _ in pairs}) if same else None
     fr = pooled[("freeze", "eaten")]
     ratio = pooled[("learn", "eaten")] / fr if fr and not math.isnan(fr) else float("nan")
-    crit1 = wins["eaten"][0] >= GATE_A_WIN and not math.isnan(ratio) and ratio >= GATE_A_RATIO
-    crit2 = wins["matured"][0] >= GATE_A_SECONDARY_WIN or wins["children"][0] >= GATE_A_SECONDARY_WIN
+    crit1 = wins["eaten"][0] >= GATE_A_WIN and (not spec["ratio"] or (not math.isnan(ratio) and ratio >= GATE_A_RATIO))
+    crit2 = any(wins[key][0] >= GATE_A_SECONDARY_WIN for key in GATE_A_SECONDARY)
     if aux:
         verdict = "보조 판 — 판정에 쓰지 않음(learn.diag_factor = none, 14.3)"
     elif len(seeds) != GATE_A_SEEDS:
         verdict = f"판정 안 함 — 씨앗 {len(seeds)}개(문턱은 씨앗 {GATE_A_SEEDS}개 기준, 14.3)"
-    elif unjudged:
+    elif unjudged and (spec["strict"] or not judged):
         verdict = f"판정 불가 — 씨앗 {len(unjudged)}개({', '.join(str(s) for s in sorted(unjudged))})가 조건을 채우지 못함"
         if variant == "A-1":
-            verdict += "(14.3 은 이때 A-1′ 를 같은 문턱으로 돌림 — 판정 조건은 사용자가 다시 정하는 중)"
+            verdict += f"(처음 정의 — 14.3 은 이때 A-1′ 를 같은 문턱으로 돌림. 공식 조건은 {GATE_A_OFFICIAL})"
     else:
         verdict = "통과" if crit1 and crit2 else "실패"
-    return {"verdict": verdict, "judged": judged, "unjudged": unjudged, "wins": wins, "pooled": pooled, "ratio": ratio,
-            "crit1": crit1, "crit2": crit2, "ties": ties}
+        if unjudged:
+            verdict += (f"(판정 가능 씨앗 {len(judged)}/{len(seeds)} — 판정 불가 씨앗 {len(unjudged)}개"
+                        f"({', '.join(str(s) for s in sorted(unjudged))})는 높은 씨앗으로 세지 않음)")
+    return {"verdict": verdict, "judged": judged, "unjudged": unjudged, "third": third, "third_ok": third_ok,
+            "third_missing": third_missing, "wins": wins, "pooled": pooled, "ratio": ratio, "crit1": crit1, "crit2": crit2,
+            "ties": ties}
+
+
+def prereg_text(commit: str | None, tool: Path | None = None) -> str:
+    """보고서 머리의 '사전 고정' 줄. commit = --prereg(판정 문턱·지표를 판정 실행 전에 고정한 커밋 — DESIGN-v0.2 14 절 판정 규칙).
+    git 으로 그 커밋을 찾고, 지금 도는 tool(기본 이 파일)이 그 커밋의 것과 같은지 본다: 그 커밋의 파일 blob 해시 = 지금 파일의
+    git hash-object --path(줄 끝 변환 설정을 따름, 인덱스를 쓰지도 믿지도 않음 — 같은 초에 고친 파일도 가려냄).
+    git 이 없거나 저장소 밖·없는 커밋이면 '확인 못 함'."""
+    if not commit:
+        return "주지 않음(`--prereg 커밋` — 공식 판정은 사전 고정 커밋을 주고 돌림, DESIGN-v0.2 14 절 판정 규칙)"
+    tool = (tool or Path(__file__)).resolve()
+
+    def git(*a: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *a], cwd=str(tool.parent), capture_output=True, encoding="utf-8", errors="replace",
+                              timeout=PREREG_GIT_TIMEOUT)
+    try:
+        top = git("rev-parse", "--show-toplevel")
+        if top.returncode != 0:
+            return f"커밋 `{commit}` — 확인 못 함(git 저장소 밖: {tool.parent})"
+        full = git("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}")
+        if full.returncode != 0:
+            return f"커밋 `{commit}` — 확인 못 함(저장소에 그런 커밋이 없음)"
+        h = full.stdout.strip()
+        subject = git("log", "-1", "--format=%s", h).stdout.strip()
+        rel = Path(os.path.relpath(tool, top.stdout.strip())).as_posix()
+        then = git("rev-parse", "--verify", "--quiet", f"{h}:{rel}")
+        now = git("hash-object", f"--path={rel}", str(tool))
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"커밋 `{commit}` — 확인 못 함(git 을 실행하지 못함: {e})"
+    if now.returncode != 0:
+        return f"커밋 `{h[:12]}`({subject}) — 확인 못 함(git hash-object 종료 코드 {now.returncode})"
+    same = then.returncode == 0 and then.stdout.strip() == now.stdout.strip()
+    return (f"커밋 `{h[:12]}`({subject}) — 지금 도는 `{rel}` 가 그 커밋의 것과 "
+            + ("같음" if same else "**다름**(사전 고정 뒤 판정 코드가 바뀜 — 이 보고서는 사전 고정대로의 판정이 아님)"))
+
+
+def _gate_a_collect(job: Job, rows_csv: dict, window: tuple[int, int], need: int) -> tuple[dict, dict]:
+    """갈래 실행 하나의 결과 → (gate_a.csv 한 줄의 값, 대상 값). 끝까지 쓰지 못했거나 설정이 다른 결과는 failed(까닭에 종료 코드·오류 줄)."""
+    why = incomplete_reason(job.out_dir) if (job.out_dir / "summary.json").is_file() else "결과 없음"
+    if not why and existing_mismatch(job):
+        why = "설정이 다른 결과(runs.csv 의 mismatch)"
+    if why:
+        det = failure_detail(job.out_dir, rows_csv.get((job.cell, job.seed)))
+        row = {c: float("nan") for c in GATE_A_COLUMNS}
+        row.update({"status": "failed", "why": why + (f" ({det})" if det else ""), "birth_lo": window[0], "birth_hi": window[1],
+                    "end_reason": "", "history_hash": ""})
+        return row, {}
+    return gate_a_run(job.out_dir, window, need)
 
 
 def cmd_gate_a(args) -> int:
-    """gate-a: 관문 A(DESIGN-v0.2 14.3)의 변형 하나를 씨앗마다 세 갈래(학습·freeze·학습 끔)로 틱 0 부터 돌리고(같은 설정의 끝까지 쓴
-    결과가 있으면 그대로 씀) 대상 개체의 평생 먹은 양·성숙까지 산 몫·자식 수를 견줘 OUT/gate_a.csv·gate_a.md 를 쓴다.
-    판정 문턱은 GATE_A_* 상수. 종료 코드: 0 보고서를 씀(판정 결과와 상관없이), 1 실패한 실행이 있음, 2 인자·저장소 오류."""
+    """gate-a: 관문 A(DESIGN-v0.2 14.3)의 변형 하나(기본 = 공식 A-1 GATE_A_OFFICIAL)를 씨앗마다 돌리고(같은 설정의 끝까지 쓴 결과가
+    있으면 그대로 씀) 대상 개체의 평생 먹은 양·평균 산 나이·자식 수(와 보고만 하는 성숙까지 산 몫)를 견줘 OUT/gate_a.csv·gate_a.md 를 쓴다.
+      A-1 계열: 세 갈래(학습·freeze·학습 끔)를 틱 0 부터.
+      A-2: ① OUT/base/seed<N> 에 learn_basic 을 평균 30세대까지(끝 스냅숏 틱 F) ② 그 스냅숏에서 학습(그대로)·freeze 를 F + 340 까지,
+           우연 기준 세계를 틱 0 부터 F + 340 까지 ③ 대상 [F, F + 100) 출생.
+    판정 문턱은 GATE_A_* 상수(명령 인자로 바꿀 수 없음), --prereg 는 보고서 머리의 사전 고정 줄(prereg_text).
+    종료 코드: 0 보고서를 씀(판정 결과와 상관없이), 1 실패한 실행이 있음, 2 인자·저장소 오류."""
     repo = Path(args.repo).resolve()
     err = _check_repo(repo)
     if err:
         print("오류: " + err, file=sys.stderr)
+        return 2
+    spec = GATE_A_VARIANTS[args.variant]
+    if args.aux and spec["kind"] != "start":
+        print(f"오류: --aux(보조 판)는 A-1 계열 변형만입니다(14.3 — {args.variant} 는 아님)", file=sys.stderr)
         return 2
     godot = resolve_godot(args.godot)
     out_root = Path(args.out).resolve()
@@ -1122,120 +1249,216 @@ def cmd_gate_a(args) -> int:
     if err:
         print("오류: " + err, file=sys.stderr)
         return 2
-    spec = GATE_A_VARIANTS[args.variant]
-    jobs = []
-    for b, _, _ in GATE_A_BRANCHES:
-        for seed in args.seeds:
-            d = out_root / b / f"seed{seed}"
-            sets = gate_a_branch_sets(args.variant, b, args.aux)
-            cmd = build_command(godot, repo, seed, ABLATE_GENERATIONS, d, GATE_A_PRESET, sets, True, spec["max_ticks"])
-            jobs.append(Job(b, seed, d, cmd, GATE_A_PRESET, ABLATE_GENERATIONS, sets, spec["max_ticks"]))
-    print(f"관문 A 변형 {args.variant}{' (보조 판)' if args.aux else ''}: 갈래 {len(GATE_A_BRANCHES)}개 × 씨앗 {len(args.seeds)}개 → {out_root}")
-    failed = run_jobs(jobs, out_root, repo, args.jobs, args.timeout)
-    rows_csv = read_runs_csv(out_root / "runs.csv")
+    prereg = prereg_text(args.prereg)
+    branches = gate_a_branches(args.variant)
     runs: dict[tuple[str, int], tuple[dict, dict]] = {}
+    if spec["kind"] == "fork":
+        failed = _gate_a2_run_all(args, repo, godot, out_root, runs)
+    else:
+        jobs = []
+        for b, _, _ in branches:
+            for seed in args.seeds:
+                d = out_root / b / f"seed{seed}"
+                sets = gate_a_branch_sets(args.variant, b, args.aux)
+                cmd = build_command(godot, repo, seed, ABLATE_GENERATIONS, d, GATE_A_PRESET, sets, True, spec["max_ticks"])
+                jobs.append(Job(b, seed, d, cmd, GATE_A_PRESET, ABLATE_GENERATIONS, sets, spec["max_ticks"]))
+        print(f"관문 A 변형 {args.variant}{' (보조 판)' if args.aux else ''}: 갈래 {len(branches)}개 × 씨앗 {len(args.seeds)}개 → {out_root}")
+        failed = run_jobs(jobs, out_root, repo, args.jobs, args.timeout)
+        rows_csv = read_runs_csv(out_root / "runs.csv")
+        for job in jobs:
+            runs[(job.cell, job.seed)] = _gate_a_collect(job, rows_csv, GATE_A_BIRTH_WINDOW, int(spec["need_ticks"]))
     table = []
-    for job in jobs:
-        why = incomplete_reason(job.out_dir) if (job.out_dir / "summary.json").is_file() else "결과 없음"
-        if not why and existing_mismatch(job):
-            why = "설정이 다른 결과(runs.csv 의 mismatch)"
-        if why:
-            det = failure_detail(job.out_dir, rows_csv.get((job.cell, job.seed)))
-            row = {c: float("nan") for c in GATE_A_COLUMNS}
-            row.update({"status": "failed", "why": why + (f" ({det})" if det else ""), "end_reason": "", "history_hash": ""})
-            runs[(job.cell, job.seed)] = (row, {})
-        else:
-            runs[(job.cell, job.seed)] = gate_a_run(job.out_dir, args.variant)
-        table.append({"seed": job.seed, "branch": job.cell, **{c: runs[(job.cell, job.seed)][0].get(c) for c in GATE_A_COLUMNS[2:]}})
+    for b, _, _ in branches:
+        for seed in args.seeds:
+            r = runs.get((b, seed), ({"status": "failed", "why": "결과 없음"}, {}))[0]
+            table.append({"seed": seed, "branch": b, **{c: r.get(c, float("nan")) for c in GATE_A_COLUMNS[2:]}})
     ev = gate_a_evaluate(list(args.seeds), runs, args.variant, args.aux)
     df = pd.DataFrame(table, columns=GATE_A_COLUMNS)
-    for c in ("seed", "ticks", "extinct_tick", "targets", "targets_alive"):
+    for c in GATE_A_INT_COLUMNS:
         df[c] = pd.to_numeric(df[c], errors="coerce").round().astype("Int64")
     write_csv(df, out_root / "gate_a.csv")
-    write_gate_a_md(out_root / "gate_a.md", args, runs, ev)
+    write_gate_a_md(out_root / "gate_a.md", args, runs, ev, prereg)
+    print(f"사전 고정: {prereg}")
     print(f"판정: {ev['verdict']}")
     print(f"보고서: {out_root / 'gate_a.md'}")
     return 1 if failed else 0
 
 
-def write_gate_a_md(path: Path, args, runs: dict, ev: dict) -> None:
-    """gate_a.md: 변형·조건, 고정 문턱(GATE_A_* 그대로), 판정, 지표마다 세 행·두 차이·효과 크기(14.3 보고 꼴), 씨앗별 표, 판정 불가 씨앗, 읽는 법."""
+def _gate_a2_run_all(args, repo: Path, godot: str, out_root: Path, runs: dict) -> int:
+    """A-2 의 실행(14.3·11.4 의 실행 순서)과 결과 모으기 → runs 를 채우고 실패 수를 돌려준다.
+    ① 기준 실행 OUT/base/seed<N>: GATE_A2_PRESET 을 평균 GATE_A2_AT_GEN 세대까지(lineage 없음 — 대상은 갈래가 씀). 그 전에 끝난 씨앗
+       (멸종·틱 상한)·실패한 씨앗은 갈래를 돌리지 않고 nobase(판정 불가).
+    ② 끝 스냅숏(틱 F)에서 학습(그대로)·freeze(--fork-set) 를 F + GATE_A2_TICKS 까지, 우연 기준 세계를 같은 씨앗으로 틱 0 부터
+       F + GATE_A2_TICKS 까지(--max-ticks — 그 전에 멸종하면 그 씨앗의 기준 행은 없음: 생존 틱 요구 F + GATE_A2_TICKS).
+    ③ 대상 = 틱 [F, F + GATE_A2_WINDOW) 출생. 판정 갈래에는 생존 틱 요구가 없음(A-1-life 와 같음)."""
+    base_jobs = []
+    for seed in args.seeds:
+        d = out_root / GATE_A2_BASE / f"seed{seed}"
+        cmd = build_command(godot, repo, seed, GATE_A2_AT_GEN, d, GATE_A2_PRESET, [], False, None)
+        base_jobs.append(Job(GATE_A2_BASE, seed, d, cmd, GATE_A2_PRESET, GATE_A2_AT_GEN, [], None))
+    print(f"관문 A 변형 A-2: ① 기준 실행 {GATE_A2_PRESET} 평균 {GATE_A2_AT_GEN}세대 × 씨앗 {len(args.seeds)}개 → "
+          f"{out_root / GATE_A2_BASE}")
+    failed = run_jobs(base_jobs, out_root, repo, args.jobs, args.timeout)
+    fork_tick: dict[int, int] = {}
+    jobs: list[tuple[Job, int]] = []
+    for job in base_jobs:
+        seed, d = job.seed, job.out_dir
+        why = incomplete_reason(d) if (d / "summary.json").is_file() else "기준 실행 결과 없음"
+        if not why and existing_mismatch(job):
+            why = "기준 실행의 설정이 다름(runs.csv 의 mismatch)"
+        s = json.loads((d / "summary.json").read_text(encoding="utf-8-sig")) if not why else {}
+        if not why and s.get("end_reason") != "generations":
+            why = (f"기준 실행이 평균 {GATE_A2_AT_GEN}세대 전에 끝남"
+                   f"({END_REASON_KO.get(str(s.get('end_reason')), s.get('end_reason'))}, 틱 {s.get('tick')})")
+        if why:
+            for b, _, _ in GATE_A2_BRANCHES:
+                row = {c: float("nan") for c in GATE_A_COLUMNS}
+                row.update({"status": "nobase", "why": why, "end_reason": "", "history_hash": ""})
+                runs[(b, seed)] = (row, {})
+            continue
+        f = int(s["tick"])
+        fork_tick[seed] = f
+        end = f + GATE_A2_TICKS
+        snap = d / "final.snapshot.json"
+        for b, _, sets in GATE_A2_BRANCHES:
+            od = out_root / b / f"seed{seed}"
+            if b == "chance":
+                cmd = build_command(godot, repo, seed, ABLATE_GENERATIONS, od, GATE_A_PRESET, sets, True, end)
+                jobs.append((Job(b, seed, od, cmd, GATE_A_PRESET, ABLATE_GENERATIONS, list(sets), end), end))
+            else:
+                cmd = build_resume_command(godot, repo, snap, end, od, list(sets), True)
+                jobs.append((Job(b, seed, od, cmd, "", ABLATE_GENERATIONS, [], end, str(snap), list(sets)), 0))
+    print(f"② 갈래: {' · '.join(n for _, n, _ in GATE_A2_BRANCHES)} × 씨앗 {len(fork_tick)}개, F + {GATE_A2_TICKS} 까지 → {out_root}")
+    if jobs:
+        failed += run_jobs([j for j, _ in jobs], out_root, repo, args.jobs, args.timeout)
+    rows_csv = read_runs_csv(out_root / "runs.csv")
+    for job, need in jobs:
+        f = fork_tick[job.seed]
+        runs[(job.cell, job.seed)] = _gate_a_collect(job, rows_csv, (f, f + GATE_A2_WINDOW), need)
+    return failed
+
+
+def write_gate_a_md(path: Path, args, runs: dict, ev: dict, prereg: str) -> None:
+    """gate_a.md: 변형·조건·사전 고정, 고정 문턱(GATE_A_* 그대로), 판정, 지표마다 세 행·두 차이·효과 크기(14.3 보고 꼴), 씨앗별 표,
+    판정 불가 씨앗·셋째 행이 없는 씨앗, 읽는 법."""
     spec = GATE_A_VARIANTS[args.variant]
+    branches = gate_a_branches(args.variant)
+    names = {b: n for b, n, _ in branches}
+    third = ev["third"]
     lo, hi = GATE_A_BIRTH_WINDOW
-    names = {b: n for b, n, _ in GATE_A_BRANCHES}
-    sets = ", ".join(f"`{k}={v}`" for k, v in spec["sets"])
-    out = [f"# 관문 A 보고서 — 변형 `{args.variant}`{' · 보조 판' if args.aux else ''}", "",
-           f"- 변형: {spec['text']}",
-           f"- 세계: 예설정 `{GATE_A_PRESET}` + {sets}" + (f" + 학습·freeze 갈래에 {', '.join(f'`{k}={v}`' for k, v in GATE_A_AUX_SETS)}"
-                                                         if args.aux else ""),
-           "- 갈래: " + " · ".join(f"{n}(`{', '.join(f'{k}={v}' for k, v in st)}`)" for _, n, st in GATE_A_BRANCHES)
-           + " — 같은 씨앗, 틱 0 부터",
-           f"- 대상: 틱 [{lo}, {hi}) 에 태어난 개체(처음 개체 제외). 씨앗 {', '.join(str(s) for s in args.seeds)}",
-           f"- **판정: {ev['verdict']}**", "",
-           "## 고정 문턱(`analyze.py` 상수 — 명령 인자로 바꿀 수 없음)", ""]
+    head = [f"# 관문 A 보고서 — 변형 `{args.variant}`{' · 보조 판' if args.aux else ''}", "",
+            f"- 변형: {spec['text']}"]
+    if spec["kind"] == "fork":
+        head += [f"- 기준 실행: 예설정 `{GATE_A2_PRESET}` 을 평균 {GATE_A2_AT_GEN}세대까지(`{GATE_A2_BASE}/seed<N>` — 끝 스냅숏의 틱 = F, "
+                 "씨앗마다 다름)",
+                 f"- 갈래: {names['learn']} = 스냅숏을 그대로 이어 돌림 · {names['freeze']} = "
+                 f"`--fork-set={', '.join(f'{k}={v}' for k, v in branches[1][2])}` — 둘 다 같은 스냅숏에서 F + {GATE_A2_TICKS} 까지",
+                 f"- 기준 행: {names[third]} — 같은 씨앗의 예설정 `{GATE_A_PRESET}` + "
+                 f"{', '.join(f'`{k}={v}`' for k, v in branches[2][2])}(`{GATE_A2_PRESET}` 과 유전만 다름)를 틱 0 부터 F + {GATE_A2_TICKS} 까지 "
+                 f"따로 — 그 전에 멸종했거나 대상 < {GATE_A_MIN_BIRTHS}·끝에 산 대상이 있으면 그 씨앗의 기준 행은 없음",
+                 f"- 대상: 틱 [F, F + {GATE_A2_WINDOW}) 에 태어난 개체. 씨앗 {', '.join(str(s) for s in args.seeds)}",
+                 "- A-2 는 보고입니다(관문 A 통과 = A-1 통과, 2단계로 갈지는 사용자가 판단 — 14.3)"]
+    else:
+        sets = ", ".join(f"`{k}={v}`" for k, v in spec["sets"])
+        head += [f"- 세계: 예설정 `{GATE_A_PRESET}` + {sets}" + (f" + 학습·freeze 갈래에 {', '.join(f'`{k}={v}`' for k, v in GATE_A_AUX_SETS)}"
+                                                               if args.aux else ""),
+                 "- 갈래: " + " · ".join(f"{n}(`{', '.join(f'{k}={v}' for k, v in st)}`)" for _, n, st in branches)
+                 + " — 같은 씨앗, 틱 0 부터",
+                 f"- 대상: 틱 [{lo}, {hi}) 에 태어난 개체(처음 개체 제외). 씨앗 {', '.join(str(s) for s in args.seeds)}"]
+    out = head + [f"- 사전 고정: {prereg}", f"- **판정: {ev['verdict']}**", "",
+                  "## 고정 문턱(`analyze.py` 상수 — 명령 인자로 바꿀 수 없음)", ""]
+    sec = " · ".join(n for k, n, _ in GATE_A_METRICS if k in GATE_A_SECONDARY)
     out.append(_md_table(["상수", "값", "뜻"], [
         ["`GATE_A_WIN`", str(GATE_A_WIN), "① 대상 먹은 양 중앙값이 학습 쪽에서 높은 씨앗 수 하한"],
-        ["`GATE_A_RATIO`", f"{GATE_A_RATIO}", "① 씨앗들의 대상을 묶은 먹은 양 중앙값 비(학습 ÷ freeze) 하한"],
-        ["`GATE_A_SECONDARY_WIN`", str(GATE_A_SECONDARY_WIN), "② 성숙까지 산 몫·평균 자식 수 가운데 하나가 학습 쪽에서 높은 씨앗 수 하한"],
+        ["`GATE_A_RATIO`", f"{GATE_A_RATIO}", "① 씨앗들의 대상을 묶은 먹은 양 중앙값 비(학습 ÷ freeze) 하한 — A-1 만(A-2 는 보고)"],
+        ["`GATE_A_SECONDARY_WIN`", str(GATE_A_SECONDARY_WIN), f"② {sec} 가운데 하나가 학습 쪽에서 높은 씨앗 수 하한(지표마다 셈)"],
+        ["`GATE_A_SECONDARY`", ", ".join(f"`{k}`" for k in GATE_A_SECONDARY),
+         "② 의 지표(사전 결정 2026-10-11 — 생존 = 평균 산 나이, 성숙까지 산 몫은 보고만)"],
         ["`GATE_A_MIN_BIRTHS`", str(GATE_A_MIN_BIRTHS), "씨앗·갈래마다 필요한 대상 수"],
         ["`GATE_A_SEEDS`", str(GATE_A_SEEDS), "문턱의 기준 씨앗 수(다르면 판정하지 않음)"],
-        ["`GATE_A_BIRTH_WINDOW`", f"[{lo}, {hi})", "대상 출생 틱"],
-        ["`GATE_A_TICKS`", f"{GATE_A_TICKS:,}", "A-1: 두 갈래 모두 이 틱까지 살아야 판정"],
-        ["`GATE_A_LIFE_MAX_TICKS`", f"{GATE_A_LIFE_MAX_TICKS:,}", "A-1-life: 틱 상한(그 전에 대상이 모두 죽음)"],
+        ["`GATE_A_BIRTH_WINDOW`", f"[{lo}, {hi})", "A-1: 대상 출생 틱"],
+        ["`GATE_A_LIFE_MAX_TICKS`", f"{GATE_A_LIFE_MAX_TICKS:,}", f"{GATE_A_OFFICIAL}(공식 A-1): 틱 상한(그 전에 대상이 모두 죽음)"],
+        ["`GATE_A_TICKS`", f"{GATE_A_TICKS:,}", "A-1(처음 정의): 두 갈래 모두 이 틱까지 살아야 판정"],
+        ["`GATE_A2_AT_GEN`", GATE_A2_AT_GEN, f"A-2: 기준 실행(`{GATE_A2_PRESET}`)의 평균 세대 — 끝 스냅숏 틱 F"],
+        ["`GATE_A2_TICKS`", str(GATE_A2_TICKS), "A-2: 갈래·기준 행을 F + 이 틱까지"],
+        ["`GATE_A2_WINDOW`", str(GATE_A2_WINDOW), "A-2: 대상 출생 틱 [F, F + 이 값)"],
     ], ["l", "r", "l"]))
-    n = len(ev["judged"])
+    n, m = len(ev["judged"]), len(ev["third_ok"])
     w = ev["wins"]
+    ratio_need = f"(문턱 {GATE_A_RATIO})" if spec["ratio"] else "(A-2 는 보고 — 문턱 없음)"
     out += ["", "## 판정", "",
             f"판정 가능한 씨앗 {n}개 / {len(args.seeds)}개.", "",
             f"- ① 먹은 양: 학습 > freeze 씨앗 **{w['eaten'][0]}/{n}**(문턱 {GATE_A_WIN}), 묶은 중앙값 비 "
-            f"**{_fmt(ev['ratio'], 3)}**(문턱 {GATE_A_RATIO}) → {'충족' if ev['crit1'] else '못 함'}",
-            f"- ② 생존·번식: 성숙까지 산 몫 **{w['matured'][0]}/{n}** · 평균 자식 수 **{w['children'][0]}/{n}**"
-            f"(둘 가운데 하나 ≥ {GATE_A_SECONDARY_WIN}) → {'충족' if ev['crit2'] else '못 함'}"]
-    other = {"eaten": "① 을 채울 수 없음", "matured": "② 는 평균 자식 수로만 갈림", "children": "② 는 성숙까지 산 몫으로만 갈림"}
+            f"**{_fmt(ev['ratio'], 3)}**{ratio_need} → {'충족' if ev['crit1'] else '못 함'}",
+            "- ② 생존·번식: " + " · ".join(f"{nm} **{w[k][0]}/{n}**" for k, nm, _ in GATE_A_METRICS if k in GATE_A_SECONDARY)
+            + f"(둘 가운데 하나 ≥ {GATE_A_SECONDARY_WIN}) → {'충족' if ev['crit2'] else '못 함'}",
+            "- 보고만(판정에 쓰지 않음): " + " · ".join(f"{nm} **{w[k][0]}/{n}**" for k, nm, _ in GATE_A_METRICS
+                                                  if gate_a_role(k) == "보고")]
+    sec_names = {k: nm for k, nm, _ in GATE_A_METRICS if k in GATE_A_SECONDARY}
     for key, name, dg in GATE_A_METRICS:
-        if ev["ties"][key] is not None:
-            out.append(f"- **갈래를 가르지 못한 지표: {name}** — 판정 가능 씨앗 {n}개 모두에서 학습 = freeze"
-                       f"(값 {' · '.join(_fmt(v, dg) for v in ev['ties'][key])}). 같은 값은 이긴 씨앗으로 세지 않으므로 {other[key]}")
-    out += ["", f"## 지표 — 판정 가능 씨앗 {n}개의 대상을 묶은 값", ""]
+        if ev["ties"][key] is None:
+            continue
+        role = gate_a_role(key)
+        if role == "①":
+            other = "① 을 채울 수 없음"
+        elif role == "②":
+            other = "② 는 " + " · ".join(v for k, v in sec_names.items() if k != key) + "로만 갈림"
+        else:
+            other = "보고만 하는 지표라 판정에 닿지 않음"
+        out.append(f"- **갈래를 가르지 못한 지표: {name}** — 판정 가능 씨앗 {n}개 모두에서 학습 = freeze"
+                   f"(값 {' · '.join(_fmt(v, dg) for v in ev['ties'][key])}). 같은 값은 이긴 씨앗으로 세지 않으므로 {other}")
+    out += ["", f"## 지표 — 판정 가능 씨앗 {n}개의 대상을 묶은 값({names[third]} 행은 그 갈래도 조건을 채운 {m}개)", ""]
     rows = []
     p = ev["pooled"]
     for key, name, dg in GATE_A_METRICS:
-        a, f, o = p[("learn", key)], p[("freeze", key)], p[("off", key)]
+        a, f, o = p[("learn", key)], p[("freeze", key)], p[(third, key)]
         eff = (a - f) / f if f and not (math.isnan(a) or math.isnan(f)) else float("nan")
-        rows.append([name, _fmt(a, dg), _fmt(f, dg), _fmt(o, dg), _fmt(a - f, dg), _fmt(a - o, dg), _fmt(eff, 3),
-                     f"{w[key][0]}/{n}", f"{w[key][1]}/{n}"])
-    out.append(_md_table(["지표", names["learn"], names["freeze"], names["off"], "학습 − freeze", "학습 − 학습 끔",
-                          "효과 크기 (학습 − freeze) ÷ freeze", "학습 > freeze 씨앗", "학습 > 학습 끔 씨앗"], rows,
-                         ["l", "r", "r", "r", "r", "r", "r", "r", "r"]))
+        rows.append([name, gate_a_role(key), _fmt(a, dg), _fmt(f, dg), _fmt(o, dg), _fmt(a - f, dg), _fmt(a - o, dg), _fmt(eff, 3),
+                     f"{w[key][0]}/{n}", f"{w[key][1]}/{m}"])
+    out.append(_md_table(["지표", "쓰임", names["learn"], names["freeze"], names[third], "학습 − freeze", f"학습 − {names[third]}",
+                          "효과 크기 (학습 − freeze) ÷ freeze", "학습 > freeze 씨앗", f"학습 > {names[third]} 씨앗"], rows,
+                         ["l", "l", "r", "r", "r", "r", "r", "r", "r", "r"]))
     out += ["", "## 씨앗별", ""]
     rows = []
     for seed in args.seeds:
-        for b, bn, _ in GATE_A_BRANCHES:
+        for b, bn, _ in branches:
             r = runs.get((b, seed), ({"status": "failed"}, {}))[0]
             end = r.get("extinct_tick")
             end_text = (f"{int(end):,} 멸종" if isinstance(end, (int, np.integer)) and end >= 0
                         else (f"{int(r['ticks']):,}" if isinstance(r.get("ticks"), (int, np.integer)) else "—"))
-            rows.append([str(seed), bn, GATE_A_RUN_STATUS_KO.get(r.get("status"), str(r.get("status"))), end_text,
+            blo, bhi = r.get("birth_lo"), r.get("birth_hi")
+            window = f"[{int(blo)}, {int(bhi)})" if isinstance(blo, (int, np.integer)) and isinstance(bhi, (int, np.integer)) else "—"
+            rows.append([str(seed), bn, GATE_A_RUN_STATUS_KO.get(r.get("status"), str(r.get("status"))), window, end_text,
                          _fmt(r.get("targets"), 0) if isinstance(r.get("targets"), (int, np.integer)) else "—",
-                         _fmt(r.get("eaten_median"), 2), _fmt(r.get("matured_share"), 3), _fmt(r.get("children_mean"), 3),
-                         f"`{r.get('history_hash') or ''}`"])
-    out.append(_md_table(["씨앗", "갈래", "상태", "끝(틱)", "대상", "먹은 양 중앙값", "성숙까지 산 몫", "평균 자식 수", "해시"], rows,
-                         ["r", "l", "l", "r", "r", "r", "r", "r", "l"]))
+                         _fmt(r.get("eaten_median"), 2), _fmt(r.get("life_mean"), 2), _fmt(r.get("children_mean"), 3),
+                         _fmt(r.get("matured_share"), 3), f"`{r.get('history_hash') or ''}`"])
+    out.append(_md_table(["씨앗", "갈래", "상태", "대상 출생(틱)", "끝(틱)", "대상", "먹은 양 중앙값", "평균 산 나이", "평균 자식 수",
+                          "성숙까지 산 몫", "해시"], rows, ["r", "l", "l", "r", "r", "r", "r", "r", "r", "r", "l"]))
     if ev["unjudged"]:
         out += ["", "## 판정 불가 씨앗", ""]
         out.append(_md_table(["씨앗", "까닭"], [[str(k), v] for k, v in sorted(ev["unjudged"].items())], ["r", "l"]))
+    if ev["third_missing"]:
+        out += ["", f"## {names[third]} 행이 없는 판정 가능 씨앗", ""]
+        out.append(_md_table(["씨앗", "까닭"], [[str(k), v] for k, v in sorted(ev["third_missing"].items())], ["r", "l"]))
     out += ["", "## 읽는 법", "",
-            "- 세 갈래는 같은 씨앗·같은 처음 세계에서 설정 하나만 다르게 돌린 것입니다. 행동이 달라지면 출생·먹이 고갈·난수 뽑기도 갈라지므로, "
+            ("- 두 판정 갈래는 같은 씨앗의 같은 스냅숏(A-2)" if spec["kind"] == "fork" else "- 세 갈래는 같은 씨앗·같은 처음 세계")
+            + "에서 설정 하나만 다르게 돌린 것입니다. 행동이 달라지면 출생·먹이 고갈·난수 뽑기도 갈라지므로, "
             "차이에는 학습 자체와 학습이 바꾼 생태 되먹임이 함께 들어 있습니다(14.3).",
-            "- 학습 − freeze = 학습이 한 몫(freeze 도 학습 비용은 냄), 학습 − 학습 끔 = 비용까지 뺀 순 득. 효과 크기 = (학습 − freeze) ÷ freeze.",
-            "- 묶은 값 = 판정 가능 씨앗들의 대상 개체를 한데 모은 값(먹은 양은 중앙값, 성숙까지 산 몫·자식 수는 평균). 씨앗 수는 씨앗마다 값"
-            "(먹은 양 중앙값·성숙까지 산 몫·평균 자식 수)이 학습 쪽에서 **더 큰**(같으면 세지 않음) 씨앗.",
-            "- 성숙까지 산 = 죽은 나이(`death_tick` − `birth_tick`) > `repro.maturity` — 번식 자격 나이로 번식 단계에 살아서 닿음. "
-            "기본값에서는 이 몫이 세 갈래 모두 1 이 되기 쉽습니다(자식이 부모에게 받은 에너지만으로 성숙 나이보다 오래 삶 — 1단계 검증에서 "
-            "가장 일찍 굶어 죽은 개체도 50틱 넘게 삶). 판정 가능 씨앗 모두에서 학습 = freeze 인 지표는 위 '판정' 에 '갈래를 가르지 못한 지표' 로 "
-            "적습니다(판정 조건을 다시 정할 때 ② 의 생존 지표를 바꿀지 — DESIGN-v0.2 14.3).",
+            f"- 학습 − freeze = 학습이 한 몫(freeze 도 학습 비용은 냄), 학습 − {names[third]} = "
+            + ("진화 없는 우연 기준 세계와의 차이(A-2 의 기준 행)." if spec["kind"] == "fork" else "비용까지 뺀 순 득.")
+            + " 효과 크기 = (학습 − freeze) ÷ freeze.",
+            "- 묶은 값 = 판정 가능 씨앗들의 대상 개체를 한데 모은 값(먹은 양은 중앙값, 평균 산 나이·자식 수·성숙까지 산 몫은 평균). 씨앗 수는 "
+            "씨앗마다 값(먹은 양 중앙값·평균 산 나이·평균 자식 수·성숙까지 산 몫)이 학습 쪽에서 **더 큰**(같으면 세지 않음) 씨앗. "
+            f"{names[third]} 행은 그 갈래도 조건(대상 ≥ {GATE_A_MIN_BIRTHS}·끝에 산 대상 없음"
+            + (f"·F + {GATE_A2_TICKS} 까지 생존" if spec["kind"] == "fork" else "") + ")을 채운 씨앗만.",
+            "- 산 나이 = 죽은 나이(`death_tick` − `birth_tick`). 판정 가능 씨앗은 대상이 모두 죽었으므로 평생 값입니다. "
+            "② 의 생존 지표는 평균 산 나이입니다(사전 결정 2026-10-11 — 판정 실행 전, DESIGN-v0.2 14.3).",
+            "- 성숙까지 산 = 산 나이 > `repro.maturity` — 번식 자격 나이로 번식 단계에 살아서 닿음. 보고만 합니다: 기본값에서는 이 몫이 "
+            "세 갈래 모두 1 이 되기 쉬워(자식이 부모에게 받은 에너지만으로 성숙 나이보다 오래 삶 — 1단계 검증에서 가장 일찍 굶어 죽은 개체도 "
+            "50틱 넘게 삶) 갈래를 가르지 못했습니다. 판정 가능 씨앗 모두에서 학습 = freeze 인 지표는 위 '판정' 에 '갈래를 가르지 못한 지표' 로 "
+            "적습니다.",
             f"- 표: [`gate_a.csv`](gate_a.csv)(씨앗·갈래마다 한 줄). 갈래 결과는 이 폴더의 "
-            f"{'·'.join(f'`{b}/`' for b, _, _ in GATE_A_BRANCHES)}.", ""]
+            + "·".join(f"`{b}/`" for b in ([GATE_A2_BASE] if spec["kind"] == "fork" else []) + [b for b, _, _ in branches]) + ".", ""]
     path.write_text("\n".join(out), encoding="utf-8")
 
 
@@ -2538,13 +2761,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", default=str(default_repo()), help="저장소(기본 tools/ 의 부모)")
     p.add_argument("--timeout", type=float, default=3600.0, help="실행 하나의 시간 제한(초, 기본 3600)")
     p.set_defaults(func=cmd_ablate)
-    p = sub.add_parser("gate-a", help="관문 A(DESIGN-v0.2 14.3): 학습·freeze·학습 끔 세 갈래를 씨앗마다 돌려 판정 보고서")
-    p.add_argument("--variant", choices=list(GATE_A_VARIANTS), required=True,
-                   help="판정 조건: A-1 = 14.3 그대로(1,000틱 생존 필요), A-1-life = 제안(A-1′ 조건, 생존 요구 없음, 대상이 모두 죽을 때까지)")
+    p = sub.add_parser("gate-a", help="관문 A(DESIGN-v0.2 14.3): 학습·freeze·셋째 행 갈래를 씨앗마다 돌려 판정 보고서")
+    p.add_argument("--variant", choices=list(GATE_A_VARIANTS), default=GATE_A_OFFICIAL,
+                   help=f"판정 조건(기본 {GATE_A_OFFICIAL} = 공식 A-1, 사용자 결정 2026-10-11 — A-1′ 세계, 생존 틱 요구 없음, 대상이 모두 "
+                        "죽을 때까지). A-1 = 처음 정의(1,000틱 생존 필요 — 공식 아님). A-2 = 진화한 두뇌(보고 — learn_basic 30세대 "
+                        "스냅숏에서 그대로·freeze, 기준 행 우연 기준)")
     p.add_argument("--seeds", type=_arg_type(parse_seeds), default=parse_seeds("1-12"),
                    help=f'씨앗(기본 1-12 — 판정 문턱은 씨앗 {GATE_A_SEEDS}개 기준, 다르면 값만 적고 판정하지 않음)')
-    p.add_argument("--aux", action="store_true", help="보조 판: 학습·freeze 갈래를 learn.diag_factor=none 으로(판정에 쓰지 않음)")
-    p.add_argument("--out", required=True, help="결과 폴더(갈래마다 <갈래>/seed<N>/, 표 gate_a.csv·gate_a.md)")
+    p.add_argument("--aux", action="store_true",
+                   help="보조 판: 학습·freeze 갈래를 learn.diag_factor=none 으로(판정에 쓰지 않음, A-1 계열 변형만)")
+    p.add_argument("--prereg", default="", metavar="COMMIT",
+                   help="사전 고정 커밋(판정 문턱·지표를 판정 실행 전에 고정한 커밋): 보고서 머리에 그 커밋과, 지금 도는 analyze.py 가 "
+                        "그 커밋의 것과 같은지(git)를 적음. 판정 문턱은 바꾸지 않음")
+    p.add_argument("--out", required=True,
+                   help="결과 폴더(갈래마다 <갈래>/seed<N>/ — A-2 는 기준 실행 base/seed<N>/ 도, 표 gate_a.csv·gate_a.md)")
     p.add_argument("--jobs", type=int, default=max(1, min(4, os.cpu_count() or 1)),
                    help="동시에 돌릴 실행기 수(기본 min(4, CPU 수))")
     p.add_argument("--godot", default=os.environ.get("GODOT", "godot"), help="godot 실행 파일(run 과 같음)")

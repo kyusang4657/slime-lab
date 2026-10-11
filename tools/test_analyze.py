@@ -1161,35 +1161,49 @@ class TestAblate(TempDirCase):
 GATE_CONFIG = {"repro": {"maturity": 30}, "run": {"max_ticks": float(CONFIG_MAX_TICKS)}}
 
 
-def gate_lineage(eaten: list[float], life: list[int], children: list[int], alive: int = 0) -> list[dict]:
-    """대상(틱 300 에 태어남 — [200, 600) 안) 개체마다 (먹은 양, 죽은 나이, 자식 수). 대상이 아닌 줄도 넣어 거르기를 본다: 처음 개체 2
-    (부모 없음, 먹은 양 999), 틱 199·600 에 태어난 개체(먹은 양 999·자식 9). alive = 끝까지 살아 있는(death_tick −1) 대상 수(앞에서부터)."""
+def gate_lineage(eaten: list[float], life: list[int], children: list[int], alive: int = 0, born: int = 300,
+                 outside: tuple[int, int] = (199, 600)) -> list[dict]:
+    """대상(틱 born 에 태어남 — 대상 구간 안) 개체마다 (먹은 양, 죽은 나이, 자식 수). 대상이 아닌 줄도 넣어 거르기를 본다: 처음 개체 2
+    (부모 없음, 먹은 양 999), 틱 outside(구간 바로 앞·끝)에 태어난 개체(먹은 양 999·자식 9).
+    alive = 끝까지 살아 있는(death_tick −1) 대상 수(앞에서부터)."""
     rows = [{"id": 0, "parent_a": -1, "parent_b": -1, "gen": 0, "birth_tick": 0, "death_tick": 400, "eaten": 999.0, "children": 9},
             {"id": 1, "parent_a": -1, "parent_b": -1, "gen": 0, "birth_tick": 0, "death_tick": 500, "eaten": 999.0, "children": 9}]
-    for t in (199, 600):
+    for t in outside:
         rows.append({"id": len(rows), "parent_a": 0, "parent_b": 1, "gen": 1, "birth_tick": t, "death_tick": t + 1,
                      "eaten": 999.0, "children": 9})
     for k, (e, lf, c) in enumerate(zip(eaten, life, children)):
-        rows.append({"id": len(rows), "parent_a": 0, "parent_b": 1, "gen": 1, "birth_tick": 300,
-                     "death_tick": -1 if k < alive else 300 + lf, "eaten": e, "children": c})
+        rows.append({"id": len(rows), "parent_a": 0, "parent_b": 1, "gen": 1, "birth_tick": born,
+                     "death_tick": -1 if k < alive else born + lf, "eaten": e, "children": c})
     return rows
 
 
 def gate_spec(seed: int, branch: str) -> dict:
     """손으로 정한 관문 A 결과(씨앗 12개, 갈래마다 대상 30). 손 계산:
     먹은 양 — freeze 10, 학습 끔 11, 학습 12(씨앗 1~10)·8(11~12) → 학습 > freeze 10/12, 묶은 중앙값 12 ÷ 10 = 1.2.
-    성숙까지 산 몫(죽은 나이 31 > 성숙 30 · 딱 30 은 아님 — 번식 자격으로 번식 단계에 닿으려면 성숙한 틱을 살아 넘겨야 함) — freeze·학습 끔
-    15/30 = 0.5, 학습 20/30(씨앗 1~8)·15/30 → 8/12, 묶은 값 220/360.
-    자식 수 — freeze·학습 끔 평균 0.5, 학습 1(씨앗 1~5)·0 → 5/12, 묶은 값 150/360. 모두 1,000틱까지 삶 → ①·② 충족 = 통과."""
+    산 나이 — freeze·학습 끔 40 × 15 + 30 × 15(평균 35, 성숙까지 산 몫 15/30 — 딱 30 은 성숙 30 을 넘지 못함). 학습은 씨앗 1~8
+    50 × 12 + 30 × 18(평균 38 > 35, 그러나 성숙 몫 12/30 < 0.5), 씨앗 9~11 31 × 20 + 30 × 10(평균 30.667 < 35, 그러나 성숙 몫 20/30 > 0.5),
+    씨앗 12 는 freeze 와 같음 → 평균 산 나이 8/12, 성숙까지 산 몫 3/12(보고만). 묶은 평균 산 나이 12930/360 = 35.917, 성숙 몫 171/360.
+    자식 수 — freeze·학습 끔 평균 0.5, 학습 1(씨앗 1~5)·0 → 5/12, 묶은 값 150/360.
+    → ① 충족, ② 는 평균 산 나이(8/12)로만 충족(성숙 몫 3/12·자식 5/12) = 통과."""
     if branch == "learn":
         e = 12.0 if seed <= 10 else 8.0
-        m = 20 if seed <= 8 else 15
+        lf = [50] * 12 + [30] * 18 if seed <= 8 else ([31] * 20 + [30] * 10 if seed <= 11 else [40] * 15 + [30] * 15)
         c = [1] * 30 if seed <= 5 else [0] * 30
     else:
         e = 10.0 if branch == "freeze" else 11.0
-        m = 15
+        lf = [40] * 15 + [30] * 15
         c = [1] * 15 + [0] * 15
-    return {"eaten": [e] * 30, "life": [31] * m + [30] * (30 - m), "children": c}
+    return {"eaten": [e] * 30, "life": lf, "children": c}
+
+
+def _fake_sets(argv: list[str], prefix: str) -> dict:
+    """가짜 실행기: --set=·--fork-set= 값을 실행기처럼 읽음(JSON 이면 JSON, 아니면 글자)."""
+    out = {}
+    for a in argv:
+        if a.startswith(prefix):
+            k, _, v = a[len(prefix):].partition("=")
+            out[k] = json.loads(v) if v[:1] not in "abcdefghijklmnopqrstuvwxyz" or v in ("true", "false") else v
+    return out
 
 
 class FakeGateRunner:
@@ -1206,11 +1220,7 @@ class FakeGateRunner:
             self.calls.append(list(cmd))
         argv = cmd[cmd.index("--") + 1:]
         args = dict(a[2:].split("=", 1) for a in argv if "=" in a and not a.startswith("--set="))
-        sets = {}
-        for a in argv:
-            if a.startswith("--set="):
-                k, _, v = a[6:].partition("=")
-                sets[k] = json.loads(v) if v[:1] not in "abcdefghijklmnopqrstuvwxyz" or v in ("true", "false") else v
+        sets = _fake_sets(argv, "--set=")
         branch = "off" if not sets.get("learn.enabled") else ("freeze" if sets.get("learn.freeze") else "learn")
         seed, cap = int(args["seed"]), int(args["max-ticks"])
         sp = self.spec(seed, branch)
@@ -1224,6 +1234,15 @@ class FakeGateRunner:
         return subprocess.CompletedProcess(cmd, 0, f"RESULT: seed={seed} reason=max_ticks\n", "")
 
 
+## 갈래 표 손 계산(gate_spec — 학습·freeze·학습 끔)
+GATE_HAND_ROWS = [
+    "| 평생 먹은 양(중앙값) | ① | 12.00 | 10.00 | 11.00 | 2.00 | 1.00 | 0.200 | 10/12 | 10/12 |",
+    "| 평균 산 나이(틱) | ② | 35.92 | 35.00 | 35.00 | 0.92 | 0.92 | 0.026 | 8/12 | 8/12 |",
+    "| 평균 자식 수 | ② | 0.417 | 0.500 | 0.500 | -0.083 | -0.083 | -0.167 | 5/12 | 5/12 |",
+    "| 성숙까지 산 몫 | 보고 | 0.475 | 0.500 | 0.500 | -0.025 | -0.025 | -0.050 | 3/12 | 3/12 |",
+]
+
+
 class TestGateA(TempDirCase):
     def gate(self, fake, variant: str = "A-1", seeds: str = "1-12", *extra: str) -> int:
         with mock.patch.object(analyze.subprocess, "run", fake), quiet():
@@ -1235,7 +1254,8 @@ class TestGateA(TempDirCase):
 
     def test_commands(self) -> None:
         """갈래마다 같은 씨앗을 틱 0 부터: 예설정 chance_baseline + 학습·몸 자람, 학습(freeze 거짓)·freeze(참)·학습 끔(learn.enabled 거짓),
-        --max-ticks = 변형의 끝(A-1 1,000 · A-1-life 1,500), 세대 끝 조건은 큰 값, lineage.csv 를 씀. A-1-life 는 A-1′ 세계(400·400·1.0)."""
+        --max-ticks = 변형의 끝(A-1 1,000 · A-1-life 1,500), 세대 끝 조건은 큰 값, lineage.csv 를 씀. A-1-life 는 A-1′ 세계(400·400·1.0)이고
+        --variant 를 주지 않으면 이것(공식 A-1 — 사용자 결정 2026-10-11)."""
         fake = FakeGateRunner()
         self.assertEqual(self.gate(fake, "A-1", "1-2"), 0)
         self.assertEqual(len(fake.calls), 6)
@@ -1251,64 +1271,96 @@ class TestGateA(TempDirCase):
                                       + [("--set=learn.enabled=false",)] * 2))
         life = FakeGateRunner()
         shutil.rmtree(self.tmp / "ga")
-        self.assertEqual(self.gate(life, "A-1-life", "3"), 0)
+        with mock.patch.object(analyze.subprocess, "run", life), quiet():
+            self.assertEqual(analyze.main(["gate-a", "--seeds", "3", "--godot", "g", "--out", str(self.tmp / "ga")]), 0)
+        self.assertEqual(len(life.calls), 3)
         for c in life.calls:
             self.assertIn("--max-ticks=1500", c)
             for kv in ("population.initial=400", "population.cap=400", "plants.initial_fill=1.0"):
                 self.assertIn("--set=" + kv, c)
+        self.assertIn("# 관문 A 보고서 — 변형 `A-1-life`", self.md())
+        self.assertIn("- 변형: 공식 A-1(사용자 결정 2026-10-11", self.md())
         aux = FakeGateRunner()
         shutil.rmtree(self.tmp / "ga")
-        self.assertEqual(self.gate(aux, "A-1", "3", "--aux"), 0)
+        self.assertEqual(self.gate(aux, "A-1-life", "3", "--aux"), 0)
         with_none = [c for c in aux.calls if "--set=learn.diag_factor=none" in c]
         self.assertEqual(len(with_none), 2, "보조 판: 학습·freeze 갈래만 learn.diag_factor=none")
         self.assertIn("보조 판 — 판정에 쓰지 않음", self.md())
 
     def test_hand_computed_pass(self) -> None:
-        """gate_spec 의 손 계산(세 행·두 차이·효과 크기·씨앗 수, 14.3 보고 꼴) → 통과. 대상이 아닌 개체(처음 개체·틱 199·600 출생)는 빠짐."""
-        self.assertEqual(self.gate(FakeGateRunner()), 0)
+        """gate_spec 의 손 계산(세 행·두 차이·효과 크기·씨앗 수, 14.3 보고 꼴 — 지표 넷, 쓰임 ①·②·보고) → 통과. 대상이 아닌 개체
+        (처음 개체·틱 199·600 출생)는 빠짐."""
+        self.assertEqual(self.gate(FakeGateRunner(), "A-1-life"), 0)
         md = self.md()
         self.assertIn("- **판정: 통과**", md)
-        self.assertIn("| 평생 먹은 양(중앙값) | 12.00 | 10.00 | 11.00 | 2.00 | 1.00 | 0.200 | 10/12 | 10/12 |", md)
-        self.assertIn("| 성숙까지 산 몫 | 0.611 | 0.500 | 0.500 | 0.111 | 0.111 | 0.222 | 8/12 | 8/12 |", md)
-        self.assertIn("| 평균 자식 수 | 0.417 | 0.500 | 0.500 | -0.083 | -0.083 | -0.167 | 5/12 | 5/12 |", md)
+        for row in GATE_HAND_ROWS:
+            self.assertIn(row, md)
         self.assertIn("학습 > freeze 씨앗 **10/12**(문턱 10), 묶은 중앙값 비 **1.200**(문턱 1.05) → 충족", md)
-        self.assertIn("성숙까지 산 몫 **8/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 충족", md)
+        self.assertIn("- ② 생존·번식: 평균 산 나이(틱) **8/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 충족", md)
+        self.assertIn("- 보고만(판정에 쓰지 않음): 성숙까지 산 몫 **3/12**", md)
         self.assertIn("| `GATE_A_WIN` | 10 |", md)
+        self.assertIn("| `GATE_A_SECONDARY` | `life`, `children` |", md)
+        self.assertIn("| 9 | 학습 | 조건 채움 | [200, 600) | 1,500 | 30 | 12.00 | 30.67 | 0.000 | 0.667 |", md)
         rows = read_csv_rows(self.tmp / "ga" / "gate_a.csv")
         self.assertEqual(list(rows[0]), analyze.GATE_A_COLUMNS)
         r = [x for x in rows if x["seed"] == "9" and x["branch"] == "learn"][0]
-        self.assertEqual((r["status"], r["targets"], r["eaten_median"], r["matured_share"], r["children_mean"]),
-                         ("ok", "30", "12", "0.5", "0"))
+        self.assertEqual((r["status"], r["birth_lo"], r["birth_hi"], r["targets"], r["eaten_median"], r["life_mean"],
+                          r["matured_share"], r["children_mean"]),
+                         ("ok", "200", "600", "30", "12", "30.66666667", "0.6666666667", "0"))
+
+    def test_secondary_uses_life(self) -> None:
+        """② 의 생존 지표 = 평균 산 나이(사전 결정 2026-10-11 — 성숙까지 산 몫은 보고만). 두 방향으로 본다:
+        손 계산(gate_spec)은 평균 산 나이 8/12 로만 ② 를 채움(성숙 몫 3/12) → 통과. 성숙 몫이 12/12 지만 평균 산 나이 0/12 인 결과 → 실패
+        (② 에 성숙 몫을 세면 통과가 되어 이 검사가 실패함)."""
+        self.assertEqual(analyze.GATE_A_SECONDARY, ("life", "children"))
+        self.assertEqual(self.gate(FakeGateRunner(), "A-1-life"), 0)
+        self.assertIn("- **판정: 통과**", self.md())
+        shutil.rmtree(self.tmp / "ga")
+        matured_only = lambda s, b: {**gate_spec(s, b), **({"life": [31] * 20 + [30] * 10} if b == "learn" else {})}
+        self.assertEqual(self.gate(FakeGateRunner(matured_only), "A-1-life"), 0)
+        md = self.md()
+        self.assertIn("- ② 생존·번식: 평균 산 나이(틱) **0/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 못 함", md)
+        self.assertIn("- 보고만(판정에 쓰지 않음): 성숙까지 산 몫 **12/12**", md)
+        self.assertIn("- **판정: 실패**", md)
 
     def test_thresholds(self) -> None:
-        """문턱 경계: 먹은 양 씨앗 9/12 → 실패. 씨앗 10/12 지만 묶은 중앙값 비 1.04 → 실패. 성숙·자식 모두 7/12 → 실패."""
+        """문턱 경계: 먹은 양 씨앗 9/12 → 실패. 씨앗 10/12 지만 묶은 중앙값 비 1.04 → 실패. 평균 산 나이·자식 모두 7/12 이하 → 실패."""
         cases = {
             "wins9": lambda s, b: {**gate_spec(s, b), **({"eaten": [9.0] * 30} if b == "learn" and s == 10 else {})},
             "ratio": lambda s, b: {**gate_spec(s, b), **({"eaten": [10.4] * 30} if b == "learn" and s <= 10 else {})},
-            "second": lambda s, b: {**gate_spec(s, b), **({"life": [31] * 15 + [30] * 15} if b == "learn" and s == 8 else {})},
+            "second": lambda s, b: {**gate_spec(s, b), **({"life": [40] * 15 + [30] * 15} if b == "learn" and s == 8 else {})},
         }
         want = {"wins9": "학습 > freeze 씨앗 **9/12**(문턱 10), 묶은 중앙값 비 **1.200**(문턱 1.05) → 못 함",
                 "ratio": "학습 > freeze 씨앗 **10/12**(문턱 10), 묶은 중앙값 비 **1.040**(문턱 1.05) → 못 함",
-                "second": "성숙까지 산 몫 **7/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 못 함"}
+                "second": "평균 산 나이(틱) **7/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 못 함"}
         for name, spec in cases.items():
             shutil.rmtree(self.tmp / "ga", ignore_errors=True)
-            self.assertEqual(self.gate(FakeGateRunner(spec)), 0, name)
+            self.assertEqual(self.gate(FakeGateRunner(spec), "A-1-life"), 0, name)
             md = self.md()
             self.assertIn("- **판정: 실패**", md, name)
             self.assertIn(want[name], md, name)
 
     def test_tied_metric(self) -> None:
-        """판정 가능 씨앗 모두에서 학습 = freeze 인 지표(검증 지적 — 기본값의 성숙까지 산 몫은 늘 1)는 '갈래를 가르지 못한 지표' 로 적음.
-        한 씨앗이라도 다르면 적지 않음(손 계산 통과 경우에는 그 줄이 없음)."""
+        """판정 가능 씨앗 모두에서 학습 = freeze 인 지표(1단계 검증 — 기본값의 성숙까지 산 몫은 늘 1)는 '갈래를 가르지 못한 지표' 로 적음.
+        성숙 몫은 보고만이라 판정에 닿지 않음(모두 성숙해도 평균 산 나이로 통과). 한 씨앗이라도 다르면 적지 않음."""
         self.assertEqual(self.gate(FakeGateRunner()), 0)
         self.assertNotIn("- **갈래를 가르지 못한 지표", self.md())
         shutil.rmtree(self.tmp / "ga")
-        all_mature = lambda s, b: {**gate_spec(s, b), "life": [31] * 30}
+        all_mature = lambda s, b: {**gate_spec(s, b), "life": [v + 40 for v in gate_spec(s, b)["life"]]}
         self.assertEqual(self.gate(FakeGateRunner(all_mature)), 0)
         md = self.md()
         self.assertIn("- **갈래를 가르지 못한 지표: 성숙까지 산 몫** — 판정 가능 씨앗 12개 모두에서 학습 = freeze(값 1.000). "
+                      "같은 값은 이긴 씨앗으로 세지 않으므로 보고만 하는 지표라 판정에 닿지 않음", md)
+        self.assertIn("- ② 생존·번식: 평균 산 나이(틱) **8/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 충족", md)
+        self.assertIn("- **판정: 통과**", md)
+        self.assertNotIn("- **갈래를 가르지 못한 지표: 평균", md)
+        shutil.rmtree(self.tmp / "ga")
+        same_life = lambda s, b: {**gate_spec(s, b), "life": [31] * 30}
+        self.assertEqual(self.gate(FakeGateRunner(same_life)), 0)
+        md = self.md()
+        self.assertIn("- **갈래를 가르지 못한 지표: 평균 산 나이(틱)** — 판정 가능 씨앗 12개 모두에서 학습 = freeze(값 31.00). "
                       "같은 값은 이긴 씨앗으로 세지 않으므로 ② 는 평균 자식 수로만 갈림", md)
-        self.assertIn("성숙까지 산 몫 **0/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 못 함", md)
+        self.assertIn("평균 산 나이(틱) **0/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 못 함", md)
         self.assertNotIn("- **갈래를 가르지 못한 지표: 평균 자식 수", md)
         shutil.rmtree(self.tmp / "ga")
         one_differs = lambda s, b: {**gate_spec(s, b), "life": [31] * 30 if (s, b) != (7, "freeze") else [31] * 29 + [30]}
@@ -1316,8 +1368,9 @@ class TestGateA(TempDirCase):
         self.assertNotIn("- **갈래를 가르지 못한 지표", self.md())
 
     def test_unjudgeable_and_variants(self) -> None:
-        """A-1: 한 갈래라도 1,000틱 전에 멸종하거나 대상 < 30 이면 그 씨앗 판정 불가 → 판정 불가(A-1′ 안내). A-1-life 는 생존 요구가 없어
-        같은 멸종 씨앗도 판정하지만 끝에 살아 있는 대상이 있으면 판정 불가. 씨앗 수 ≠ 12 이면 판정 안 함. 학습 끔 갈래는 판정에 안 씀."""
+        """A-1(처음 정의): 한 갈래라도 1,000틱 전에 멸종하거나 대상 < 30 이면 그 씨앗 판정 불가 → 판정 불가(A-1′·공식 조건 안내).
+        A-1-life(공식)는 생존 요구가 없어 같은 멸종 씨앗도 판정하지만 끝에 살아 있는 대상이 있으면 판정 불가. 씨앗 수 ≠ 12 이면 판정 안 함.
+        학습 끔 갈래는 판정 조건이 아니고, 조건을 못 채우면 셋째 행에서만 빠짐."""
         def spec(s, b):
             sp = gate_spec(s, b)
             if s == 3 and b == "freeze":
@@ -1329,10 +1382,14 @@ class TestGateA(TempDirCase):
             return sp
         self.assertEqual(self.gate(FakeGateRunner(spec)), 0)
         md = self.md()
-        self.assertIn("- **판정: 판정 불가 — 씨앗 2개(3, 4)가 조건을 채우지 못함(14.3 은 이때 A-1′ 를 같은 문턱으로 돌림", md)
+        self.assertIn("- **판정: 판정 불가 — 씨앗 2개(3, 4)가 조건을 채우지 못함(처음 정의 — 14.3 은 이때 A-1′ 를 같은 문턱으로 돌림. "
+                      "공식 조건은 A-1-life)**", md)
         self.assertIn("| 3 | freeze: 생존 틱 전 멸종(900틱 멸종) |", md)
         self.assertIn("| 4 | 학습: 대상 모자람(대상 29) |", md)
-        self.assertIn("| 5 | 학습 끔 | 생존 틱 전 멸종 | 100 멸종 |", md)
+        self.assertIn("| 5 | 학습 끔 | 생존 틱 전 멸종 | [200, 600) | 100 멸종 |", md)
+        self.assertIn("## 학습 끔 행이 없는 판정 가능 씨앗", md)
+        self.assertIn("| 5 | 생존 틱 전 멸종(100틱 멸종) |", md)
+        self.assertIn("(학습 끔 행은 그 갈래도 조건을 채운 9개)", md)
         shutil.rmtree(self.tmp / "ga")
 
         def spec_life(s, b):
@@ -1342,19 +1399,19 @@ class TestGateA(TempDirCase):
             return sp
         self.assertEqual(self.gate(FakeGateRunner(spec_life), "A-1-life"), 0)
         md = self.md()
-        self.assertIn("- **판정: 판정 불가 — 씨앗 2개(4, 6)", md)
+        self.assertIn("- **판정: 판정 불가 — 씨앗 2개(4, 6)가 조건을 채우지 못함**", md)
         self.assertIn("| 6 | 학습: 끝에 대상이 살아 있음(대상 2명이 끝에 살아 있음) |", md)
         self.assertNotIn("| 3 | freeze:", md)
         shutil.rmtree(self.tmp / "ga")
-        self.assertEqual(self.gate(FakeGateRunner(), "A-1", "1-11"), 0)
+        self.assertEqual(self.gate(FakeGateRunner(), "A-1-life", "1-11"), 0)
         self.assertIn("- **판정: 판정 안 함 — 씨앗 11개(문턱은 씨앗 12개 기준, 14.3)**", self.md())
 
     def test_rerun_reuses_and_same_report(self) -> None:
         """같은 명령을 다시 돌리면 실행 없이 같은 보고서. 실패한 실행(결과 없음)이 있으면 그 씨앗은 판정 불가·종료 코드 1."""
-        self.assertEqual(self.gate(FakeGateRunner(), "A-1", "1-2"), 0)
+        self.assertEqual(self.gate(FakeGateRunner(), "A-1-life", "1-2"), 0)
         first = self.md()
         again = FakeGateRunner()
-        self.assertEqual(self.gate(again, "A-1", "1-2"), 0)
+        self.assertEqual(self.gate(again, "A-1-life", "1-2"), 0)
         self.assertEqual((again.calls, self.md()), ([], first))
         shutil.rmtree(self.tmp / "ga")
 
@@ -1362,17 +1419,205 @@ class TestGateA(TempDirCase):
             if "--seed=2" in cmd and "--set=learn.freeze=true" in cmd:
                 return subprocess.CompletedProcess(cmd, 2, "", "설정 오류: 시험\n")
             return FakeGateRunner()(cmd, **kw)
-        self.assertEqual(self.gate(failing, "A-1", "1-2"), 1)
+        self.assertEqual(self.gate(failing, "A-1-life", "1-2"), 1)
         self.assertIn("| 2 | freeze: 실행 실패(결과 없음 (종료 코드 2 — 설정 오류: 시험)) |", self.md())
 
     def test_variant_names(self) -> None:
-        """변형 이름은 정해진 둘(사용자가 판정 조건을 다시 정하는 중 — 이름 붙은 변형), 문턱은 14.3 표의 값."""
-        self.assertEqual(list(analyze.GATE_A_VARIANTS), ["A-1", "A-1-life"])
+        """변형 이름은 정해진 셋(처음 정의 A-1 · 공식 A-1-life · A-2), --variant 기본 = 공식(GATE_A_OFFICIAL), 문턱은 14.3 표의 값."""
+        self.assertEqual(list(analyze.GATE_A_VARIANTS), ["A-1", "A-1-life", "A-2"])
+        self.assertEqual(analyze.GATE_A_OFFICIAL, "A-1-life")
+        self.assertEqual(analyze.build_parser().parse_args(["gate-a", "--out", "x"]).variant, "A-1-life")
         self.assertEqual((analyze.GATE_A_WIN, analyze.GATE_A_RATIO, analyze.GATE_A_SECONDARY_WIN, analyze.GATE_A_MIN_BIRTHS,
-                          analyze.GATE_A_SEEDS, analyze.GATE_A_BIRTH_WINDOW, analyze.GATE_A_TICKS), (10, 1.05, 8, 30, 12, (200, 600), 1000))
+                          analyze.GATE_A_SEEDS, analyze.GATE_A_BIRTH_WINDOW, analyze.GATE_A_TICKS, analyze.GATE_A_LIFE_MAX_TICKS,
+                          analyze.GATE_A_SECONDARY),
+                         (10, 1.05, 8, 30, 12, (200, 600), 1000, 1500, ("life", "children")))
+        self.assertEqual((analyze.GATE_A2_PRESET, analyze.GATE_A2_AT_GEN, analyze.GATE_A2_TICKS, analyze.GATE_A2_WINDOW),
+                         ("learn_basic", "30", 340, 100))
+        self.assertEqual([analyze.GATE_A_VARIANTS[v]["ratio"] for v in analyze.GATE_A_VARIANTS], [True, True, False])
         with quiet(), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
-                analyze.build_parser().parse_args(["gate-a", "--variant", "A-2", "--out", "x"])
+                analyze.build_parser().parse_args(["gate-a", "--variant", "A-3", "--out", "x"])
+
+    def test_prereg_stamp(self) -> None:
+        """보고서 머리의 사전 고정 줄: --prereg 값을 prereg_text 에 넘겨 그대로 적음, 주지 않으면 '주지 않음'. 판정 문턱은 바꾸지 않음."""
+        self.assertEqual(self.gate(FakeGateRunner(), "A-1-life", "1-2"), 0)
+        self.assertIn("- 사전 고정: 주지 않음(`--prereg 커밋`", self.md())
+        shutil.rmtree(self.tmp / "ga")
+        with mock.patch.object(analyze, "prereg_text", side_effect=lambda c: f"받은 값 {c}"):
+            self.assertEqual(self.gate(FakeGateRunner(), "A-1-life", "1-2", "--prereg", "1234abc"), 0)
+        self.assertIn("- 사전 고정: 받은 값 1234abc\n", self.md())
+
+    @unittest.skipUnless(shutil.which("git"), "git 없음")
+    def test_prereg_text_with_git(self) -> None:
+        """prereg_text: 사전 고정 커밋의 파일과 지금 파일이 같으면 '같음', 고치면 '다름', 없는 커밋·저장소 밖은 '확인 못 함'."""
+        repo = self.tmp / "repo"
+        tool = repo / "tools" / "x.py"
+        tool.parent.mkdir(parents=True)
+        tool.write_text("A = 1\n", encoding="utf-8")
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *a],
+                                        cwd=str(repo), capture_output=True, text=True, env=env, check=True)
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-q", "-m", "v0.2 관문 A(1): 시험 고정")
+        h = git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(analyze.prereg_text(h[:7], tool),
+                         f"커밋 `{h[:12]}`(v0.2 관문 A(1): 시험 고정) — 지금 도는 `tools/x.py` 가 그 커밋의 것과 같음")
+        tool.write_text("A = 2\n", encoding="utf-8")
+        self.assertIn("가 그 커밋의 것과 **다름**(사전 고정 뒤 판정 코드가 바뀜", analyze.prereg_text(h, tool))
+        self.assertIn("확인 못 함(저장소에 그런 커밋이 없음)", analyze.prereg_text("0" * 40, tool))
+        outside = self.tmp / "plain" / "y.py"
+        outside.parent.mkdir()
+        outside.write_text("", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": str(self.tmp)}):
+            self.assertIn("확인 못 함(git 저장소 밖", analyze.prereg_text(h, outside))
+        self.assertTrue(analyze.prereg_text("", tool).startswith("주지 않음"))
+
+
+# ── 관문 A-2(gate-a --variant A-2 — 가짜 subprocess, DESIGN-v0.2 14.3) ──
+
+class FakeGateA2Runner:
+    """gate-a --variant A-2 의 실행기 흉내. 기준 실행(--preset=learn_basic --generations=30): 틱 F = 1000 + 10 × 씨앗에 평균 세대 도달
+    (base_extinct 씨앗은 900틱에 멸종). 갈래(--resume): 스냅숏 폴더의 기준 summary.json 틱 F 부터 --max-ticks 까지 살고, 대상(틱 F + 50
+    출생)은 gate_spec(씨앗, 갈래 — --fork-set=learn.freeze=true 면 freeze, 없으면 learn), 대상 구간 밖 출생(F − 1·F + 100)도 넣음.
+    우연 기준(--preset=chance_baseline): chance_ok 씨앗은 --max-ticks 까지 살고 대상(틱 F + 50 출생, F = --max-ticks − 340) 먹은 양 5·
+    산 나이 33·자식 0, 나머지는 600틱에 멸종(대상 없음)."""
+
+    def __init__(self, base_extinct: tuple = (), chance_ok: tuple = (1, 2)):
+        self.calls: list[list[str]] = []
+        self.lock = threading.Lock()
+        self.base_extinct = base_extinct
+        self.chance_ok = chance_ok
+
+    def __call__(self, cmd, **kw):
+        with self.lock:
+            self.calls.append(list(cmd))
+        argv = cmd[cmd.index("--") + 1:]
+        args = dict(a[2:].split("=", 1) for a in argv if "=" in a and not a.startswith(("--set=", "--fork-set=")))
+        out = Path(args["out"])
+        extra = {"config": GATE_CONFIG}
+        if "resume" in args:
+            base = json.loads((Path(args["resume"]).parent / "summary.json").read_text(encoding="utf-8"))
+            seed, f, end = int(base["seed"]), int(base["tick"]), int(args["max-ticks"])
+            forks = _fake_sets(argv, "--fork-set=")
+            sp = gate_spec(seed, "freeze" if forks.get("learn.freeze") else "learn")
+            write_fake_run(out, seed, {}, civ=0, ticks=end, start_tick=f, generations_target=1e9, max_ticks=end,
+                           end_reason="max_ticks", lineage=gate_lineage(sp["eaten"], sp["life"], sp["children"], born=f + 50,
+                                                                         outside=(f - 1, f + 100)),
+                           summary_extra={**extra, "preset": "", "resumed_from": args["resume"], "forked": forks,
+                                          "reset_learned": False,
+                                          "history_hash": f"{seed:02d}{'f' if forks else 'e'}" + "0" * 61})
+            return subprocess.CompletedProcess(cmd, 0, "RESULT: reason=max_ticks\n", "")
+        seed = int(args["seed"])
+        if args["preset"] == "learn_basic":
+            ext = seed in self.base_extinct
+            write_fake_run(out, seed, {}, civ=0, ticks=900 if ext else 1000 + 10 * seed, preset="learn_basic",
+                           generations_target=float(args["generations"]), max_ticks=CONFIG_MAX_TICKS,
+                           end_reason="extinction" if ext else "generations", extinct_tick=900 if ext else -1,
+                           summary_extra={**extra, "history_hash": f"{seed:02d}b" + "0" * 61})
+            return subprocess.CompletedProcess(cmd, 0, f"RESULT: seed={seed} reason=generations\n", "")
+        end = int(args["max-ticks"])
+        f = end - 340
+        ok = seed in self.chance_ok
+        lin = gate_lineage([5.0] * 30, [33] * 30, [0] * 30, born=f + 50, outside=(f - 1, f + 100)) if ok else gate_lineage([], [], [])
+        write_fake_run(out, seed, {}, civ=0, ticks=end if ok else 600, preset=args["preset"], overrides=_fake_sets(argv, "--set="),
+                       generations_target=float(args["generations"]), max_ticks=end,
+                       end_reason="max_ticks" if ok else "extinction", extinct_tick=-1 if ok else 600, lineage=lin,
+                       summary_extra={**extra, "history_hash": f"{seed:02d}c" + "0" * 61})
+        return subprocess.CompletedProcess(cmd, 0, f"RESULT: seed={seed} reason=max_ticks\n", "")
+
+
+class TestGateA2(TempDirCase):
+    def gate(self, fake, seeds: str = "1-12", *extra: str) -> int:
+        with mock.patch.object(analyze.subprocess, "run", fake), quiet():
+            return analyze.main(["gate-a", "--variant", "A-2", "--seeds", seeds, "--godot", "/opt/godot",
+                                 "--out", str(self.tmp / "ga2"), *extra])
+
+    def md(self) -> str:
+        return (self.tmp / "ga2" / "gate_a.md").read_text(encoding="utf-8")
+
+    def test_commands(self) -> None:
+        """① 기준 실행 = learn_basic 평균 30세대(lineage 없음, 틱 상한은 설정값) → ② 같은 스냅숏에서 학습(--fork-set 없음)·freeze
+        (--fork-set=learn.freeze=true)를 --max-ticks F + 340·세대 끝 조건 1e9·lineage 로, 우연 기준은 같은 씨앗을 틱 0 부터
+        chance_baseline + 학습·몸 자람으로 --max-ticks F + 340 까지."""
+        fake = FakeGateA2Runner()
+        self.assertEqual(self.gate(fake, "1-2"), 0)
+        self.assertEqual(len(fake.calls), 8)
+        base = [c for c in fake.calls if "--preset=learn_basic" in c]
+        self.assertEqual(len(base), 2)
+        for c in base:
+            self.assertIn("--generations=30", c)
+            self.assertIn("--no-lineage", c)
+            self.assertFalse(any(a.startswith(("--max-ticks=", "--set=")) for a in c), c)
+        snap1 = self.tmp / "ga2" / "base" / "seed1" / "final.snapshot.json"
+        fork1 = [c for c in fake.calls if f"--resume={snap1}" in c]
+        self.assertEqual(len(fork1), 2)
+        self.assertEqual(sorted(tuple(a for a in c if a.startswith("--fork-set=")) for c in fork1),
+                         [(), ("--fork-set=learn.freeze=true",)])
+        for c in fork1:
+            self.assertIn("--max-ticks=1350", c)
+            self.assertIn("--generations=1000000000", c)
+            self.assertNotIn("--no-lineage", c)
+            self.assertFalse(any(a.startswith(("--seed=", "--preset=", "--set=")) for a in c), c)
+        chance1 = [c for c in fake.calls if "--preset=chance_baseline" in c and "--seed=1" in c]
+        self.assertEqual(len(chance1), 1)
+        for a in ("--max-ticks=1350", "--generations=1000000000", "--set=learn.enabled=true", "--set=body.grow_enabled=true"):
+            self.assertIn(a, chance1[0])
+        self.assertNotIn("--no-lineage", chance1[0])
+        self.assertFalse(any(a.startswith("--resume=") for a in chance1[0]))
+
+    def test_hand_computed(self) -> None:
+        """A-2 의 손 계산: 학습·freeze 는 gate_spec(대상 [F, F + 100) — F − 1·F + 100 출생은 빠짐), 우연 기준은 씨앗 1·2 만 F + 340 까지
+        삶(나머지 600틱 멸종 → 그 씨앗의 기준 행 없음). ① 은 비 문턱 없이 10/12(비는 보고), ② 평균 산 나이 8/12 → 통과."""
+        self.assertEqual(self.gate(FakeGateA2Runner()), 0)
+        md = self.md()
+        self.assertIn("# 관문 A 보고서 — 변형 `A-2`", md)
+        self.assertIn("- **판정: 통과**", md)
+        self.assertIn("학습 > freeze 씨앗 **10/12**(문턱 10), 묶은 중앙값 비 **1.200**(A-2 는 보고 — 문턱 없음) → 충족", md)
+        self.assertIn("- ② 생존·번식: 평균 산 나이(틱) **8/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 충족", md)
+        self.assertIn("(우연 기준 행은 그 갈래도 조건을 채운 2개)", md)
+        for row in ("| 평생 먹은 양(중앙값) | ① | 12.00 | 10.00 | 5.00 | 2.00 | 7.00 | 0.200 | 10/12 | 2/2 |",
+                    "| 평균 산 나이(틱) | ② | 35.92 | 35.00 | 33.00 | 0.92 | 2.92 | 0.026 | 8/12 | 2/2 |",
+                    "| 평균 자식 수 | ② | 0.417 | 0.500 | 0.000 | -0.083 | 0.417 | -0.167 | 5/12 | 2/2 |",
+                    "| 성숙까지 산 몫 | 보고 | 0.475 | 0.500 | 1.000 | -0.025 | -0.525 | -0.050 | 3/12 | 0/2 |"):
+            self.assertIn(row, md)
+        self.assertIn("| 학습 − freeze | 학습 − 우연 기준 |", md)
+        self.assertIn("## 우연 기준 행이 없는 판정 가능 씨앗", md)
+        self.assertIn("| 3 | 생존 틱 전 멸종(600틱 멸종) |", md)
+        self.assertIn("| 1 | 학습(그대로) | 조건 채움 | [1010, 1110) | 1,350 | 30 | 12.00 | 38.00 | 1.000 | 0.400 |", md)
+        rows = read_csv_rows(self.tmp / "ga2" / "gate_a.csv")
+        self.assertEqual(list(rows[0]), analyze.GATE_A_COLUMNS)
+        r = [x for x in rows if x["seed"] == "12" and x["branch"] == "chance"][0]
+        self.assertEqual((r["status"], r["birth_lo"], r["birth_hi"], r["extinct_tick"], r["targets"]),
+                         ("extinct", "1120", "1220", "600", "0"))
+
+    def test_base_ended_and_lenient(self) -> None:
+        """기준 실행이 30세대 전에 끝난 씨앗(멸종)은 갈래를 돌리지 않고 판정 불가. A-2 는 남은 씨앗으로 문턱을 셈(판정 불가 씨앗은 높은
+        씨앗으로 세지 않음 — 문턱 수는 씨앗 12개 기준 그대로). 같은 명령을 다시 돌리면 실행 없이 같은 보고서."""
+        fake = FakeGateA2Runner(base_extinct=(11, 12))
+        self.assertEqual(self.gate(fake), 0)
+        self.assertEqual(len(fake.calls), 12 + 10 * 3)
+        md = self.md()
+        self.assertIn("- **판정: 통과(판정 가능 씨앗 10/12 — 판정 불가 씨앗 2개(11, 12)는 높은 씨앗으로 세지 않음)**", md)
+        self.assertIn("| 11 | 기준 실행이 평균 30세대 전에 끝남(멸종, 틱 900) |", md)
+        self.assertIn("| 11 | 학습(그대로) | 기준 실행 없음(갈래 안 돌림) | — | — | — |", md)
+        self.assertIn("학습 > freeze 씨앗 **10/10**(문턱 10)", md)
+        first = md
+        again = FakeGateA2Runner(base_extinct=(11, 12))
+        self.assertEqual(self.gate(again), 0)
+        self.assertEqual((again.calls, self.md()), ([], first))
+        shutil.rmtree(self.tmp / "ga2")
+        self.assertEqual(self.gate(FakeGateA2Runner(base_extinct=tuple(range(1, 13)))), 0)
+        self.assertIn("- **판정: 판정 불가 — 씨앗 12개(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)가 조건을 채우지 못함**", self.md())
+
+    def test_aux_rejected(self) -> None:
+        """--aux(보조 판)는 A-1 계열만 — A-2 와 함께면 실행하지 않고 종료 코드 2."""
+        fake = FakeGateA2Runner()
+        err = io.StringIO()
+        with mock.patch.object(analyze.subprocess, "run", fake), quiet(), contextlib.redirect_stderr(err):
+            code = analyze.main(["gate-a", "--variant", "A-2", "--aux", "--godot", "g", "--out", str(self.tmp / "ga2")])
+        self.assertEqual((code, fake.calls), (2, []))
+        self.assertIn("--aux", err.getvalue())
 
 
 # ── 볼드윈 보고서 baldwin(손으로 만든 결과 폴더 — DESIGN-v0.2 11.2) ──
