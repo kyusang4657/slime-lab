@@ -511,7 +511,9 @@ static func validate_world(wd: SimWorld) -> String:
 
 ## 1단계 학습 상태의 길이·범위(DESIGN-v0.2 9.1): 학습을 켠 세계는 배운 두뇌 n × 행동 × 은닉, 고리 n × H(은닉은 × 은닉), 개체마다 하나인
 ## 값 n, 계통 L. 끈 세계는 모두 길이 0. 고리의 행동은 빈칸(-1)~행동 수 미만, 다음 자리는 0~H 미만, 배운 양은 음수가 아니고
-## 동화 지수는 0~1, 살아 있는 개체의 계통 학습량은 0(죽을 때 씀). 문제가 없으면 "".
+## 동화 지수는 0~1, 살아 있는 개체의 계통 학습량은 0(죽을 때 씀), 유전체의 학습률 유전자는 0~float32(learn.eta_max). 배운 두뇌의
+## abs(w) ≤ weight_clamp 는 보지 않음(갓 태어난 배운 두뇌 = 유전체 W2 이고 brain.init_range 가 weight_clamp 보다 클 수 있음 — 유전체
+## 가중치처럼). 문제가 없으면 "".
 static func _check_learned(wd: SimWorld, n: int, lc: int) -> String:
 	var on := wd._learn_on
 	var per := n if on else 0
@@ -545,6 +547,15 @@ static func _check_learned(wd: SimWorld, n: int, lc: int) -> String:
 			var id := wd.s_id[i]
 			if wd.lin_dw[id] != 0.0 or wd.lin_dw_juv[id] != 0.0 or wd.lin_assim[id] != 0.0:
 				return "살아 있는 개체의 계통 학습량(lineage.dw·dw_juv·assim)은 0 이어야 합니다(개체 %d — 죽을 때 씀)" % id
+		# 학습률 유전자 η 는 [0, learn.eta_max](DESIGN-v0.2 3.7). 유전체가 float32 라 상한도 float32 로 반올림한 eta_max(돌연변이가 eta_max 로
+		# 자른 값이 유전체에 들어가며 반올림됨 — 0.2 → 0.20000000298). --fork-set 으로 eta_max 를 낮춘 세계는 이 불변식이 깨지므로 열지 않음
+		var emax := float(PackedFloat32Array([float(wd.cfg.learn.eta_max)])[0])
+		var eo: int = wd._eta_o
+		for i in n:
+			for k in int(wd.L.eta_len):
+				var v := float(wd.s_genome[i * wd._G + eo + k])
+				if v < 0.0 or v > emax:
+					return "학습률 유전자(eta)가 0~learn.eta_max(%s) 밖입니다: %s(개체 %d)" % [str(emax), str(v), wd.s_id[i]]
 	return ""
 
 

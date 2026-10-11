@@ -234,6 +234,26 @@ class TestSimLabels(unittest.TestCase):
         stale = sorted(k for k in list(rules) + list(arrays) + list(chs) if k not in self.keys)
         self.assertEqual(stale, [], "sim-defaults.json 에 없는 키의 규칙")
 
+    def test_relation_ranges_named(self) -> None:
+        """관계 검사(SimConfig.validate 의 오류 문장에 설정 키가 둘 이상 — 예: learn.enabled 와 brain.think_every)의 두 키 가운데 한쪽 범위 글이
+        다른 쪽의 이름을 말한다(고급 설정의 말풍선에서 제약이 보이게 — 1단계 검증 지적: 판단 간격·행동 고르기 방식·정책 날카로움의 범위 글에
+        평생 학습과의 관계가 없었음)."""
+        text = _sim_config_text()
+        body = text[text.index("static func validate("):]
+        body = body[:body.index("\nstatic func ", 1)]
+        leaf = set(self.keys)
+        pairs = set()
+        for msg in re.findall(r'return "((?:[^"\\]|\\.)*)"', body):
+            ks = [k for k in dict.fromkeys(re.findall(r"\b[a-z_]+\.[a-z_0-9]+\b", msg)) if k in leaf]
+            for i, a in enumerate(ks):
+                for b in ks[i + 1:]:
+                    pairs.add((a, b))
+        self.assertGreaterEqual(len(pairs), 5, f"관계 검사 문장을 찾지 못함(정규식 확인): {sorted(pairs)}")
+        rng = lambda k: str(self.labels[k]["range"])
+        name = lambda k: str(self.labels[k]["name"])
+        bad = [f"{a} ↔ {b}" for a, b in sorted(pairs) if name(b) not in rng(a) and name(a) not in rng(b)]
+        self.assertEqual(bad, [], "관계 검사의 두 키 가운데 어느 범위 글도 상대 이름을 말하지 않음")
+
     def test_defaults_and_presets_inside_rules(self) -> None:
         """기본값과 예설정 값이 규칙 안(정수 키는 정수) — 규칙이 기본 실험을 막지 않게."""
         rules, arrays, chs = validate_rules(), array_rules(), choices()

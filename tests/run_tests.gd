@@ -3234,6 +3234,10 @@ const HAND_MAX_AGE := 200
 ## 세계 번식 경로의 η 유전 검사(test_learn_genome): 부모 a 의 η[k] = A × (k + 1), 부모 b = B × (2k + 1) — 2진 소수라 float32 그대로,
 ## 유전자마다 두 부모가 다르고 eta_init(0.05)·[0, eta_max] 경계와도 다름.
 const INHERIT_ETA_A := 0.046875
+## 스냅숏의 학습률 유전자 범위 검사(test_learn_snapshot): 낮춘 eta_max(learn_basic 의 처음 값 0.05 보다 작게), 2진수로 정확하지 않은
+## eta_max(float32 반올림이 위로 — 0.2 → 0.20000000298).
+const SNAP_LOW_ETA_MAX := 0.01
+const SNAP_F32_ETA_MAX := 0.2
 const INHERIT_ETA_B := 0.015625
 
 
@@ -3818,10 +3822,15 @@ func test_learn_snapshot() -> void:
 		"stats.period_learn 글자": func(d): d.stats.period_learn = "1",
 		"learn.enabled 끔(배열 길이가 설정과 다름)": func(d): d.config.learn.enabled = false,
 		"learn.ring_len 4(고리 길이가 설정과 다름)": func(d): d.config.learn.ring_len = 4.0,
+		"slimes.genome 학습률 유전자 > eta_max": func(d): d.slimes.genome = SimSnapshot.b64(_f32_set(wd.s_genome, wd._eta_o + 1,
+				float(wd.cfg.learn.eta_max) + 0.25)),
+		"slimes.genome 학습률 유전자 음수": func(d): d.slimes.genome = SimSnapshot.b64(_f32_set(wd.s_genome, (n - 1) * wd._G + wd._eta_o, -0.0625)),
+		"learn.eta_max 낮춤(--fork-set — 유전체 학습률 유전자가 새 상한 밖)": func(d): _lower_eta_max(d),
 	}
 	var reason := {"slimes.ring_a 행동 8": "행동 번호", "slimes.ring_a 행동 -2": "행동 번호", "slimes.ring_pos = H": "다음 자리",
 		"lineage.assim 1.5": "동화", "lineage.dw 살아 있는 개체 ≠ 0": "살아 있는", "stats.led_learn > led_spent": "학습 비용",
-		"stats.period_pmax > period_think": "학습 셈", "slimes.dw_juv 음수": "음수"}
+		"stats.period_pmax > period_think": "학습 셈", "slimes.dw_juv 음수": "음수", "slimes.genome 학습률 유전자 > eta_max": "학습률 유전자",
+		"slimes.genome 학습률 유전자 음수": "학습률 유전자", "learn.eta_max 낮춤(--fork-set — 유전체 학습률 유전자가 새 상한 밖)": "학습률 유전자"}
 	var leaked: Array[String] = []
 	for name: String in cases:
 		var d = JSON.parse_string(text)
@@ -3832,6 +3841,15 @@ func test_learn_snapshot() -> void:
 		elif reason.has(name) and not str(r.error).contains(reason[name]):
 			leaked.append("%s(이유 '%s')" % [name, str(r.error)])
 	check(dead_id >= 0 and leaked.is_empty(), "구조가 틀린 학습 스냅숏 %d종을 오류 문장으로 거부(샌 것: %s)" % [cases.size(), ", ".join(leaked)])
+	# 학습률 유전자의 상한은 float32 로 반올림한 eta_max: eta_max 0.2(2진수로 정확하지 않음)에서 η = f32(0.2) > 0.2 인 세계도 저장·열기
+	var w32 := world({"learn.eta_max": SNAP_F32_ETA_MAX, "learn.eta_init": SNAP_F32_ETA_MAX}, 9, "learn_basic")
+	w32.step_n(20)
+	var top := 0.0
+	for i in w32.population():
+		top = maxf(top, float(w32.s_genome[i * w32._G + w32._eta_o]))
+	var r32 := SimSnapshot.from_text(SimSnapshot.to_text(w32))
+	check(top > SNAP_F32_ETA_MAX and str(r32.error) == "" and r32.world != null,
+			"학습률 유전자 = float32(eta_max %s) = %s > eta_max 인 세계가 열림(상한은 float32 로 반올림한 값): %s" % [str(SNAP_F32_ETA_MAX), str(top), str(r32.error)])
 	done()
 
 
@@ -3839,6 +3857,12 @@ static func _i32_set(arr: PackedInt32Array, i: int, v: int) -> PackedInt32Array:
 	var a := arr.duplicate()
 	a[i] = v
 	return a
+
+
+## 스냅숏 사전의 설정에서 learn.eta_max(와 처음 값 — 관계 검사를 지나게)를 SNAP_LOW_ETA_MAX 로 낮춤(--fork-set 과 같은 꼴).
+static func _lower_eta_max(d: Dictionary) -> void:
+	d.config.learn.eta_max = SNAP_LOW_ETA_MAX
+	d.config.learn.eta_init = SNAP_LOW_ETA_MAX
 
 
 static func _f32_set(arr: PackedFloat32Array, i: int, v: float) -> PackedFloat32Array:
