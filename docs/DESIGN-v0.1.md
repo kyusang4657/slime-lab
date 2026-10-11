@@ -213,7 +213,7 @@
   - 어기면 실험을 만들지 않습니다: 실행기는 종료 코드 2(11절), 실험실 패널은 그 줄 바로 아래 오류와 새 실험 단추 꺼짐. 이름표의 범위 글과 규칙이 같은지는 `tools/test_sim_labels.py`, 실제 거부는 `test_config_rules` 가 지킵니다.
 
 ### 8.3 스냅숏(저장·복원) — 형식 1
-`SimSnapshot.to_dict` 가 만드는 JSON 사전 하나입니다(키는 이름순으로 씀). 엔진과 무관하게 파이썬·C# 에서 읽을 수 있게 형식을 여기에 고정합니다(`sim_snapshot.gd` 의 키 상수 `MAP_B64`·`CIV_*`·`SLIMES_B64`·`LINEAGE_B64`·`STATS_*` 와 같음).
+`SimSnapshot.to_dict` 가 만드는 JSON 사전 하나입니다(키는 이름순으로 씀). 엔진과 무관하게 파이썬·C# 에서 읽을 수 있게 형식을 여기에 고정합니다(`sim_snapshot.gd` 의 키 상수 `MAP_B64`·`CIV_*`·`SLIMES_B64`·`LINEAGE_B64`·`STATS_*` 와 같음). v0.2 에서 같은 형식 1 에 더한 키(`*_ADDED` 상수 — 행동 효과·평생 먹은 양·행동 셈 등)와 옛 파일에 없을 때 채우는 값은 [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 9.1 에 있습니다. 아래 표의 키는 그대로입니다.
 
 **값 꼴:**
 - **배열** = 원소를 리틀엔디언 바이트로 이어 붙인 base64 글자(빈 배열은 `""`). 원소 형식: `i32` 부호 있는 32비트 정수, `f64` 64비트 실수, `f32` 32비트 실수, `u8` 부호 없는 8비트.
@@ -325,7 +325,7 @@ eaten = struct.unpack("<d", bytes.fromhex(d["stats"]["led_eaten"]))[0]
 - 실험실 알림의 "틱 N" 은 그 사건의 `tick` 열 그대로입니다: 발견·저장고·첫 밭·밭 잃음은 진행 중인 틱 번호, 이정표·멸종은 진행한 뒤 틱.
 - 검사: `tests/run_tests.gd` `test_tick_basis`(매 틱 기록한 시계열을 계통 기록으로 다시 세고, 사건마다 `mean_gen` 의 기준 상태를 봄).
 
-**`timeseries.csv`** (열 순서 그대로, "구간" = 앞 줄 뒤 이 줄까지, "누적" = 처음부터, 그 밖은 이 줄 틱의 값)
+**`timeseries.csv`** (열 순서 그대로, "구간" = 앞 줄 뒤 이 줄까지, "누적" = 처음부터, 그 밖은 이 줄 틱의 값). 아래는 v0.1 의 22열이고, v0.2 는 이 순서·값·뜻을 그대로 둔 채 새 열을 끝에 붙입니다(0단계의 행동 셈 `act_*`·`eff_*` 16열 등 — [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 9.3).
 
 | 열 | 뜻 |
 |---|---|
@@ -348,7 +348,7 @@ eaten = struct.unpack("<d", bytes.fromhex(d["stats"]["led_eaten"]))[0]
 
 **`chronicle.csv`**: `tick`(위 표의 기준), `mean_gen`(0.01 단위로 반올림한 평균 세대 — 위 기준), `kind`, `actor_id`(−1 = 없음, `first_farm` 은 심은 개체 id), `text`(한국어 문장). `kind` 는 `discovery`(단계는 문장 머리 "채집·저장·농사 발견 — …"), `store_built`, `first_farm`(세계에서 한 번), `farm_lost`, `milestone`(`record.generation_milestone` 세대마다), `extinction`(처음부터 개체가 없으면 틱 0).
 
-**`lineage.csv`**
+**`lineage.csv`** (v0.1 의 11열. v0.2 는 끝에 열을 붙임 — 0단계 `eaten` 평생 먹은 에너지, [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 9.4)
 
 | 열 | 뜻 |
 |---|---|

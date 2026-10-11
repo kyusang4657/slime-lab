@@ -554,7 +554,8 @@ craft 모드는 단계 문·`_check_civ`·구역 저장 셈을 끕니다. 먹이
 | | `struct_kind`, `struct_first_t` | u8, i32 | C, C | 6 | 빈 배열 |
 | `rng` | `culture`, `innov` | 64비트 글자 | | 3 | 씨앗 ^ 소금으로 새로 |
 
-- 키 목록 상수: `SLIMES_B64_ADDED`, `LINEAGE_B64_ADDED`, `STATS_B64_ADDED`, `STATS_HEX_ADDED`, `STATS_INT_ADDED`, `CIV_B64_ADDED`, `MAP_B64_ADDED`, `RNG_KEYS_ADDED`(`CIV_INT_ADDED`·sim_snapshot.gd:210 선례). 있으면 꼴·길이를 검사하고, 없으면 위 열대로 채웁니다.
+- 키 목록 상수: `SLIMES_B64_ADDED`, `LINEAGE_B64_ADDED`, `STATS_B64_ADDED`, `STATS_HEX_ADDED`, `STATS_INT_ADDED`, `CIV_B64_ADDED`, `MAP_B64_ADDED`, `RNG_KEYS_ADDED`(`CIV_INT_ADDED`·sim_snapshot.gd:210 선례). 있으면 꼴·길이를 검사하고, 없으면 위 열대로 채웁니다. 0단계에 생긴 것은 앞의 넷(`tools/test_design_format.py` 가 이 표와 견주고, 새 `*_ADDED` 상수를 그 검사의 목록에 더하게 강제).
+- `period_act`·`period_eff` 는 i32 입니다. 한 구간(앞 기록 줄 뒤)의 개체·틱 합이 2^31 을 넘으면 넘칩니다 — 개체 상한 × `record.every` 가 그만큼인 설정(기본 250 × 20 = 5,000, 범위 끝 100,000 × 1,000,000). 관찰용이라 역사에는 닿지 않습니다.
 - 길이는 모두 설정에서 계산하므로(유전체 길이 검사 sim_snapshot.gd:351-352 와 같은 방식) 스냅숏이 스스로를 설명합니다.
 - 다시 만드는 것(저장 안 함): 생애 단계, 유효 크기·최대 에너지(유전체 + 나이), 손 물건 쓸모 배수, 거리장, `_lam`, 아는 개체 수 `know_count`(`from_dict` 끝에서 `s_know` 로 다시 셈 — 세계 변수라 `test_snapshot_roundtrip` 의 전체 변수 왕복에 걸림).
 - 계산 자리(`SNAPSHOT_SCRATCH`, run_tests.gd:1126 에 더함): `_pick_total`, `_obs_act`·`_obs_eff`·`_obs_cue`·`_obs_tribe`·`_obs_x`, 돌봄 사본, 모방 비용 모음.
@@ -562,7 +563,9 @@ craft 모드는 단계 문·`_check_civ`·구역 저장 셈을 끕니다. 먹이
 
 ### 9.2 설정 채우기와 정수 배열(0단계 수리)
 - **`SECTIONS_ADDED`**: 지금 `with_added_keys` 는 옛 설정에 그 **절이 있을 때만** 잎을 채웁니다(sim_snapshot.gd:227-229). 새 절(`learn`·`reward`·`culture`·`civ`·`care`·`material`·`afford`·`craft`)을 기본값에 넣는 순간 모든 옛 스냅숏이 "설정 키가 없습니다"(sim_config.gd:274-275)로 거부됩니다. 그래서 0단계에서 "목록에 있는 절이 없으면 기본값 절을 통째로 넣는다"로 고칩니다(평가 지적 — 네 설계안 가운데 셋이 놓쳤음). 단계마다 넣는 절·키는 8절 표의 '옛 설정' 열.
+  - 구현(0단계): `with_added_keys` 가 절을 먼저 채우고 그다음 잎을 채웁니다. 0단계의 `SECTIONS_ADDED` 는 비어 있으므로, 검사(`test_snapshot_v01_fixture`)는 기본값에 시험용 절을 넣고 `SimSnapshot._sections_added`(평소에는 `SECTIONS_ADDED` 그대로인 정적 변수)를 바꿔 봅니다 — 목록에 없으면 v0.1.0 픽스처가 거부되고, 있으면 열리며, 그 절을 지운 v0.2 스냅숏도 열림.
 - **정수 원소 규칙**: `ARRAY_RULES` 의 줄에 선택 넷째 칸 `SimConfig.INT_ELEMS`("정수")를 두어, 원소가 정수가 아니면 거부합니다(지금은 수인지·범위만, sim_config.gd:240-246). `tools/test_sim_labels.py` 가 이름표 범위 글(예: "30개, 각 0~15 정수 (검사)" — 원소 개수가 들어가야 지금 검사 :205-209 를 통과)과 견줍니다.
+  - 구현(0단계): 원소 검사는 정적 도움 `SimConfig.check_array_rule(배열, 규칙)` 하나로, `validate` 가 `ARRAY_RULES` 마다 부릅니다. 0단계에는 정수 표 키가 아직 없어 검사(`test_v02_config`)가 시험용 규칙 `["probe.table", 0, 15, INT_ELEMS]` 로 직접 부릅니다(1.5 거부). `test_sim_labels.py` 는 넷째 칸을 읽어 이름표 범위 글에 "정수"가 있는지(있으면 규칙도 정수인지) 견줍니다.
 
 ### 9.3 시계열(`timeseries.csv`) 새 열
 v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 의 열은 **단계마다 끝에 붙입니다**. 한 번 붙인 열은 그 뒤 늘 출력하고, 장치가 꺼져 있으면 0 입니다. 예외: `stage_juvenile`·`stage_young`·`stage_adult`·`stage_old`·`mean_size_eff` 는 늘 계산합니다. 열 목록이 단계마다 길어지므로 분석 도구는 `summary.json` 의 `timeseries_columns` 로 읽고, `TestHandCopies`(14.1)는 `analyze.py` 사본 = `SimRecorder.TIMESERIES_COLUMNS` 를 단계마다 견줍니다. "구간" = 앞 줄 뒤 이 줄까지(`births` 와 같은 뜻).
@@ -628,7 +631,7 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 | 내려놓기 | 운반에서 무언가 나감(저장고가 가득해 하나도 못 넣으면 효과 아님) |
 | 심기 | 밭이 생김 |
 
-`_eat`·`_gather`·`_drop`·`_plant` 가 효과 양을 돌려주게 바꾸고(지금 `void`), `_act` 가 `period_act[a]`·`period_eff[a]`·`s_last_eff[i]`·`s_eaten[i]` 를 셉니다. 기록기 밖이라 해시·난수에 닿지 않습니다.
+`_eat`(얻은 에너지)·`_gather`(주운 양)·`_drop`(운반에서 나간 양)·`_plant`(밭이 생겼나)가 효과를 돌려주고(예전 `void`), `_act` 가 `period_act[a]`·`period_eff[a]`·`s_last_eff[i]` 를 셉니다. `s_eaten[i]` 는 `_eat` 이 장부 `led_eaten` 과 같은 자리에서 같은 값을 더합니다(어디서 불러도 12.2 장부가 맞게 — 설계 때는 `_act` 에서 세기로 했음). 해시·난수에 닿지 않습니다(검사 `test_act_counts`·`test_v01_golden`).
 
 ### 11.2 볼드윈 측정
 - **배운 양** dw = 64 행동 가중치의 abs(배운 − 타고난) 평균(계통 `dw`, 살아 있는 평균 `dw_mean`). 어린 동안 배운 양은 따로 `dw_juv`(3.5).
@@ -676,7 +679,9 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
   6. `brain.policy = argmax`·`brain.think_every = 3`·`repro.asexual_when_alone = true`·씨앗 7·1,000틱. 금 값 1~5 는 모두 sample 정책·판단 1틱마다·혼자 분열 끔이라, 0·1단계가 손대는 다른 경로 — 판단하지 않은 틱의 행동 되풀이(act 셈, sim_world.gd:528-530), argmax 경로(`_pick_action` 의 `_pick_total`, 646-647), b == i 분기(혼자 분열 — random 상속·라마르크의 '혼자 분열이면 b = a', 855-862) — 를 이것이 덮습니다.
 
   함께 v0.1.0 으로 만든 작은 스냅숏(씨앗 42·200틱)을 `tests/fixtures/` 에 넣고, 그것을 이어 100틱 돌린 해시도 박습니다.
-- **CI:** `build.yml` 의 '헤드리스 실험 짧게(100세대)' 단계는 지금 `reason=generations` 만 봅니다(S19 해시를 견주는 곳이 저장소에 없음 — 그 값은 TEST-REPORT.md:231·282 의 기록값뿐). 0단계 범위 1 에서 `grep -q "hash=171a3a4f1a5f " "$RUNNER_TEMP/t2.log"` 를 더해 CI 가 견주게 합니다.
+
+  **잰 값(0단계, `3830afb` — 시뮬레이션 코드는 `3e53998` 그대로):** 기록 방식은 실행기와 같습니다(틱 0 줄, `record.every` 배수마다, 끝 줄). 그래서 1번의 SHA-256 은 실행기 `--seed=1 --generations=100` 의 `timeseries.csv` 에서 BOM 을 뗀 글과 같습니다. 1번 해시 = `171a3a4f1a5f…`(문서 기록과 같음, 6,391틱·개체 117·농사). 6번 세계는 279틱에 멸종하지만 그 전에 출생 115(혼자 분열 78)라 세 경로를 모두 지납니다(뒤의 틱은 개체 없이 식물만 자람). 픽스처는 `tests/fixtures/v0.1.0-seed42-t200.snapshot.json`(v0.1.0 실행기 `--seed=42 --max-ticks=200` 의 `final.snapshot.json` — DESIGN-v0.1 8.3 예시와 같은 실행, 해시 `ea50d857b3f0`), 이어 100틱 해시 `6bd975acd1c9…`. 64자 값은 `run_tests.gd` 의 `V01_GOLDEN`·`V01_FIXTURE_GOLDEN`. `--skip-slow` 면 1·5 번(가장 긴 두 실행)을 건너뜁니다(1번은 CI 100세대 단계가 실행기 해시로도 봄).
+- **CI:** `build.yml` 의 '헤드리스 실험 짧게(100세대)' 단계는 0단계 전에는 `reason=generations` 만 봤습니다(S19 해시를 견주는 곳이 저장소에 없음 — 그 값은 TEST-REPORT.md:231·282 의 기록값뿐). 0단계 범위 1 에서 `grep -q "hash=171a3a4f1a5f " "$RUNNER_TEMP/t2.log"` 를 더해 CI 가 견주게 했습니다(`tools/test_build_ci.py` 가 해시가 다르면 그 단계가 실패하는지 봄).
 - 새 검사 `test_v01_golden`: 모든 단계에서 새 장치를 다 끈 세계가 금 값 그대로, 새 열을 뺀 22열 사영도 그대로.
 - 지금 박아 둔 값도 그대로 통과: `fast_civ` 씨앗 1 농사 2,040틱·28.5세대(run_tests.gd:49-50), `harsh_winter` 씨앗 1 멸종 1,118틱(:2301), 화면 291틱(chronicle_checks.gd:29)·1,037틱(graph_checks.gd:342). 1,000세대 `58e2ef0b38c5` 는 기록값(TEST-REPORT.md:232)이라 자동으로 보지 않고 7단계에 수동으로 다시 잽니다.
 - 단계 안에서는 "이 단계 장치 끔 = 앞 단계 역사"(해시 + 필드별). 판을 넘는 비교에 스냅숏 글 전체를 쓰지 않습니다(7.2).
@@ -699,6 +704,7 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 ### 12.5 상대 성능
 - `test_performance`(기본 설정만 잼, run_tests.gd:1252-1281 — 한도 1,750배, :60)는 그대로 둡니다. 꺼진 장치는 비용이 거의 없어야 하므로 이 검사가 0단계 셈 비용을 지킵니다.
 - 새 `test_performance_relative(켬, 끔, 한도)`: 같은 프로세스에서 두 세계(씨앗 2, 800틱 뒤)를 50틱씩 번갈아 400틱 돌려 개체·틱당 비용의 비를 잽니다.
+  - 구현(0단계): 검사 함수는 인자를 받지 않으므로 재는 일은 `run_tests.gd` 의 `perf_relative(켬 덮어쓰기, 끔 덮어쓰기, 예설정)` 이 하고(바퀴마다 먼저 도는 쪽을 바꿈, 두 설정이 같으면 끔 세계는 켬 세계의 스냅숏 사본), `test_performance_relative` 는 0단계라 켬 = 끔(기본 설정)의 비가 [1/`PERF_REL_SAME_MAX`, `PERF_REL_SAME_MAX`](1.25) 안인지 봅니다. 1단계부터 같은 함수에 그 단계의 켬 설정을 주고 아래 표의 한도를 씁니다.
 - 잡음: 알려진 것은 **실행·기계 사이**의 `test_performance` 배수 흔들림(644·681·721·747번, 약 15% — TEST-REPORT.md:281·361-362)뿐이고, 같은 프로세스에서 번갈아 잰 비의 잡음은 **미측정**입니다. 0단계 범위 8 에서 켬 = 끔(같은 설정)의 비를 20번 재 분포를 기록하고, 아래 한도를 '그 분포의 최댓값 + 단계의 추정 비용(13절)'으로 다시 정합니다.
 
 | 단계(누적으로 켠 것) | 한도(첫 값) |

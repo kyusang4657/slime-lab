@@ -85,16 +85,16 @@ py tools\analyze.py run --seeds 1-8 --generations 100 --preset fast_civ --godot 
 
 PowerShell 예시와 자세한 규칙은 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) "Windows" 절. 리눅스에서 Windows 의 코드 페이지·따옴표 규칙을 흉내 내 검사했고, Windows 에서 직접 돌려 확인하지는 못했습니다.
 
-**실행기 인자:** `--seed=N`(64비트 정수, 기본 1) · `--generations=G`(살아 있는 개체의 평균 세대가 G 에 닿으면 끝, 0 보다 큰 수, 기본 100) · `--out=결과폴더`(꼭 필요) · `--preset=default|abundant|harsh_winter|fast_civ|demo_fast|no_resources` · `--set=키=값`(여러 번, 키와 범위는 [`docs/CONFIG.md`](docs/CONFIG.md)) · `--max-ticks=N`(1~1,000,000,000) · `--no-lineage` · `--snapshot-every=N`(0 = 끔 ~ 1,000,000,000) · `--resume=스냅숏.json` · `--quiet`.
+**실행기 인자:** `--seed=N`(64비트 정수, 기본 1) · `--generations=G`(살아 있는 개체의 평균 세대가 G 에 닿으면 끝, 0 보다 큰 수, 기본 100) · `--out=결과폴더`(꼭 필요) · `--preset=default|abundant|harsh_winter|fast_civ|demo_fast|no_resources|chance_baseline` · `--set=키=값`(여러 번, 키와 범위는 [`docs/CONFIG.md`](docs/CONFIG.md)) · `--max-ticks=N`(1~1,000,000,000) · `--no-lineage` · `--snapshot-every=N`(0 = 끔 ~ 1,000,000,000) · `--resume=스냅숏.json` · `--quiet`.
 
 - 수 인자에 글자가 섞이면(`1e5`·`10k`·`abc`) 앞 숫자만 쓰지 않고 인자 오류입니다. 모르는 인자도 오류.
 - `--resume` 은 스냅숏의 설정·씨앗으로 이어 돌립니다(끊김 없이 돌린 것과 같은 해시 — 검사). 그래서 `--seed`·`--preset`·`--set` 과 함께 줄 수 없습니다. 이어 돌린 `summary.json` 은 `preset = ""`·`overrides = {}` 와 실제로 읽은 파일(`resumed_from`)을 적습니다.
 - 같은 `--out` 을 다시 쓰면 실행기가 쓰는 파일만 지우고 새로 씁니다. 모르는 파일이나 하위 폴더가 하나라도 있으면 아무것도 지우지 않고 거부합니다.
 - 종료 코드: 정상 0, 인자·설정·결과 폴더 오류 2, 파일 쓰기 실패 3(마지막 `RESULT:` 줄 끝에 `write_failed=…`). 자세한 규칙은 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) "헤드리스 실행기를 직접 쓸 때".
 
-**예설정:** `default`(기본) · `abundant`(풍요, 자원 1.6배) · `harsh_winter`(혹독한 겨울 — **멸종 조건**: 씨앗 1~12 모두 8,000틱 안에 멸종, 11개는 첫 겨울 중이나 직후) · `fast_civ`(빠른 문명, 연구용 — 씨앗 12개 중 11개는 발견이 진화 도중에 열리고(씨앗 7 은 첫 세대 폭발로 2세대 안에 셋 다), 씨앗 1~12 모두 100세대 안에 농사(중앙값 14.3세대). 씨앗 1·7 은 농사를 연 뒤 멸종 — 근거 [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md)) · `demo_fast`(시연·검사용 아주 빠른 발견 — 씨앗 1~12 의 농사 중앙값 약 2세대, 씨앗 1 은 13.2세대·1,037틱) · `no_resources`(자원 없음 — 멸종 검사용). 값과 측정 결과는 [`docs/CONFIG.md`](docs/CONFIG.md) 예설정 표.
+**예설정:** `default`(기본) · `abundant`(풍요, 자원 1.6배) · `harsh_winter`(혹독한 겨울 — **멸종 조건**: 씨앗 1~12 모두 8,000틱 안에 멸종, 11개는 첫 겨울 중이나 직후) · `fast_civ`(빠른 문명, 연구용 — 씨앗 12개 중 11개는 발견이 진화 도중에 열리고(씨앗 7 은 첫 세대 폭발로 2세대 안에 셋 다), 씨앗 1~12 모두 100세대 안에 농사(중앙값 14.3세대). 씨앗 1·7 은 농사를 연 뒤 멸종 — 근거 [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md)) · `demo_fast`(시연·검사용 아주 빠른 발견 — 씨앗 1~12 의 농사 중앙값 약 2세대, 씨앗 1 은 13.2세대·1,037틱) · `no_resources`(자원 없음 — 멸종 검사용) · `chance_baseline`(우연 기준 — 자식이 부모와 상관없는 새 무작위 두뇌를 받아 진화가 없음, v0.2 의 대조군. 얼마나 살아남는지는 아직 재지 않음 — [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md) 11.3). 값과 측정 결과는 [`docs/CONFIG.md`](docs/CONFIG.md) 예설정 표.
 
-**결과 폴더:** `summary.json`(설정·끝난 이유·발견 시각·역사 해시), `timeseries.csv`(20틱마다), `chronicle.csv`(연대기), `lineage.csv`(모든 개체의 부모·세대·특성), `final.snapshot.json`(이어 돌리기·화면에서 열기). CSV 셋은 BOM 붙은 UTF-8(JSON 에는 BOM 없음). 쓰는 순서는 `final.snapshot.json` → CSV → `summary.json`(마지막)이라 `summary.json` 이 있으면 다 쓴 결과입니다. 열과 값의 뜻은 [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) 8.4절, 여러 실행을 모은 표는 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) "결과 파일".
+**결과 폴더:** `summary.json`(설정·끝난 이유·발견 시각·역사 해시), `timeseries.csv`(20틱마다 — v0.1 의 22열 뒤에 행동별 고른 횟수·효과가 난 횟수 16열), `chronicle.csv`(연대기), `lineage.csv`(모든 개체의 부모·세대·특성·평생 먹은 에너지), `final.snapshot.json`(이어 돌리기·화면에서 열기). CSV 셋은 BOM 붙은 UTF-8(JSON 에는 BOM 없음). 쓰는 순서는 `final.snapshot.json` → CSV → `summary.json`(마지막)이라 `summary.json` 이 있으면 다 쓴 결과입니다. 열과 값의 뜻은 [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) 8.4절(v0.2 에서 끝에 붙인 열은 [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md) 9.3·9.4), 여러 실행을 모은 표는 [`docs/ANALYSIS.md`](docs/ANALYSIS.md) "결과 파일".
 
 ## 빌드
 

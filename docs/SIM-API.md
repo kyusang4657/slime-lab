@@ -1,4 +1,4 @@
-# 시뮬레이션 API (v0.1)
+# 시뮬레이션 API (v0.1 + v0.2 0단계)
 
 화면(`scripts/view/`, `scripts/ui/`)은 시뮬레이션을 **이 목록에 있는 것만** 써서 읽고 진행시킵니다. 같은 이름·뜻을 갖는 C#/GDExtension 구현으로 바꿔 끼울 수 있도록 고정해 둔 경계입니다. 목록에 없는 필드(밑줄로 시작하는 것, 장부 변수 등)는 화면에서 쓰지 않습니다.
 
@@ -11,7 +11,7 @@
 | `SimWorld.new().setup(config, seed) -> String` | 새 세계. 성공이면 `""`, 아니면 오류 문장 |
 | `world.step()` / `world.step_n(n)` | 1틱 / n틱 진행 |
 | `SimSnapshot.save_file(world, path) -> String` | 저장(성공 `""`, 실패면 파일 이름을 담은 문장 — 같은 문장을 `push_error` 로도 남김). 임시 파일 → 다시 읽어 검증 → 교체. 쓰기·검증에 실패한 임시 파일은 지움 |
-| `SimSnapshot.load_file(path) -> {world, status, error}` | 불러오기(`status`: loaded·backup·failed). 하위 키·종류·길이·범위(칸 번호·16진 실수·유한한 수)가 틀린 본 파일도 스크립트 오류 없이 실패로 보고 `.bak` 으로 복구, 본 파일은 `.broken` 으로 보관. 설정에 나중에 더한 키(`SimSnapshot.CONFIG_KEYS_ADDED`)가 없는 옛 스냅숏은 그 키를 기본값으로 채움, 첫 밭 틱(`civ.first_farm_tick`)이 없는 옛 스냅숏은 연대기의 `first_farm` 사건에서 다시 만듦 |
+| `SimSnapshot.load_file(path) -> {world, status, error}` | 불러오기(`status`: loaded·backup·failed). 하위 키·종류·길이·범위(칸 번호·16진 실수·유한한 수)가 틀린 본 파일도 스크립트 오류 없이 실패로 보고 `.bak` 으로 복구, 본 파일은 `.broken` 으로 보관. 설정에 나중에 더한 키(`SimSnapshot.CONFIG_KEYS_ADDED` — `repro.inherit` 등)가 없는 옛 스냅숏은 그 키를, 나중에 더한 절(`SimSnapshot.SECTIONS_ADDED`)이 통째로 없으면 그 절을 기본값으로 채움, 첫 밭 틱(`civ.first_farm_tick`)이 없는 옛 스냅숏은 연대기의 `first_farm` 사건에서 다시 만듦. v0.2 에서 더한 키(`SLIMES_B64_ADDED`·`LINEAGE_B64_ADDED`·`STATS_B64_ADDED`·`STATS_HEX_ADDED`)가 없는 v0.1 스냅숏은 [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 9.1 의 값으로 채움(검사 test_snapshot_v01_fixture — v0.1.0 픽스처) |
 | `SimSnapshot.to_text(world) -> String` · `SimSnapshot.from_text(text) -> {world, error}` | 스냅숏 글(웹 내려받기)과 그 글에서 만든 세계 **사본**(화면이 내보낼 끝 줄을 사본의 `sample()` 로 — 진행 중 세계는 그대로). 스냅숏은 세계의 모든 상태를 담음: 연 세계는 틱 안에서만 쓰는 계산 자리와 `drain_events()` 의 알림 대기열(연 뒤 새 사건부터)을 빼면 모든 변수가 같고, 이어 돌리면 끊김 없이 돌린 세계와 같은 역사(밭 단계 포함 — 검사 test_snapshot_roundtrip) |
 | `SimRecorder.new()`, `rec.record(world)`, `rec.write_all(dir, world, extra, with_lineage) -> PackedStringArray` | 시계열 기록과 결과 폴더 쓰기(헤드리스와 같은 형식, 실패한 파일 이름 목록). CSV 는 BOM 붙은 UTF-8(BOM 은 파일에만 — `timeseries_csv()` 글에는 없음). `summary.json` 은 CSV 를 다 쓴 뒤 마지막(임시 이름 → 바꾸기): 쓰기 전에 앞선 것을 지우고 CSV 하나라도 못 쓰면 쓰지 않음(목록에 `summary.json(…)`). 쓴 길이를 다시 확인해 디스크가 차서 잘린 파일도 실패로 셈 |
 
@@ -31,12 +31,13 @@
 | `s_id[i]`, `s_x[i]`, `s_y[i]`, `s_head[i]` | PackedInt32Array | i 번째 개체(배열 순서 = id 오름차순)의 id·위치·방향(0 북 1 동 2 남 3 서) |
 | `s_energy[i]`, `s_emax[i]`, `s_carry[i]`, `s_size[i]` | PackedFloat64Array | 에너지·최대 에너지·운반량·크기 |
 | `s_last_action[i]` | PackedInt32Array | 마지막 행동 `SimBrain.ACT_*` |
+| `s_last_eff[i]` | PackedByteArray | 마지막 행동에 효과가 났는지(1 = 남, 0 = 없음 — 벽 쪽 앞으로·배부른 먹기·발견 전 줍기·가득 찬 저장고에 내려놓기 등, 갓 태어난 개체는 0). 효과의 정의는 [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 11.1 |
 | `lin_hue[id]` | PackedFloat32Array | 색(계통 표지) — 죽은 개체도 id 로 바로 찾음 |
 | `slime_info(id) -> Dictionary` | | 개체 정보(부모·세대·출생·사망·원인·자식 수·특성, 살아 있으면 위치·에너지·행동·유전체). 특성의 sense 는 유전자 실수(실제 감지 반경은 반올림한 칸 수), 혼자 분열한 자식은 parent_b = -1 |
 | `children_of(id, limit) -> PackedInt32Array` | | 자식 id(태어난 순서, 최대 limit 개). 계통 전체를 훑으므로 클릭 때만 |
 | `index_of_id(id) -> int` | | 살아 있으면 배열 위치, 아니면 -1 |
 | `mean_generation()`, `mean_of(arr)`, `sum_of(arr)`, `mean_sense()`, `mean_age()` | float | 통계(`mean_sense()` 는 반올림한 감지 반경의 평균, 개체가 없으면 모두 0) |
-| `sample() -> Dictionary` | | 시계열 한 줄(`SimRecorder.TIMESERIES_COLUMNS` 키 — 열마다의 뜻·구간 값과 누적 값은 DESIGN 8.4). **호출하면 기간 출생·사망 수를 0 으로** 되돌리므로 기록기만 부른다 |
+| `sample() -> Dictionary` | | 시계열 한 줄(`SimRecorder.TIMESERIES_COLUMNS` 키 — 열마다의 뜻·구간 값과 누적 값은 DESIGN 8.4, v0.2 에서 끝에 붙인 행동 셈 열 `act_*`·`eff_*` 는 DESIGN-v0.2 9.3). **호출하면 기간 출생·사망 수와 행동 셈을 0 으로** 되돌리므로 기록기만 부른다 |
 | `chronicle` | Array[Dictionary] | 연대기 `{tick, kind, actor, text, mean_gen, …}` |
 | `drain_events() -> Array` | | 지난 호출 이후 새 사건(알림·소리용). 사건 사전은 `chronicle` 항목의 **사본**이라 받는 쪽이 고쳐 써도 연대기·기록이 바뀌지 않음 |
 | `history_hash` | String | 역사 해시(같은 씨앗·설정이면 같음). setup 끝과 `cfg.hash.every` 틱마다(검사점)만 상태를 섞으므로 검사점 사이 틱의 차이는 담지 않음 — 두 세계가 지금 같은 상태인지는 `SimSnapshot.to_text` 글 전체로 견줌 |
