@@ -121,6 +121,8 @@ GATE_A_MIN_BIRTHS = 30
 ABLATE_SAME = "same"
 ABLATE_FORK = "fork"
 ABLATE_GENERATIONS = "1000000000"
+## 뺀 씨앗의 까닭에 붙이는 run.log 오류 줄의 최대 글자 수
+FAILURE_LINE_MAX = 300
 
 # ── 그림 모양(색은 범주 팔레트를 고정 순서로, 바탕·글자·격자는 차분한 회색) ──
 
@@ -514,6 +516,23 @@ def execute_job(job: Job, repo: Path, timeout: float | None) -> dict:
     return row
 
 
+def failure_detail(run_dir: Path, row: dict | None) -> str:
+    """실패한 실행의 종료 코드(runs.csv 줄)와 run.log 의 마지막 오류 줄 — 엔진 머리 줄과 들여 쓴 줄(엔진 오류의 'at:')은 빼고.
+    실행기의 오류 문장(예: --fork-set 으로 바꾼 설정으로 스냅숏을 열 수 없음)이 그 폴더를 열지 않아도 보이게."""
+    parts = []
+    code = str((row or {}).get("exit_code", "")).strip()
+    if code:
+        parts.append(f"종료 코드 {code}")
+    try:
+        lines = (run_dir / "run.log").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    msg = [ln.strip() for ln in lines if ln.strip() and not ln[:1].isspace() and not ln.startswith("Godot Engine")]
+    if msg:
+        parts.append(msg[-1][:FAILURE_LINE_MAX].replace("|", "/"))
+    return " — ".join(parts)
+
+
 def _as_text(b) -> str:
     if b is None:
         return ""
@@ -811,13 +830,19 @@ def cmd_ablate(args) -> int:
           f"갈라진 틱부터 {args.ticks}틱 → {out_root}")
     if branches:
         failed += run_jobs(branches, out_root, repo, args.jobs, args.timeout)
-    # ③ 견주기(두 갈래가 모두 끝까지 쓴 씨앗만)
+    # ③ 견주기(두 갈래가 모두 끝까지 쓴 씨앗만). 실패한 갈래는 종료 코드와 run.log 의 오류 줄을 까닭에 붙임
     pairs = []
+    branch_rows = read_runs_csv(out_root / "runs.csv")
     for seed in sorted(fork_tick):
         dirs = [out_root / b / f"seed{seed}" for b in (ABLATE_SAME, ABLATE_FORK)]
         bad = [incomplete_reason(x) if (x / "summary.json").is_file() else "결과 없음" for x in dirs]
         if any(bad):
-            skipped[seed] = "갈래 실행 실패: " + "; ".join(f"{b}: {w}" for b, w in zip((ABLATE_SAME, ABLATE_FORK), bad) if w)
+            why = []
+            for b, w, x in zip((ABLATE_SAME, ABLATE_FORK), bad, dirs):
+                if w:
+                    det = failure_detail(x, branch_rows.get((b, seed)))
+                    why.append(f"{b}: {w}" + (f" ({det})" if det else ""))
+            skipped[seed] = "갈래 실행 실패: " + "; ".join(why)
             continue
         pairs.append((seed, fork_tick[seed], ablate_metrics(dirs[0], fork_tick[seed], args.ticks),
                       ablate_metrics(dirs[1], fork_tick[seed], args.ticks)))
@@ -1185,15 +1210,51 @@ def action_table(df: pd.DataFrame, series: dict[str, pd.DataFrame], root: Path) 
     return out
 
 
+## 같은 실행의 첫 구간 → 끝 구간에서 방향을 셀 지표(actions.csv 의 열, 보고서 이름)
+TREND_MEASURES = [("act_share", "고름"), ("eff_share", "효과"), ("success", "성공률")]
+TREND_COLUMNS = ["cell", "action", "measure", "runs", "down", "up", "same"]
+
+
+def action_trend(acts: pd.DataFrame, cells: list[str]) -> pd.DataFrame:
+    """세대 구간 표(basis = gen)에서 실행마다 그 행동이 값을 가진 **첫 구간과 끝 구간**을 견줘, 묶음·행동·지표마다 내린·오른·같은
+    실행 수. 묶음 중앙값은 구간마다 값이 있는 씨앗 묶음이 달라(일찍 열린 씨앗만 앞 구간에 있음) 그 차이로 방향을 말하면 씨앗 구성이
+    섞이므로, 같은 실행끼리 짝지어 본다. 구간이 하나뿐인 실행과 두 값 중 하나가 NaN 인 지표는 뺀다(runs = 견준 실행 수)."""
+    rows = []
+    g = acts[acts["basis"] == "gen"] if acts is not None and len(acts) else None
+    for cell in cells:
+        for key, _ in CIV_ACTIONS:
+            h = g[(g["cell"] == cell) & (g["action"] == key)] if g is not None else None
+            for m, _ in TREND_MEASURES:
+                down = up = same = 0
+                if h is not None:
+                    for _, r in h.groupby("path", sort=True):
+                        if len(r) < 2:
+                            continue
+                        r = r.sort_values("bin_lo")
+                        first, last = float(r[m].iloc[0]), float(r[m].iloc[-1])
+                        if math.isnan(first) or math.isnan(last):
+                            continue
+                        if last < first:
+                            down += 1
+                        elif last > first:
+                            up += 1
+                        else:
+                            same += 1
+                rows.append({"cell": cell, "action": key, "measure": m, "runs": down + up + same,
+                             "down": down, "up": up, "same": same})
+    return pd.DataFrame(rows, columns=TREND_COLUMNS)
+
+
 def eaten_table(df: pd.DataFrame, root: Path) -> pd.DataFrame:
     """lineage.csv 의 평생 먹은 양(eaten — 0단계부터의 열)을 개체 세대 구간(EATEN_GEN_BIN 폭)마다: 죽은 개체(death_tick ≥ 0)의
-    수·중앙값·평균(eaten.csv). lineage.csv 나 eaten 열이 없는 실행은 빠진다."""
+    수·중앙값·평균(eaten.csv). lineage.csv 나 eaten 열이 없는 실행은 빠진다. eaten 칸이 빈 개체(개체별 셈이 없던 옛 스냅숏에서
+    이어 돌린 실행의, 연 틱 전에 태어난 개체 — 평생 값을 모름)도 뺀다."""
     rows = []
     for _, r in df.iterrows():
         lin = read_lineage(root / r["path"] / "lineage.csv")
         if lin is None or "eaten" not in lin.columns:
             continue
-        dead = lin[lin["death_tick"] >= 0]
+        dead = lin[(lin["death_tick"] >= 0) & pd.to_numeric(lin["eaten"], errors="coerce").notna()]
         bins = (dead["gen"].to_numpy(dtype=int) // EATEN_GEN_BIN)
         for b in sorted(set(bins.tolist())):
             e = dead["eaten"].to_numpy(dtype=float)[bins == b]
@@ -1610,6 +1671,24 @@ def _action_md(acts: pd.DataFrame, cells: list[str]) -> list[str]:
             "### 세대 구간별 — 문명 행동이 열린 뒤", "",
             f"구간 = 구간 시작의 평균 세대({ACT_GEN_BIN}세대 폭). 줍기·내려놓기는 채집, 심기는 농사가 열린 뒤에 시작한 구간만 셉니다.", ""]
     out.append(_md_table(["묶음", "평균 세대"] + head, _action_md_rows(acts, "gen", cells), ["l", "r", "r", "r", "r"]))
+    trend = action_trend(acts, cells)
+    rows = []
+    for cell in cells:
+        for key, _ in CIV_ACTIONS:
+            h = trend[(trend["cell"] == cell) & (trend["action"] == key)]
+            if not len(h) or int(h["runs"].max()) == 0:
+                continue
+            row = [f"`{cell}`", names[key]]
+            for m, _ in TREND_MEASURES:
+                x = h[h["measure"] == m].iloc[0]
+                row.append(f"{int(x['down'])} · {int(x['up'])} ({int(x['runs'])})")
+            rows.append(row)
+    out += ["", "### 같은 실행의 첫 구간 → 끝 구간", "",
+            "위 표의 묶음 중앙값은 구간마다 값이 있는 실행이 달라(일찍 열린 씨앗만 앞 구간에 있음) 구간끼리의 차이에 씨앗 구성의 차이가 "
+            "섞입니다. 그래서 실행마다 그 행동의 **첫 구간과 끝 구간**을 견줘 방향을 셉니다: **내린 실행 · 오른 실행 (견준 실행)**. "
+            "구간이 하나뿐인 실행은 빠지고, 성공률 = 효과 ÷ 고름입니다.", ""]
+    out.append(_md_table(["묶음", "행동"] + [f"{n} 내림 · 오름" for _, n in TREND_MEASURES], rows, ["l", "l", "r", "r", "r"])
+               if rows else "견줄 실행이 없습니다(구간이 둘 이상인 실행 없음).")
     out += ["", f"### 틱 구간별 — 처음 {ACT_TICK_EDGES[-1]:,}틱(열림과 상관없이)", "",
             "같은 틱에서 묶음을 견주는 표(우연 기준 세계는 수백 틱 만에 멸종할 수 있음). 단계가 열리기 전의 줍기·심기는 "
             "효과가 없는 시도라 효과 비율이 0 입니다.", ""]

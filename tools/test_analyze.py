@@ -845,6 +845,34 @@ class TestActions(TempDirCase):
         r = [x for x in rows if x["basis"] == "gen" and x["action"] == "plant"][0]
         self.assertEqual((r["bin_lo"], r["act"], r["eff"], r["success"]), ("10", "40", "30", "0.75"))
 
+    def test_trend_pairs_same_run(self) -> None:
+        """같은 실행의 첫 구간 → 끝 구간 방향 수(묶음 중앙값은 구간마다 씨앗 묶음이 달라 방향을 말하지 못함 — 검증 지적).
+        씨앗 1 = HAND_ROWS(줍기 고름 30 → 5%·효과 15 → 2.5%·성공률 0.5 → 0.5, 내려놓기 10 → 5·10 → 2.5·1 → 0.5, 심기는 구간 하나),
+        씨앗 2 = 줍기만 다른 줄(앞 구간 2%·효과 1 → 뒤 구간 8%·효과 6 — 오름)."""
+        root = self.tmp / "trend"
+        write_fake_run(root / "x" / "seed1", 1, {"채집": (30, 6.0)}, civ=3, ticks=100, rows_fn=lambda tick: HAND_ROWS[tick])
+        up_rows = {tick: dict(v) for tick, v in HAND_ROWS.items()}
+        up_rows[60].update(acts((2, 1), (10, 10), (10, 0), 100))
+        up_rows[80].update(acts((8, 6), (10, 5), (20, 10), 100))
+        up_rows[100].update(acts((8, 6), (0, 0), (40, 30), 100))
+        write_fake_run(root / "x" / "seed2", 2, {"채집": (30, 6.0)}, civ=3, ticks=100, rows_fn=lambda tick: up_rows[tick])
+        with quiet():
+            self.assertEqual(analyze.report(root, root, plots=False), 0)
+        acts_df = analyze.action_table(*analyze.build_summary(root), root)
+        tr = analyze.action_trend(acts_df, ["x"])
+        got = {(r.action, r.measure): (r.runs, r.down, r.up, r.same) for r in tr.itertuples()}
+        self.assertEqual(got[("gather", "act_share")], (2, 1, 1, 0))
+        self.assertEqual(got[("gather", "eff_share")], (2, 1, 1, 0))
+        self.assertEqual(got[("gather", "success")], (2, 0, 1, 1))
+        self.assertEqual(got[("drop", "act_share")], (2, 2, 0, 0))
+        self.assertEqual(got[("drop", "success")], (2, 2, 0, 0))
+        self.assertEqual(got[("plant", "act_share")], (0, 0, 0, 0), "구간이 하나뿐인 실행은 견주지 않음")
+        md = (root / "report.md").read_text(encoding="utf-8")
+        self.assertIn("### 같은 실행의 첫 구간 → 끝 구간", md)
+        self.assertIn("| `x` | 줍기 | 1 · 1 (2) | 1 · 1 (2) | 0 · 1 (2) |", md)
+        self.assertIn("| `x` | 내려놓기 | 2 · 0 (2) | 2 · 0 (2) | 2 · 0 (2) |", md)
+        self.assertNotIn("| `x` | 심기 |", md)
+
     def test_summary_columns_come_first(self) -> None:
         """열 목록은 summary.json 의 timeseries_columns 가 먼저(손 사본·CSV 머리보다): v0.1 22열이라 적힌 실행은 행동 셈을 읽지 않음."""
         root = self._run("v01cols", summary_extra={"timeseries_columns": analyze.TIMESERIES_COLUMNS[:22]})
@@ -905,6 +933,17 @@ class TestLineageReport(TempDirCase):
         self.assertIn("| `default` | 10–20 | 7.0 (1 · 2) |", md)
         self.assertIn("| `default` | 3 | 33% (1/3) | 33% (1/3) | 500–500 | 30 [3–31] |", md)
 
+    def test_unknown_eaten_left_out(self) -> None:
+        """eaten 칸이 빈 개체(개체별 셈이 없던 옛 스냅숏에서 이어 돌린 실행의, 연 틱 전에 태어난 개체 — 평생 값을 모름)는
+        eaten.csv 에서 빠진다(예전에는 0 으로 세어 앞 세대 구간의 중앙값이 0 이 됐을 것 — 검증 지적)."""
+        root = self.tmp / "resumed"
+        rows = lineage_rows(3, [(0, ""), (0, ""), (0, ""), (0, 9.0), (12, 6.0)])
+        write_fake_run(root / "seed1", 1, {}, civ=0, ticks=1200, lineage=rows)
+        with quiet():
+            self.assertEqual(analyze.report(root, root, plots=False), 0)
+        eaten = read_csv_rows(root / "eaten.csv")
+        self.assertEqual([(r["gen_lo"], r["dead"], r["eaten_median"]) for r in eaten], [("0", "2", "9.5"), ("10", "1", "6")])
+
     def test_no_lineage_no_sections(self) -> None:
         root = self.tmp / "nolin"
         write_fake_run(root / "seed1", 1, {}, civ=0)
@@ -923,10 +962,11 @@ class FakeAblateRunner:
     갈래(--resume): 스냅숏 폴더의 기준 summary.json 틱(F)부터 --max-ticks 까지 20틱마다 줄 — 바꾼 갈래(--fork-set)는
     줄마다 출생 3·줍기 20(효과 10), 그대로 갈래는 출생 2·줍기 10(효과 5), 모든 행동 100. lineage 의 대상 출생은 먹은 양 4(바꿈)·2."""
 
-    def __init__(self, extinct_seeds: tuple = ()):
+    def __init__(self, extinct_seeds: tuple = (), fail_fork_seeds: tuple = ()):
         self.calls: list[list[str]] = []
         self.lock = threading.Lock()
         self.extinct_seeds = extinct_seeds
+        self.fail_fork_seeds = fail_fork_seeds
 
     def __call__(self, cmd, **kw):
         with self.lock:
@@ -948,6 +988,11 @@ class FakeAblateRunner:
             return subprocess.CompletedProcess(cmd, 0, f"RESULT: seed={seed} reason=generations\n", "")
         base = json.loads((Path(args["resume"]).parent / "summary.json").read_text(encoding="utf-8"))
         f, end, forked = int(base["tick"]), int(args["max-ticks"]), bool(forks)
+        if forked and int(base["seed"]) in self.fail_fork_seeds:
+            # 실행기가 바꾼 설정으로 스냅숏을 열지 못함(배열 길이를 바꾸는 키) → 결과 폴더를 쓰지 않고 종료 코드 2
+            return subprocess.CompletedProcess(cmd, 2, "", "Godot Engine v4.4.1.stable - https://godotengine.org\n\n"
+                                               "ERROR: 엔진 줄\n   at: somewhere (x.cpp:1)\n"
+                                               "--fork-set 으로 바꾼 설정으로 스냅숏을 열 수 없습니다: 유전체 길이가 맞지 않습니다\n")
         births, gather = (3, (20, 10)) if forked else (2, (10, 5))
         lin = [{"id": i, "parent_a": 0, "parent_b": 0, "gen": 1, "birth_tick": f + 5 * i, "death_tick": -1,
                 "eaten": 4.0 if forked else 2.0, "children": 1} for i in range(4)]
@@ -1001,6 +1046,15 @@ class TestAblate(TempDirCase):
         self.assertIn("| 출생 | 2 | 10.00 | 15.00 | 5.00 [5.00–5.00] | 2 · 0 |", md)
         self.assertIn("| 3 | 기준 실행이 평균 30세대 전에 끝남(멸종, 틱 400) |", md)
         self.assertIn("| 1 | 400 | `ee0000000000` | `ff0000000000` |", md)
+
+    def test_failed_branch_reason_has_runner_error(self) -> None:
+        """바꾼 갈래가 실패하면 뺀 씨앗의 까닭에 종료 코드와 실행기의 오류 문장(run.log 의 마지막 오류 줄)이 붙음(검증 지적 —
+        예전에는 'fork: 결과 없음' 뿐이라 run.log 를 열어야 했음)."""
+        self.assertEqual(self.ablate(FakeAblateRunner(fail_fork_seeds=(2,))), 1)
+        md = (self.tmp / "abl" / "ablate.md").read_text(encoding="utf-8")
+        self.assertIn("| 2 | 갈래 실행 실패: fork: 결과 없음 (종료 코드 2 — --fork-set 으로 바꾼 설정으로 스냅숏을 열 수 없습니다: "
+                      "유전체 길이가 맞지 않습니다) |", md)
+        self.assertIn("| 1 | 400 |", md)
 
     def test_rerun_is_same_table_and_skips(self) -> None:
         """같은 명령을 다시 돌리면 실행 없이 같은 표(결정적). 바꾼 값이 다르면 그 갈래의 이전 결과를 덮어쓰지 않고 실패(mismatch)."""
