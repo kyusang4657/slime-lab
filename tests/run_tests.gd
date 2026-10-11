@@ -68,6 +68,10 @@ const PERF_REL_SEED := 2
 const PERF_REL_WARMUP := 800
 const PERF_REL_CHUNK := 50
 const PERF_REL_SAME_MAX := 1.25
+## 1단계 상대 성능(DESIGN-v0.2 12.5 표 — 켬 = learn_basic 의 스위치, 끔 = 기본): 한도 = 같은 일의 잡음 최댓값 1.107 + 1단계 장치의 잰 비용 ÷
+## 27.3µs(13절), 소수 둘째 자리로 올림. 잰 비용은 TEST-REPORT "v0.2 1단계" 절.
+const PERF_REL_STAGE1_SETS := {"learn.enabled": true, "body.grow_enabled": true}
+const PERF_REL_STAGE1_MAX := 1.33
 ## 연결 요소 계산(test_components_fast)의 상한: 같은 크기 지도를 한 번 훑는 거리장(BFS) 시간의 이 배수(지금 약 0.9배, 예전
 ## 계산은 요소 수 × 칸 수라 수천 배).
 const COMPONENTS_MAX_RATIO := 10.0
@@ -1370,14 +1374,20 @@ func perf_relative(on_sets: Dictionary, off_sets: Dictionary, preset: String = "
 	return {ratio = on_us / maxf(off_us, 1e-9), on_us = on_us, off_us = off_us, on_pop = float(st[0]) / ticks, off_pop = float(st[1]) / ticks}
 
 
-## 상대 성능 틀(DESIGN-v0.2 12.5·14.1 범위 8): 0단계는 켬 = 끔(같은 기본 설정)이라 비는 잡음만 — [1 / 한도, 한도] 안이어야 한다.
-## 1단계부터는 같은 함수로 켬(그 단계 장치)·끔(기본)을 견주고 12.5 표의 한도를 쓴다.
+## 상대 성능 틀(DESIGN-v0.2 12.5·14.1 범위 8): 켬 = 끔(같은 기본 설정)이면 비는 잡음만 — [1 / 한도, 한도] 안이어야 한다.
+## 1단계(14.2 검사 기준 15): 같은 함수로 켬(학습·몸 자람)·끔(기본)을 견주고 12.5 표의 1단계 한도(PERF_REL_STAGE1_MAX).
 func test_performance_relative() -> void:
 	var r := perf_relative({}, {})
 	print("  상대 성능(켬 = 끔, 기본·씨앗 %d): 비 %.3f (켬 %.2fµs · 끔 %.2fµs, 평균 개체 %.0f·%.0f)" % [PERF_REL_SEED, r.ratio, r.on_us, r.off_us,
 			r.on_pop, r.off_pop])
 	check(r.on_pop > 0.0 and r.on_pop == r.off_pop and r.ratio <= PERF_REL_SAME_MAX and r.ratio >= 1.0 / PERF_REL_SAME_MAX,
 			"켬 = 끔 세계의 개체·틱당 비용 비 %.3f 가 [1/%.2f, %.2f] 안(같은 일 — 평균 개체 %.0f)" % [r.ratio, PERF_REL_SAME_MAX, PERF_REL_SAME_MAX, r.on_pop])
+	var r1 := perf_relative(PERF_REL_STAGE1_SETS, {})
+	print("  상대 성능(1단계 학습·몸 자람 켬 ÷ 끔, 기본·씨앗 %d): 비 %.3f (켬 %.2fµs · 끔 %.2fµs — 차 %.2fµs, 평균 개체 %.0f·%.0f)" % [PERF_REL_SEED,
+			r1.ratio, r1.on_us, r1.off_us, r1.on_us - r1.off_us, r1.on_pop, r1.off_pop])
+	check(r1.on_pop > 0.0 and r1.off_pop > 0.0 and r1.ratio <= PERF_REL_STAGE1_MAX,
+			"1단계 켬(학습·몸 자람) ÷ 끔의 개체·틱당 비용 비 %.3f ≤ %.2f(12.5 표의 1단계 한도 — 켬 %.2fµs · 끔 %.2fµs)" % [r1.ratio, PERF_REL_STAGE1_MAX,
+			r1.on_us, r1.off_us])
 	done()
 
 
