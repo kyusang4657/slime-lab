@@ -714,6 +714,23 @@ class TestRunCommands(TempDirCase):
         self.assertEqual(code, 2)
         self.assertIn("project.godot", err.getvalue())
 
+    def test_out_is_file(self) -> None:
+        """--out 이 파일이거나 파일 아래이면 추적 없이 '오류:' 와 종료 코드 2(1단계 검증 지적 — 예전엔 FileExistsError 와 1). 실행기는 띄우지 않음."""
+        f = self.tmp / "a-file"
+        f.write_text("x", encoding="utf-8")
+        fake = FakeRunner()
+        cmds = {"run": ["run", "--seeds", "1", "--no-report", "--godot", "/opt/godot"],
+                "ablate": ["ablate", "--runs", str(self.tmp / "runs"), "--at-gen", "1", "--ticks", "10", "--set", "learn.freeze=true",
+                           "--godot", "/opt/godot"],
+                "gate-a": ["gate-a", "--variant", "A-1", "--seeds", "1", "--godot", "/opt/godot"],
+                "baldwin": ["baldwin", str(self.tmp)]}
+        for name, argv in cmds.items():
+            for out in (f, f / "below"):
+                with mock.patch.object(analyze.subprocess, "run", fake), contextlib.redirect_stderr(io.StringIO()) as err, quiet():
+                    code = analyze.main(argv + ["--out", str(out)])
+                self.assertEqual((code, err.getvalue().startswith("오류: --out ")), (2, True), f"{name} --out {out.name}: {err.getvalue()!r}")
+        self.assertEqual(fake.calls, [])
+
 
 # ── 손 사본(DESIGN-v0.2 14.1 범위 7) ──
 
@@ -1279,6 +1296,24 @@ class TestGateA(TempDirCase):
             md = self.md()
             self.assertIn("- **판정: 실패**", md, name)
             self.assertIn(want[name], md, name)
+
+    def test_tied_metric(self) -> None:
+        """판정 가능 씨앗 모두에서 학습 = freeze 인 지표(검증 지적 — 기본값의 성숙까지 산 몫은 늘 1)는 '갈래를 가르지 못한 지표' 로 적음.
+        한 씨앗이라도 다르면 적지 않음(손 계산 통과 경우에는 그 줄이 없음)."""
+        self.assertEqual(self.gate(FakeGateRunner()), 0)
+        self.assertNotIn("- **갈래를 가르지 못한 지표", self.md())
+        shutil.rmtree(self.tmp / "ga")
+        all_mature = lambda s, b: {**gate_spec(s, b), "life": [31] * 30}
+        self.assertEqual(self.gate(FakeGateRunner(all_mature)), 0)
+        md = self.md()
+        self.assertIn("- **갈래를 가르지 못한 지표: 성숙까지 산 몫** — 판정 가능 씨앗 12개 모두에서 학습 = freeze(값 1.000). "
+                      "같은 값은 이긴 씨앗으로 세지 않으므로 ② 는 평균 자식 수로만 갈림", md)
+        self.assertIn("성숙까지 산 몫 **0/12** · 평균 자식 수 **5/12**(둘 가운데 하나 ≥ 8) → 못 함", md)
+        self.assertNotIn("- **갈래를 가르지 못한 지표: 평균 자식 수", md)
+        shutil.rmtree(self.tmp / "ga")
+        one_differs = lambda s, b: {**gate_spec(s, b), "life": [31] * 30 if (s, b) != (7, "freeze") else [31] * 29 + [30]}
+        self.assertEqual(self.gate(FakeGateRunner(one_differs)), 0)
+        self.assertNotIn("- **갈래를 가르지 못한 지표", self.md())
 
     def test_unjudgeable_and_variants(self) -> None:
         """A-1: 한 갈래라도 1,000틱 전에 멸종하거나 대상 < 30 이면 그 씨앗 판정 불가 → 판정 불가(A-1′ 안내). A-1-life 는 생존 요구가 없어

@@ -639,6 +639,19 @@ def run_jobs(jobs: list[Job], out_root: Path, repo: Path, n_jobs: int, timeout: 
     return failed
 
 
+def make_out_dir(d: Path, what: str = "--out") -> str:
+    """결과 폴더를 만들고 .gdignore 를 둔다. 만들 수 없으면(그 자리나 부모가 파일·권한 없음) 오류 문장을 돌려준다 — 부르는 쪽이
+    '오류:' 와 종료 코드 2 로 끝냄(예전엔 FileExistsError 추적과 종료 코드 1 — 1단계 검증 지적)."""
+    if d.exists() and not d.is_dir():
+        return f"{what} 이 폴더가 아니라 파일입니다: {d}"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"{what} 폴더를 만들 수 없습니다: {d} ({e.strerror or e})"
+    ensure_gdignore(d)
+    return ""
+
+
 def ensure_gdignore(d: Path) -> None:
     """결과 폴더에 빈 .gdignore 를 둔다(저장소 안이면 Godot 이 CSV 를 번역 표로, PNG 를 텍스처로 가져오지 않게).
     Godot 은 .gdignore 가 있는 폴더의 하위 폴더도 모두 건너뛴다. 저장소 밖에 두어도 해가 없다."""
@@ -673,8 +686,10 @@ def cmd_run(args) -> int:
         return 2
     godot = resolve_godot(args.godot)
     out_root = Path(args.out).resolve()
-    out_root.mkdir(parents=True, exist_ok=True)
-    ensure_gdignore(out_root)
+    err = make_out_dir(out_root)
+    if err:
+        print("오류: " + err, file=sys.stderr)
+        return 2
     jobs = []
     for seed in args.seeds:
         out_dir = out_root / f"seed{seed}"
@@ -701,8 +716,10 @@ def cmd_sweep(args) -> int:
         return 2
     godot = resolve_godot(args.godot)
     out_root = Path(args.out).resolve()
-    out_root.mkdir(parents=True, exist_ok=True)
-    ensure_gdignore(out_root)
+    err = make_out_dir(out_root)
+    if err:
+        print("오류: " + err, file=sys.stderr)
+        return 2
     print(f"격자 {len(grid)}칸 × 씨앗 {len(args.seeds)}개")
     jobs = []
     for cell, pairs in grid:
@@ -813,9 +830,11 @@ def cmd_ablate(args) -> int:
     tag = "__".join(([cell_dirname(list(args.set))] if args.set else []) + ([ABLATE_RESET_TAG] if args.reset_learned else [])) \
         + f"__g{args.at_gen}__t{args.ticks}"
     out_root = Path(args.out).resolve() if args.out else runs_root.parent / f"{runs_root.name}-ablate" / tag
-    for d in (runs_root, out_root):
-        d.mkdir(parents=True, exist_ok=True)
-        ensure_gdignore(d)
+    for d, what in ((runs_root, "--runs"), (out_root, "--out")):
+        err = make_out_dir(d, what)
+        if err:
+            print("오류: " + err, file=sys.stderr)
+            return 2
     # ① 기준 실행(analyze.py run 과 같은 폴더 꼴 — 이미 있으면 설정을 맞춰 보고 그대로 씀)
     base = []
     for seed in args.seeds:
@@ -1063,6 +1082,13 @@ def gate_a_evaluate(seeds: list[int], runs: dict[tuple[str, int], tuple[dict, di
                 k += int(not (math.isnan(a) or math.isnan(o)) and a > o)
             w.append(k)
         wins[key] = tuple(w)
+    # 갈래를 가르지 못한 지표: 판정 가능 씨앗 모두에서 학습 값 = freeze 값(같으면 이긴 씨앗으로 세지 않으므로 그 지표로는 문턱에 닿을 수
+    # 없음 — 1단계 검증: 기본값에서는 자식이 부모에게 받은 에너지만으로 성숙 나이보다 오래 살아 성숙까지 산 몫이 늘 1). 값 = 그 같은 값들
+    ties = {}
+    for key, _, _ in GATE_A_METRICS:
+        pairs = [(runs[("learn", s)][0][col[key]], runs.get(("freeze", s), ({}, {}))[0].get(col[key], float("nan"))) for s in judged]
+        same = bool(pairs) and all(not (math.isnan(a) or math.isnan(o)) and a == o for a, o in pairs)
+        ties[key] = sorted({float(a) for a, _ in pairs}) if same else None
     fr = pooled[("freeze", "eaten")]
     ratio = pooled[("learn", "eaten")] / fr if fr and not math.isnan(fr) else float("nan")
     crit1 = wins["eaten"][0] >= GATE_A_WIN and not math.isnan(ratio) and ratio >= GATE_A_RATIO
@@ -1078,7 +1104,7 @@ def gate_a_evaluate(seeds: list[int], runs: dict[tuple[str, int], tuple[dict, di
     else:
         verdict = "통과" if crit1 and crit2 else "실패"
     return {"verdict": verdict, "judged": judged, "unjudged": unjudged, "wins": wins, "pooled": pooled, "ratio": ratio,
-            "crit1": crit1, "crit2": crit2}
+            "crit1": crit1, "crit2": crit2, "ties": ties}
 
 
 def cmd_gate_a(args) -> int:
@@ -1092,8 +1118,10 @@ def cmd_gate_a(args) -> int:
         return 2
     godot = resolve_godot(args.godot)
     out_root = Path(args.out).resolve()
-    out_root.mkdir(parents=True, exist_ok=True)
-    ensure_gdignore(out_root)
+    err = make_out_dir(out_root)
+    if err:
+        print("오류: " + err, file=sys.stderr)
+        return 2
     spec = GATE_A_VARIANTS[args.variant]
     jobs = []
     for b, _, _ in GATE_A_BRANCHES:
@@ -1162,8 +1190,13 @@ def write_gate_a_md(path: Path, args, runs: dict, ev: dict) -> None:
             f"- ① 먹은 양: 학습 > freeze 씨앗 **{w['eaten'][0]}/{n}**(문턱 {GATE_A_WIN}), 묶은 중앙값 비 "
             f"**{_fmt(ev['ratio'], 3)}**(문턱 {GATE_A_RATIO}) → {'충족' if ev['crit1'] else '못 함'}",
             f"- ② 생존·번식: 성숙까지 산 몫 **{w['matured'][0]}/{n}** · 평균 자식 수 **{w['children'][0]}/{n}**"
-            f"(둘 가운데 하나 ≥ {GATE_A_SECONDARY_WIN}) → {'충족' if ev['crit2'] else '못 함'}",
-            "", f"## 지표 — 판정 가능 씨앗 {n}개의 대상을 묶은 값", ""]
+            f"(둘 가운데 하나 ≥ {GATE_A_SECONDARY_WIN}) → {'충족' if ev['crit2'] else '못 함'}"]
+    other = {"eaten": "① 을 채울 수 없음", "matured": "② 는 평균 자식 수로만 갈림", "children": "② 는 성숙까지 산 몫으로만 갈림"}
+    for key, name, dg in GATE_A_METRICS:
+        if ev["ties"][key] is not None:
+            out.append(f"- **갈래를 가르지 못한 지표: {name}** — 판정 가능 씨앗 {n}개 모두에서 학습 = freeze"
+                       f"(값 {' · '.join(_fmt(v, dg) for v in ev['ties'][key])}). 같은 값은 이긴 씨앗으로 세지 않으므로 {other[key]}")
+    out += ["", f"## 지표 — 판정 가능 씨앗 {n}개의 대상을 묶은 값", ""]
     rows = []
     p = ev["pooled"]
     for key, name, dg in GATE_A_METRICS:
@@ -1197,7 +1230,10 @@ def write_gate_a_md(path: Path, args, runs: dict, ev: dict) -> None:
             "- 학습 − freeze = 학습이 한 몫(freeze 도 학습 비용은 냄), 학습 − 학습 끔 = 비용까지 뺀 순 득. 효과 크기 = (학습 − freeze) ÷ freeze.",
             "- 묶은 값 = 판정 가능 씨앗들의 대상 개체를 한데 모은 값(먹은 양은 중앙값, 성숙까지 산 몫·자식 수는 평균). 씨앗 수는 씨앗마다 값"
             "(먹은 양 중앙값·성숙까지 산 몫·평균 자식 수)이 학습 쪽에서 **더 큰**(같으면 세지 않음) 씨앗.",
-            "- 성숙까지 산 = 죽은 나이(`death_tick` − `birth_tick`) > `repro.maturity` — 번식 자격 나이로 번식 단계에 살아서 닿음.",
+            "- 성숙까지 산 = 죽은 나이(`death_tick` − `birth_tick`) > `repro.maturity` — 번식 자격 나이로 번식 단계에 살아서 닿음. "
+            "기본값에서는 이 몫이 세 갈래 모두 1 이 되기 쉽습니다(자식이 부모에게 받은 에너지만으로 성숙 나이보다 오래 삶 — 1단계 검증에서 "
+            "가장 일찍 굶어 죽은 개체도 50틱 넘게 삶). 판정 가능 씨앗 모두에서 학습 = freeze 인 지표는 위 '판정' 에 '갈래를 가르지 못한 지표' 로 "
+            "적습니다(판정 조건을 다시 정할 때 ② 의 생존 지표를 바꿀지 — DESIGN-v0.2 14.3).",
             f"- 표: [`gate_a.csv`](gate_a.csv)(씨앗·갈래마다 한 줄). 갈래 결과는 이 폴더의 "
             f"{'·'.join(f'`{b}/`' for b, _, _ in GATE_A_BRANCHES)}.", ""]
     path.write_text("\n".join(out), encoding="utf-8")
@@ -1300,8 +1336,10 @@ def cmd_baldwin(args) -> int:
         print(f"오류: 폴더가 없습니다: {root}", file=sys.stderr)
         return 2
     out_dir = Path(args.out).resolve() if args.out else root
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ensure_gdignore(out_dir)
+    err = make_out_dir(out_dir)
+    if err:
+        print("오류: " + err, file=sys.stderr)
+        return 2
     table, skipped = baldwin_table(root)
     probes = sorted((read_probe(Path(p).resolve()) for p in args.probe), key=lambda p: (p.get("at_gen", math.inf), str(p["dir"])))
     controls = [read_probe(Path(p).resolve()) for p in args.control_probe]
@@ -2396,8 +2434,10 @@ def report(root: Path, out_dir: Path | None = None, plots: bool = True, lang: st
     if len(df) == 0:
         print(f"오류: {root} 아래에 실행 결과(summary.json)가 없습니다", file=sys.stderr)
         return 1
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ensure_gdignore(out_dir)
+    err = make_out_dir(out_dir)
+    if err:
+        print("오류: " + err, file=sys.stderr)
+        return 2
     cells = aggregate(df)
     write_csv(df, out_dir / "summary.csv")
     write_csv(cells, out_dir / "cells.csv")
