@@ -104,6 +104,8 @@ func _init() -> void:
 		"test_farm_rule_values", "test_civ_rule_values", "test_runner_guards",
 		"test_v01_golden", "test_act_counts", "test_eaten_ledger", "test_snapshot_v02_roundtrip", "test_snapshot_v01_fixture",
 		"test_v02_config", "test_chance_baseline",
+		"test_life_stage", "test_body_growth", "test_learn_genome", "test_learn_update_hand", "test_learning_picks", "test_learn_clamp",
+		"test_learn_ledger", "test_learn_snapshot", "test_lamarck", "test_learn_freeze", "test_learn_config", "test_reset_learned",
 	]
 	# --only 의 이름은 모두 있는 검사여야 한다(J15): 오타 난 이름을 말없이 빼고 '0개·0 failed·종료 코드 0' 으로 끝나지 않게
 	var unknown := PackedStringArray()
@@ -644,6 +646,28 @@ func test_world_think_matches() -> void:
 			if wd._wts[q] != SimBrain.policy_weight(wd._out[q], wd._sharpness):
 				same = false
 		check(same, "기억 %d: 펼친 정책 가중치 = policy_weight" % mem)
+	# 평생 학습을 켠 세계(DESIGN-v0.2 14.2 검사 기준 8): 행동 행은 배운 두뇌, 기억 행은 유전체 — SimBrain.forward_phen 과 비트 단위로 같음.
+	# 배운 두뇌가 실제로 타고난 것과 달라진 뒤에 견줌(같으면 유전체 순전파와 견줘도 통과하므로 — 그 경우도 세어 보임)
+	for mem: int in [0, 2]:
+		var wl := world({"learn.enabled": true, "brain.memory_units": mem}, 4)
+		wl.step_n(60)
+		var bad_out := 0
+		var learned := 0
+		var differs_from_genome := 0
+		for i in mini(wl.population(), 60):
+			if wl.learned_amount_of(i) > 0.0:
+				learned += 1
+			wl._think(i, wl.s_x[i], wl.s_y[i], wl.s_y[i] * wl.w + wl.s_x[i], wl.s_head[i], wl.s_emax[i])
+			var rp := SimBrain.forward_phen(wl.L, wl.s_genome, i * wl._G, wl.s_w2, i * wl._w2n, wl._in, wl._sharpness)
+			var rg := SimBrain.forward(wl.L, wl.s_genome, i * wl._G, wl._in, wl._sharpness)
+			for q in wl._n_out:
+				if rp.out[q] != wl._out[q]:
+					bad_out += 1
+			if rg.out != wl._out:
+				differs_from_genome += 1
+		check(learned > 0 and differs_from_genome > 0 and bad_out == 0,
+				"학습 켬·기억 %d: 세계 안 순전파 = SimBrain.forward_phen(비트 단위, 출력 %d개 — 틀린 값 %d, 배운 개체 %d, 유전체 순전파와 다른 개체 %d)" % [
+				mem, wl._n_out, bad_out, learned, differs_from_genome])
 	# 되먹임이 실제 흐름에서 다음 틱 판단을 바꿈: 같은 세계 둘 중 하나만 기억 값을 바꾸면 그 개체의 다음 판단 출력이 달라짐
 	var wa := world({"brain.memory_units": 2}, 4)
 	wa.step_n(30)
@@ -1131,8 +1155,10 @@ func test_snapshot_roundtrip() -> void:
 
 
 ## 세계 변수 가운데 스냅숏에 담지 않는 것: 틱 안에서만 쓰는 계산 자리(다음 판단·번식·행동이 처음부터 다시 채움)와 화면 알림
-## 대기열(_pending_events — 연대기는 저장되고, 알림은 연 뒤 새 사건부터). 나머지는 모두 왕복 뒤 값이 같아야 한다(test_snapshot_roundtrip).
-const SNAPSHOT_SCRATCH: Array[String] = ["_in", "_hid", "_wts", "_out", "_bucket_head", "_bucket_next", "_mated", "csat", "_pending_events"]
+## 대기열(_pending_events — 연대기는 저장되고, 알림은 연 뒤 새 사건부터). _pick_total 은 마지막 정책 뽑기의 가중치 합(그 판단의 고리 쓰기에만
+## 씀 — DESIGN-v0.2 3.4). 나머지는 모두 왕복 뒤 값이 같아야 한다(test_snapshot_roundtrip).
+const SNAPSHOT_SCRATCH: Array[String] = ["_in", "_hid", "_wts", "_out", "_bucket_head", "_bucket_next", "_mated", "csat", "_pending_events",
+	"_pick_total"]
 
 
 ## SimWorld 스크립트 변수 이름들(with_scratch 가 거짓이면 SNAPSHOT_SCRATCH 를 뺌).
@@ -2672,6 +2698,8 @@ const V01_FIXTURE_TICKS := 100
 const V01_FIXTURE_GOLDEN: Array[String] = [
 	"6bd975acd1c93346dc0ecc07569cd44c71e2757c37d6d5f1c1454c67e9b0ac2d", "09419527150c16c265a4ec4811f2d10a080fbd154b19bcf259c91548e95dc56d",
 ]
+## lineage.csv 의 v0.1 열 수(v0.2 의 열은 이 뒤에 붙음 — DESIGN-v0.2 9.4).
+const V01_LINEAGE_COUNT := 11
 ## 32비트 부호 있는 정수의 최댓값(행동 셈이 이것을 넘어도 넘치지 않는지 — test_snapshot_v02_roundtrip).
 const I32_MAX := 2147483647
 ## v0.1 의 timeseries.csv 22열(순서 그대로 — v0.2 의 열은 이 뒤에 붙음, DESIGN-v0.2 9.3). 금 값의 사영은 이 열만 잇는다.
@@ -2753,9 +2781,9 @@ func eff_once(wd: SimWorld, i: int, act: int) -> Array:
 ## 개체마다도: 진행 전후 상태로 다시 센 효과(옮김·먹은 양·운반 변화) = s_last_eff. 손 장면으로 효과가 아닌 경우(가득 찬 저장고·벽·배부름·
 ## 운반 가득·발견 전)를 하나씩.
 func test_act_counts() -> void:
-	check(",".join(SimRecorder.TIMESERIES_COLUMNS) == ",".join(V01_TIMESERIES_COLUMNS + SimRecorder.ACT_COLUMNS + SimRecorder.EFF_COLUMNS)
+	check(",".join(SimRecorder.TIMESERIES_COLUMNS) == ",".join(V01_TIMESERIES_COLUMNS + SimRecorder.ACT_COLUMNS + SimRecorder.EFF_COLUMNS + SimRecorder.STAGE1_COLUMNS)
 			and SimRecorder.ACT_COLUMNS.size() == SimBrain.BASE_OUTPUTS and SimRecorder.EFF_COLUMNS.size() == SimBrain.BASE_OUTPUTS,
-			"timeseries.csv 열 = v0.1 22열 + act_* 8 + eff_* 8(행동 번호 순서)")
+			"timeseries.csv 열 = v0.1 22열 + act_* 8 + eff_* 8(행동 번호 순서) + 1단계 10열")
 	var always := [SimBrain.ACT_LEFT, SimBrain.ACT_RIGHT, SimBrain.ACT_REST]
 	var seed_cost := float(cfg_with().farm.seed_cost)
 	check(seed_cost > 0.0, "기본 씨앗 비용 > 0(심기 효과를 운반 감소로 다시 셀 수 있음)")
@@ -2935,7 +2963,7 @@ func test_eaten_ledger() -> void:
 		col_sum += cell.to_float()
 		if cell != SimRecorder.fmt(want) and off.size() < 3:
 			off.append("#%d %s ≠ %s" % [id, cell, SimRecorder.fmt(want)])
-	check(col == SimRecorder.LINEAGE_COLUMNS.size() - 1 and off.is_empty(), "lineage.csv 끝 열 eaten = 죽은 개체 lin_eaten·살아 있는 개체 s_eaten(%s)" % ", ".join(off))
+	check(col == V01_LINEAGE_COUNT and off.is_empty(), "lineage.csv 의 v0.1 11열 뒤 첫 열 eaten = 죽은 개체 lin_eaten·살아 있는 개체 s_eaten(%s)" % ", ".join(off))
 	check(absf(col_sum - (fa.led_eaten - fa.led_eaten_open)) < 1e-6 * float(fa.lin_pa.size()) + 1e-9,
 			"lineage.csv eaten 열의 합 %.3f = 먹은 양 장부 %.3f(소수 6자리 반올림 안)" % [col_sum, fa.led_eaten - fa.led_eaten_open])
 	done()
@@ -3049,8 +3077,9 @@ func test_snapshot_v01_fixture() -> void:
 			"이어 돌린 세계를 다시 저장하면 v0.2 키·repro.inherit 가 들어가고 글자 그대로 왕복")
 	# 1단계 절(learn)·키(life.adult_frac 등): 옛 파일에 없으니 SECTIONS_ADDED·CONFIG_KEYS_ADDED 가 기본값(학습·몸 자람 끔)으로 채움
 	check(SimSnapshot.SECTIONS_ADDED.has("learn") and not d.config.has("learn") and SimConfig.deep_equal(w.cfg.learn, SimConfig.defaults().learn)
-			and float(w.cfg.life.adult_frac) == float(SimConfig.defaults().life.adult_frac) and not bool(w.cfg.body.grow_enabled),
-			"옛 파일에 없는 1단계 설정: learn 절·life.adult_frac·body.grow_enabled 등을 기본값(학습·몸 자람 끔)으로 채움")
+			and float(w.cfg.life.adult_frac) == float(SimConfig.defaults().life.adult_frac) and not bool(w.cfg.body.grow_enabled)
+			and w.s_w2.is_empty() and w.lin_eta.is_empty() and w.led_learn == 0.0,
+			"옛 파일에 없는 1단계 설정: learn 절·life.adult_frac·body.grow_enabled 등을 기본값(학습·몸 자람 끔)으로 채움, 학습 배열은 빈 배열")
 	# 시험용 새 절: 기본값에 절을 더하면 그 절이 없는 옛 파일은 SECTIONS_ADDED 없이는 거부, 있으면 기본값 절로 채워 열림
 	SimConfig.defaults()
 	SimConfig._defaults_cache["probe_section"] = {"probe_on": false}
@@ -3136,6 +3165,724 @@ func test_chance_baseline() -> void:
 	g.step_n(600)
 	check(a.total_births > 0 and a.history_hash == b.history_hash and SimSnapshot.to_text(a) == SimSnapshot.to_text(b) and a.history_hash != g.history_hash,
 			"chance_baseline·씨앗 3·600틱: 같은 씨앗 두 번 같은 해시·전체 상태(출생 %d), genome 세계와 다른 해시" % a.total_births)
+	done()
+
+
+# ───────────────────────── v0.2 1단계: 성장 + 스스로 학습(DESIGN-v0.2 14.2) ─────────────────────────
+
+## 생애 단계 경계 표(14.2 검사 기준 10, DESIGN-v0.2 2.1): [나이, 수명, 성숙, adult_frac, old_frac, 기대 단계, 설명].
+const LIFE_STAGE_TABLE := [
+	[29, 200, 30, 0.4, 0.8, SimBrain.LIFE_JUVENILE, "나이 29(성숙 30 전)"],
+	[30, 200, 30, 0.4, 0.8, SimBrain.LIFE_YOUNG, "나이 30(성숙)"],
+	[79, 200, 30, 0.4, 0.8, SimBrain.LIFE_YOUNG, "나이 79(0.4 × 200 전)"],
+	[80, 200, 30, 0.4, 0.8, SimBrain.LIFE_ADULT, "나이 80(= 0.4 × 200)"],
+	[159, 200, 30, 0.4, 0.8, SimBrain.LIFE_ADULT, "나이 159(0.8 × 200 전)"],
+	[160, 200, 30, 0.4, 0.8, SimBrain.LIFE_OLD, "나이 160(= 0.8 × 200)"],
+	[29, 200, 30, 0.1, 0.8, SimBrain.LIFE_JUVENILE, "adult 0.1 × 200 < 성숙: 나이 29"],
+	[30, 200, 30, 0.1, 0.8, SimBrain.LIFE_ADULT, "adult 0.1 × 200 < 성숙: 나이 30 은 젊은 없이 어른"],
+	[25, 200, 30, 0.05, 0.1, SimBrain.LIFE_JUVENILE, "old 0.1 × 200 < 성숙: 나이 25 는 어린"],
+	[30, 200, 30, 0.05, 0.1, SimBrain.LIFE_OLD, "old 0.1 × 200 < 성숙: 나이 30 은 어린 다음 바로 늙은"],
+	[0, 200, 0, 0.4, 0.8, SimBrain.LIFE_YOUNG, "성숙 0: 나이 0 은 젊은"],
+	[100, 250, 30, 0.4, 0.8, SimBrain.LIFE_ADULT, "수명 250(흔들림): 나이 100 = 0.4 × 250"],
+]
+## 몸 자람 검사의 유전자 크기(1 이 아닌 값 — f × 유전자가 f 와 다르게).
+const GROW_GENE_SIZE := 1.3
+## 손 계산 갱신(검사 기준 3)의 은닉 수·고리 길이(정적 함수는 이 값을 인자로 받음 — 세계 설정과 따로).
+const HAND_HID := 2
+const HAND_RING := 4
+
+
+## 생애 단계(14.2 범위 1·검사 기준 10): 경계 표, 세계의 life_stage_of = 정적 판정(세계 설정의 성숙·비율), 시계열 stage_* 의 합 = 개체 수,
+## 관계 검사(adult_frac ≤ old_frac).
+func test_life_stage() -> void:
+	check(SimBrain.LIFE_STAGE_NAMES == ["어린", "젊은", "어른", "늙은"] and SimRecorder.LIFE_STAGE_COLUMNS
+			== ["stage_juvenile", "stage_young", "stage_adult", "stage_old"], "생애 단계 이름 4개(어린·젊은·어른·늙은) = 시계열 stage_* 4열 순서")
+	var wrong := PackedStringArray()
+	for r in LIFE_STAGE_TABLE:
+		var got := SimBrain.life_stage(r[0], r[1], r[2], r[3], r[4])
+		if got != r[5]:
+			wrong.append("%s → %s(기대 %s)" % [r[6], SimBrain.LIFE_STAGE_NAMES[got], SimBrain.LIFE_STAGE_NAMES[r[5]]])
+	check(wrong.is_empty(), "생애 단계 경계 표 %d줄(29/30·79/80·159/160, 젊은 구간이 비는 경우, 어린 다음 바로 늙은): %s" % [LIFE_STAGE_TABLE.size(), "; ".join(wrong)])
+	var wd := world({"life.adult_frac": 0.3, "life.old_frac": 0.6}, 4)
+	wd.step_n(150)
+	var mat := int(wd.cfg.repro.maturity)
+	var bad := 0
+	for i in wd.population():
+		if wd.life_stage_of(i) != SimBrain.life_stage(wd.s_age[i], wd.s_max_age[i], mat, 0.3, 0.6):
+			bad += 1
+	var row := wd.sample()
+	var total := 0
+	var all_seen := true
+	for col in SimRecorder.LIFE_STAGE_COLUMNS:
+		total += int(row[col])
+		all_seen = all_seen and int(row[col]) > 0
+	check(bad == 0 and total == wd.population() and all_seen,
+			"세계(adult 0.3·old 0.6·150틱): life_stage_of = 정적 판정(틀린 개체 %d), stage_* 합 %d = 개체 %d, 네 단계 모두 있음(%s)" % [
+			bad, total, wd.population(), str([row.stage_juvenile, row.stage_young, row.stage_adult, row.stage_old])])
+	var e1 := str(SimConfig.build("default", {"life.adult_frac": 0.9}).error)
+	check(e1.contains("life.adult_frac") and e1.contains("life.old_frac"), "관계 검사: 어른 시작 0.9 > 늙음 시작 0.8 거부: " + e1)
+	check(SimConfig.build("default", {"life.adult_frac": 0.8}).error == "", "어른 시작 = 늙음 시작(0.8)은 받음(어른 구간이 빔)")
+	done()
+
+
+## 몸 자람(14.2 범위 2·검사 기준 9, DESIGN-v0.2 2.2): 갓 태어난 크기 = f × 유전자, 매 틱 유전자 × g(나이), 성숙 때 유전자 그대로,
+## 최대 에너지가 따라감, 자식 에너지 상한 = 태어날 때의 최대 에너지(넘치는 몫은 번식 손실 장부), 초기 개체(나이 0~40) 에너지 =
+## 비율 × 그 나이의 최대 ≤ 최대, mean_size 는 유전자 크기 평균(v0.1 뜻)·mean_size_eff 는 실제 크기 평균, 끄면 v0.1 그대로.
+func test_body_growth() -> void:
+	check(SimBrain.growth_factor(0, 30, 0.5) == 0.5 and SimBrain.growth_factor(15, 30, 0.5) == 0.75 and SimBrain.growth_factor(30, 30, 0.5) == 1.0
+			and SimBrain.growth_factor(31, 30, 0.1) == 1.0 and SimBrain.growth_factor(5, 0, 0.5) == 1.0,
+			"크기 비율 g: 나이 0 → 0.5, 15 → 0.75, 30(성숙) → 1, 성숙 뒤 1(f 0.1 이어도 정확히), 성숙 0 이면 1")
+	var wd := empty_world({"body.grow_enabled": true, "mutation.rate": 0.0})
+	var f := float(wd.cfg.body.birth_size_frac)
+	var mat := int(wd.cfg.repro.maturity)
+	var eps := float(wd.cfg.body.energy_per_size)
+	var p := grass_spot(wd)
+	var g := SimBrain.random_genome(wd.cfg, wd.L, wd.rng_life)
+	g[wd._to + SimBrain.TRAIT_SIZE] = GROW_GENE_SIZE
+	var gene := float(g[wd._to + SimBrain.TRAIT_SIZE])
+	var id := wd._spawn(p.x, p.y, 1, g, 0.0, 0, SimWorld.NO_PARENT, SimWorld.NO_PARENT, 0)
+	var i := wd.index_of_id(id)
+	check(wd.s_size[i] == gene * f and wd.s_emax[i] == eps * (gene * f) and float(wd.lin_size[id]) == gene,
+			"갓 태어난 크기 %.4f = f %.2f × 유전자 %.4f, 최대 에너지 = 몸 크기 × energy_per_size(계통 size 는 유전자)" % [wd.s_size[i], f, gene])
+	wd.s_max_age[i] = 1000000
+	var bad := PackedStringArray()
+	var prev := wd.s_size[i]
+	var grew := true
+	while wd.s_age[wd.index_of_id(id)] < mat + 3:
+		i = wd.index_of_id(id)
+		wd.s_energy[i] = 0.5 * wd.s_emax[i]
+		wd.step()
+		i = wd.index_of_id(id)
+		var want := gene * SimBrain.growth_factor(wd.s_age[i], mat, f)
+		if (wd.s_size[i] != want or wd.s_emax[i] != eps * want) and bad.size() < 3:
+			bad.append("나이 %d: 크기 %s(기대 %s)" % [wd.s_age[i], str(wd.s_size[i]), str(want)])
+		if wd.s_age[i] <= mat and wd.s_size[i] <= prev:
+			grew = false
+		prev = wd.s_size[i]
+	check(bad.is_empty() and grew and wd.s_size[i] == gene and wd.s_emax[i] == eps * gene,
+			"매 틱 크기 = 유전자 × g(나이)·최대 에너지가 따라감, 성숙(%d틱)까지 늘고 그 뒤 유전자 크기 그대로(%s)" % [mat, "; ".join(bad)])
+	# 자식: 크기 = f × 유전자, 에너지는 태어날 때의 최대 에너지로 잘림(번식 비용 0.9 — 넘치게)
+	var w2 := empty_world({"body.grow_enabled": true, "mutation.rate": 0.0, "repro.cost_frac": 0.9})
+	var p2 := grass_spot(w2)
+	add_slime(w2, p2, 1.0, 100)
+	add_slime(w2, p2 + Vector2i(1, 0), 1.0, 100)
+	var n0 := w2.population()
+	w2.s_dead.fill(0)
+	w2._reproduce()
+	var k := w2.index_of_id(n0)
+	var cg := float(w2.s_genome[k * w2._G + w2._to + SimBrain.TRAIT_SIZE]) if k != -1 else 0.0
+	check(k != -1 and w2.s_size[k] == cg * f and w2.s_energy[k] == w2.s_emax[k] and w2.s_emax[k] == eps * (cg * f)
+			and w2.led_repro_loss > 0.0 and absf(w2.total_energy() - w2.ledger_expected()) < 1e-9,
+			"자식 크기 = f × 유전자, 자식 에너지 = 태어날 때의 최대 에너지 %.2f(넘친 몫은 번식 손실 장부 — 장부 오차 0)" % (w2.s_emax[k] if k != -1 else -1.0))
+	# 초기 개체(나이 0~population.initial_age_spread): 처음 에너지 = start_energy_frac × 그 나이의 최대 에너지
+	var w3 := world({"body.grow_enabled": true}, 3)
+	var sf := float(w3.cfg.body.start_energy_frac)
+	var over := 0
+	var small := 0
+	for j in w3.population():
+		if w3.s_energy[j] > w3.s_emax[j] or w3.s_energy[j] != sf * w3.s_emax[j]:
+			over += 1
+		if w3.s_age[j] < mat and w3.s_size[j] < float(w3.s_genome[j * w3._G + w3._to + SimBrain.TRAIT_SIZE]):
+			small += 1
+	check(over == 0 and small > 0, "초기 개체 %d마리(나이 0~%d)의 에너지 = %.1f × 그 나이의 최대 ≤ 최대(어긋난 개체 %d, 작은 몸 %d)" % [
+			w3.population(), int(w3.cfg.population.initial_age_spread), sf, over, small])
+	var r3 := w3.sample()
+	check(float(r3.mean_size) == w3._mean_gene_size() and float(r3.mean_size_eff) == w3.mean_of(w3.s_size) and float(r3.mean_size_eff) < float(r3.mean_size),
+			"켜면 mean_size = 유전자 크기 평균 %.4f(v0.1 뜻), mean_size_eff = 실제 크기 평균 %.4f" % [float(r3.mean_size), float(r3.mean_size_eff)])
+	var w4 := world({}, 3)
+	var same := 0
+	for j in w4.population():
+		if w4.s_size[j] == float(w4.s_genome[j * w4._G + w4._to + SimBrain.TRAIT_SIZE]):
+			same += 1
+	var r4 := w4.sample()
+	check(same == w4.population() and float(r4.mean_size) == float(r4.mean_size_eff), "끄면 크기 = 유전자 크기, mean_size = mean_size_eff(v0.1 그대로)")
+	done()
+
+
+## 유전체 구간과 난수 뽑기(14.2 범위 3·검사 기준 1·2, DESIGN-v0.2 3.7): 학습 끔 163·켬 171(η 8 은 특성 뒤)·기억 2 와 함께 203,
+## 무작위 첫 유전체의 η = eta_init(난수 없이 — 뽑기 수 그대로), 교차는 η 를 유전자마다 부모 한쪽에서, 돌연변이율 0 이면 그대로, 범위
+## [0, eta_max]. 번식 1번당 rng_life 뽑기 수: 끔 = v0.1(은닉 + 특성 + 가중치 + 특성 + 방향 + 수명 = 176), 켬 = + η 교차 8 + 돌연변이 8.
+func test_learn_genome() -> void:
+	var c0 := cfg_with()
+	var c1 := cfg_with({"learn.enabled": true})
+	var L0 := SimBrain.layout(c0)
+	var L1 := SimBrain.layout(c1)
+	var L2 := SimBrain.layout(cfg_with({"learn.enabled": true, "brain.memory_units": 2}))
+	check(L0.genes == 163 and L0.eta_len == 0 and L0.n_act == SimBrain.BASE_OUTPUTS and L0.eta_offset == L0.trait_offset + SimBrain.TRAIT_GENES,
+			"학습 끔: 유전자 163, η 구간 길이 0(배치 [W1][W2][특성 3])")
+	check(L1.genes == 171 and L1.eta_len == SimBrain.ETA_GENES and L1.eta_offset == 163 and L1.trait_offset == L0.trait_offset and L2.genes == 203,
+			"학습 켬: 171 = 163 + η 8(특성 뒤 163 부터), 기억 2 와 함께 203")
+	var ra := SimRng.new(9)
+	var rb := SimRng.new(9)
+	var g0 := SimBrain.random_genome(c0, L0, ra)
+	var g1 := SimBrain.random_genome(c1, L1, rb)
+	var eta_ok := true
+	for k in SimBrain.ETA_GENES:
+		eta_ok = eta_ok and g1[L1.eta_offset + k] == float(PackedFloat32Array([float(c1.learn.eta_init)])[0])
+	check(eta_ok and ra.get_state_string() == rb.get_state_string() and g1.slice(0, L0.genes) == g0,
+			"무작위 첫 유전체: η = eta_init, 난수를 쓰지 않아 앞 163 유전자·뽑기 수가 학습 끔과 같음")
+	var pa := g1.duplicate()
+	var pb := g1.duplicate()
+	for k in SimBrain.ETA_GENES:
+		pa[L1.eta_offset + k] = 0.125
+		pb[L1.eta_offset + k] = 0.375
+	var mixed := false
+	var from_parent := true
+	var rng := SimRng.new(4)
+	for trial in 20:
+		var ch := SimBrain.crossover(L1, pa, pb, rng)
+		var seen := {}
+		for k in SimBrain.ETA_GENES:
+			var v: float = ch[L1.eta_offset + k]
+			from_parent = from_parent and (v == 0.125 or v == 0.375)
+			seen[v] = true
+		mixed = mixed or seen.size() == 2
+	check(from_parent and mixed, "교차: η 는 유전자마다 부모 한쪽에서(한 자식 안에서도 섞임)")
+	var pa0 := pa.duplicate()
+	var gm := pa.duplicate()
+	SimBrain.mutate(cfg_with({"learn.enabled": true, "mutation.rate": 0.0}), L1, gm, rng)
+	var cfg_big := cfg_with({"learn.enabled": true, "mutation.rate": 1.0, "mutation.sigma": 50.0})
+	var in_range := true
+	var moved := false
+	for t in 5:
+		SimBrain.mutate(cfg_big, L1, pa, rng)
+		for k in SimBrain.ETA_GENES:
+			var v := float(pa[L1.eta_offset + k])
+			in_range = in_range and v >= 0.0 and v <= float(cfg_big.learn.eta_max)
+			moved = moved or v != 0.125
+	check(gm == pa0, "돌연변이율 0 → η(와 모든 유전자) 그대로")
+	check(in_range and moved, "돌연변이: η 가 바뀌고 [0, eta_max] 로 잘림")
+	# 번식 1번당 rng_life 뽑기 수(돌연변이율 0 — 정규 근사 뽑기 없음)
+	var hid := int(c0.brain.hidden)
+	var v01_draws: int = hid + SimBrain.TRAIT_GENES + int(L0.trait_offset) + SimBrain.TRAIT_GENES + 2
+	var draws := []
+	for on: bool in [false, true]:
+		var w := empty_world({"learn.enabled": on, "mutation.rate": 0.0})
+		var p := grass_spot(w)
+		add_slime(w, p, 0.9, 100)
+		add_slime(w, p + Vector2i(1, 0), 0.9, 100)
+		var probe := SimRng.new()
+		probe.set_state_string(w.rng_life.get_state_string())
+		var want := v01_draws + (2 * SimBrain.ETA_GENES if on else 0)
+		for k in want:
+			probe.uniform()
+		w.s_dead.fill(0)
+		w._reproduce()
+		draws.append(w.population() == 3 and probe.get_state_string() == w.rng_life.get_state_string())
+	check(draws[0] and draws[1], "번식 1번당 rng_life 뽑기: 학습 끔 %d번 = v0.1, 켬 %d번(η 교차·돌연변이 + 16) — %s" % [v01_draws,
+			v01_draws + 2 * SimBrain.ETA_GENES, str(draws)])
+	done()
+
+
+## 손 계산 갱신(14.2 검사 기준 3, DESIGN-v0.2 3.5): 정한 고리(행동·보정 e·은닉)·δ·배수·η·λ 로 한 번 갱신한 배운 두뇌의 비트가 손으로 셈한
+## 값과 같음(2진 소수만 써서 반올림 없이 — 자르기 한 칸 포함). 세계 경로(_learn)도 같은 식(정적 함수와 비트 일치, 기준선·어린 동안 배운 양·
+## 갱신 수), 놀람이 문턱보다 작으면 고치지 않음. 보정 e: diag_e 손 값과, 세계가 판단 때 고리에 쓰는 e = diag_e(exact·none 각각).
+func test_learn_update_hand() -> void:
+	check(SimBrain.diag_e(-1.0, 0.5, 4, true) == 1.0 and SimBrain.diag_e(0.0, 0.25, 4, true) == 3.0 and SimBrain.diag_e(-3.0, 0.5, 2, true) == 0.25
+			and SimBrain.diag_e(1.0, 0.5, 4, true) == 0.5 * 4.0 * (1.0 / 6.0) and SimBrain.diag_e(1.0, 0.25, 4, false) == 0.75,
+			"보정 e: exact = (1 − π)·k·d(o) — o −1·0·−3·1 손 값, none = 1 − π")
+	var lam := SimBrain.decay_table(0.5, HAND_RING)
+	check(lam == PackedFloat64Array([1.0, 0.5, 0.25, 0.125]) and SimBrain.decay_table(0.8, 8)[7] == 0.8 * 0.8 * 0.8 * 0.8 * 0.8 * 0.8 * 0.8,
+			"λᵐ 표 = 거듭 곱(0.5 → 1·0.5·0.25·0.125, 0.8⁷)")
+	# 고리(다음 자리 1): m 0 → 칸 0(행동 3), m 1 → 칸 3(행동 5), m 2 → 칸 2(행동 3), m 3 → 칸 1(빈칸)
+	var ring_a := PackedInt32Array([3, SimWorld.RING_EMPTY, 3, 5])
+	var ring_e := PackedFloat32Array([1.0, 9.0, 0.5, 0.25])
+	var ring_h := PackedFloat32Array([0.5, -0.25, 1.0, 1.0, 0.25, 0.5, 1.0, -0.5])
+	var w2 := PackedFloat64Array()
+	w2.resize(SimBrain.BASE_OUTPUTS * HAND_HID)
+	w2.fill(0.75)
+	w2[3 * HAND_HID] = 0.125
+	w2[3 * HAND_HID + 1] = -0.25
+	w2[5 * HAND_HID] = 3.9375
+	w2[5 * HAND_HID + 1] = 0.0
+	var genome := PackedFloat32Array()
+	genome.resize(SimBrain.BASE_OUTPUTS)
+	genome[3] = 0.25
+	genome[5] = 4.0
+	var moved := SimBrain.learn_update(w2, 0, HAND_HID, ring_a, ring_e, ring_h, 0, HAND_RING, 1, 0.5, 1.0, genome, 0, lam, 4.0)
+	# 손 계산: c = δ 0.5 × 배수 1 × η × λᵐ × e. m0: c = 0.125 → 행동 3 += [0.0625, −0.03125], m1: c = 0.5 × 4 × 0.5 × 0.25 = 0.25 →
+	# 행동 5 += [0.25, −0.125](3.9375 + 0.25 = 4.1875 → 자름 4), m2: c = 0.5 × 0.25 × 0.25 × 0.5 = 0.015625 → 행동 3 += [0.00390625, 0.0078125]
+	var want := PackedFloat64Array()
+	want.resize(SimBrain.BASE_OUTPUTS * HAND_HID)
+	want.fill(0.75)
+	want[3 * HAND_HID] = 0.19140625
+	want[3 * HAND_HID + 1] = -0.2734375
+	want[5 * HAND_HID] = 4.0
+	want[5 * HAND_HID + 1] = -0.125
+	check(w2 == want and moved == 0.29296875, "정적 learn_update: 손 계산 비트(행동 3 = %s, 행동 5 = %s — 자른 칸 포함, 바뀐 양 %s = 0.29296875, 빈칸·다른 행은 그대로)" % [
+			str(w2.slice(3 * HAND_HID, 4 * HAND_HID)), str(w2.slice(5 * HAND_HID, 6 * HAND_HID)), str(moved)])
+	# 세계 경로: 한 개체의 고리·배운 두뇌·η·기준선을 정하고 한 틱 쉬게 함(판단 없이 — 고리는 그대로) → 보상 δ = −비용 ÷ 한입 − 기준선 0.5
+	# (문턱을 넘는 음의 놀람)으로 _act 가 고친 배운 두뇌 = 같은 δ 의 정적 learn_update 비트, 기준선 += β δ, 어린 동안 배운 양(어린 단계만)
+	for case in [["어린", 5, true], ["어른", 120, false]]:
+		var wd := empty_world({"learn.enabled": true})
+		var p := grass_spot(wd)
+		var i := wd.index_of_id(add_slime(wd, p, 0.5, case[1], 1))
+		wd.s_max_age[i] = 200
+		var hn := wd._ring
+		var nh := wd._n_hid
+		for s in hn:
+			wd.s_ring_a[i * hn + s] = (s * 3) % SimBrain.BASE_OUTPUTS if s != 2 else SimWorld.RING_EMPTY
+			wd.s_ring_e[i * hn + s] = 0.5 + 0.25 * float(s)
+			for j in nh:
+				wd.s_ring_h[(i * hn + s) * nh + j] = 0.125 * float((s + j) % 5) - 0.25
+		wd.s_ring_pos[i] = 3
+		for k in SimBrain.ETA_GENES:
+			wd.s_genome[i * wd._G + wd._eta_o + k] = 0.0625 * float(k + 1)
+		wd.s_rbar[i] = 0.5
+		var e_before := wd.s_energy[i]
+		var size := wd.s_size[i]
+		var st := SimBrain.life_stage(wd.s_age[i], wd.s_max_age[i], wd._maturity, wd._adult_frac, wd._old_frac)
+		var before := wd.s_w2.duplicate()
+		var ref := wd.s_w2.duplicate()
+		act_once(wd, i, SimBrain.ACT_REST, wd.tick + 1)
+		var delta := (wd.s_energy[i] - e_before) / (float(wd.cfg.eat.bite) * float(wd.cfg.eat.efficiency) * size) - 0.5
+		var mv := SimBrain.learn_update(ref, i * wd._w2n, nh, wd.s_ring_a, wd.s_ring_e, wd.s_ring_h, i * hn, hn, 3, delta,
+				float(wd.cfg.learn.stage_mult[st]), wd.s_genome, i * wd._G + wd._eta_o, SimBrain.decay_table(float(wd.cfg.learn.decay), hn),
+				float(wd.cfg.brain.weight_clamp))
+		check(ref != before and wd.s_w2 == ref and wd.s_rbar[i] == 0.5 + float(wd.cfg.learn.baseline_rate) * delta and wd.period_learn == 1
+				and wd.s_dw_juv[i] == (mv if case[2] else 0.0),
+				"세계 경로(%s, 단계 %s, 쉬기 δ %.4f) = 정적 learn_update 비트, 기준선 += β δ, 갱신 1번, 어린 동안 배운 양 %s(정적 %s)" % [case[0],
+				SimBrain.LIFE_STAGE_NAMES[st], delta, str(wd.s_dw_juv[i]), str(mv)])
+		# 놀람이 문턱보다 작으면 고치지 않음(기준선은 고침)
+		var w_before := wd.s_w2.duplicate()
+		wd.s_rbar[i] = 0.0
+		var e1 := wd.s_energy[i]
+		act_once(wd, i, SimBrain.ACT_REST, wd.tick + 1)
+		var d1 := (wd.s_energy[i] - e1) / (float(wd.cfg.eat.bite) * float(wd.cfg.eat.efficiency) * size)
+		check(absf(d1) < float(wd.cfg.learn.min_surprise) and wd.s_w2 == w_before and wd.period_learn == 1
+				and wd.s_rbar[i] == float(wd.cfg.learn.baseline_rate) * d1,
+				"%s: 놀람 %.4f < 문턱 %.2f 이면 배운 두뇌 그대로(기준선만 고침)" % [case[0], d1, float(wd.cfg.learn.min_surprise)])
+		var row := wd.sample()
+		check(int(row.learn_events) == 1 and wd.period_learn == 0 and float(row.rbar_mean) == wd.s_rbar[i],
+				"%s: sample() 이 구간 학습 갱신 수(1)·평균 기준선을 줄에 싣고 갱신 수를 0 으로 되돌림" % case[0])
+	# 판단 때 고리 쓰기: 보정 e = diag_e(o, π, k)(exact·none), 행동·은닉(float32)·다음 자리
+	for mode in [SimBrain.DIAG_EXACT, SimBrain.DIAG_NONE]:
+		var wl := world({"learn.enabled": true, "learn.diag_factor": mode}, 2)
+		wl.step_n(20)
+		wl.sample()
+		var bad := 0
+		var nz := 0
+		var pmax_sum := 0.0
+		var calls := 0
+		for i in mini(wl.population(), 40):
+			var pos := wl.s_ring_pos[i]
+			var a := wl._think(i, wl.s_x[i], wl.s_y[i], wl.s_y[i] * wl.w + wl.s_x[i], wl.s_head[i], wl.s_emax[i])
+			var slot := i * wl._ring + pos
+			var e := SimBrain.diag_e(wl._out[a], wl._wts[a] / wl._pick_total, wl._sharpness, mode == SimBrain.DIAG_EXACT)
+			var hs := PackedFloat32Array()
+			for v in wl._hid:
+				hs.append(v)
+			if wl.s_ring_a[slot] != a or wl.s_ring_e[slot] != PackedFloat32Array([e])[0] or wl.s_ring_h.slice(slot * wl._n_hid, (slot + 1) * wl._n_hid) != hs \
+					or wl.s_ring_pos[i] != (pos + 1) % wl._ring:
+				bad += 1
+			if e != 1.0 - wl._wts[a] / wl._pick_total:
+				nz += 1
+			var top := 0.0
+			for q in SimBrain.BASE_OUTPUTS:
+				top = maxf(top, wl._wts[q])
+			pmax_sum += top / wl._pick_total
+			calls += 1
+		check(bad == 0 and (nz > 0) == (mode == SimBrain.DIAG_EXACT), "diag_factor %s: 판단 때 고리 = (행동, diag_e(o, π, k), 은닉 float32), 다음 자리 + 1(틀린 개체 %d)" % [mode, bad])
+		var pm := float(wl.sample().pmax_mean)
+		check(calls > 0 and pm == pmax_sum / float(calls) and pm >= 1.0 / float(SimBrain.BASE_OUTPUTS) and pm <= 1.0 and wl.period_think == 0
+				and wl.period_pmax == 0.0, "diag_factor %s: pmax_mean %.4f = 판단 %d번의 가장 큰 행동 확률 평균(sample 뒤 0 으로)" % [mode, pm, calls])
+	done()
+
+
+## "학습이 고른다"(14.2 검사 기준 4): 개체 하나(수명 1000), 매 틱 시작에 에너지 = 0.5 × 최대, 발밑 먹이를 plants.max_food 로 다시 채우는
+## 고정 장면 200틱. 200틱 전·후의 먹기 확률을 같은 고정 입력(_in 사본)에서 SimBrain.forward_phen 으로 견줌: 켬이면 처음보다 큼,
+## freeze 면 처음과 같음(비트).
+func test_learning_picks() -> void:
+	var res := {}
+	for freeze: bool in [false, true]:
+		var wd := empty_world({"learn.enabled": true, "learn.freeze": freeze, "life.max_age": 1000})
+		var p := grass_spot(wd)
+		var id := add_slime(wd, p, 0.5, 100, 1)
+		var i := wd.index_of_id(id)
+		var c := p.y * wd.w + p.x
+		var mf := float(wd.cfg.plants.max_food)
+		wd.food[c] = mf
+		var probe: SimWorld = SimSnapshot.from_text(SimSnapshot.to_text(wd)).world
+		probe._think(i, p.x, p.y, c, probe.s_head[i], probe.s_emax[i])
+		var fixed := probe._in.duplicate()
+		var before: float = SimBrain.forward_phen(wd.L, wd.s_genome, i * wd._G, wd.s_w2, i * wd._w2n, fixed, wd._sharpness).probs[SimBrain.ACT_EAT]
+		var eats := 0
+		for t in 200:
+			i = wd.index_of_id(id)
+			wd.s_energy[i] = 0.5 * wd.s_emax[i]
+			wd.food[wd.s_y[i] * wd.w + wd.s_x[i]] = mf
+			wd.step()
+			i = wd.index_of_id(id)
+			if wd.s_last_action[i] == SimBrain.ACT_EAT:
+				eats += 1
+		i = wd.index_of_id(id)
+		var after: float = SimBrain.forward_phen(wd.L, wd.s_genome, i * wd._G, wd.s_w2, i * wd._w2n, fixed, wd._sharpness).probs[SimBrain.ACT_EAT]
+		res[freeze] = [before, after, eats, wd.period_learn]
+	check(res[false][1] > res[false][0], "켬: 200틱 뒤 고정 입력의 먹기 확률 %.4f > 처음 %.4f(먹기 %d번)" % [res[false][1], res[false][0], res[false][2]])
+	check(res[true][1] == res[true][0] and res[true][0] == res[false][0], "freeze: 200틱 뒤 먹기 확률 %.4f = 처음 %.4f(비트 — 먹기 %d번, 갱신 %d번)" % [
+			res[true][1], res[true][0], res[true][2], res[true][3]])
+	done()
+
+
+## 자르기(14.2 검사 기준 5): 모든 배운 가중치 abs(w) ≤ brain.weight_clamp — 학습률을 크게 해(비용 0 — η 100 의 학습 비용은 굶어 죽게 함)
+## 자르기가 실제로 일어나는 세계와 learn_basic.
+func test_learn_clamp() -> void:
+	for sets in [{"learn.eta_init": 100.0, "learn.eta_max": 100.0, "learn.min_surprise": 0.0, "learn.cost_per_eta": 0.0}, {}]:
+		var wd := world(sets, 2, "learn_basic")
+		wd.step_n(300)
+		var clamp_w := float(wd.cfg.brain.weight_clamp)
+		var top := 0.0
+		var at_edge := 0
+		for v in wd.s_w2:
+			top = maxf(top, absf(v))
+			if absf(v) == clamp_w:
+				at_edge += 1
+		var big: bool = sets.has("learn.eta_init")
+		check(wd.s_w2.size() > 0 and top <= clamp_w and (at_edge > 0 or not big), "%s: 배운 가중치 %d개 모두 abs ≤ %.1f(최대 %.4f, 경계 값 %d개)" % [
+				"η 100·문턱 0" if big else "learn_basic", wd.s_w2.size(), clamp_w, top, at_edge])
+	done()
+
+
+## 장부(14.2 검사 기준 6, DESIGN-v0.2 3.6·12.2): 학습 비용을 낸 세계의 에너지 장부, led_learn = 개체·틱마다 학습 비용의 합, 쉬어도 줄지
+## 않음(쉬기 배수 뒤에 더함), learn.cost_per_eta = 0 이면 led_learn = 0, 먹은 양 장부.
+func test_learn_ledger() -> void:
+	var wd := world({}, 9, "learn_basic")
+	var worst := 0.0
+	var expect := 0.0
+	for k in 600:
+		expect += wd.sum_of(wd.s_clearn)
+		wd.step()
+		worst = maxf(worst, absf(wd.total_energy() - wd.ledger_expected()))
+	check(worst < 1e-6 and wd.total_births > 0 and wd.total_deaths > 0, "learn_basic·씨앗 9·600틱: 에너지 장부 오차 %s(학습 비용 포함)" % String.num_scientific(worst))
+	check(wd.led_learn > 0.0 and wd.led_learn < wd.led_spent and absf(wd.led_learn - expect) <= 1e-9 * expect,
+			"led_learn %.4f = 개체·틱마다 학습 비용의 합 %.4f(< led_spent %.1f)" % [wd.led_learn, expect, wd.led_spent])
+	check(eaten_gap(wd) < 1e-9, "먹은 양 장부 상대 오차 %s" % String.num_scientific(eaten_gap(wd)))
+	# 쉬기: 비용 = (기본 대사 × 크기 + 감지 비용 × 반경) × 쉬기 배수 + 학습 비용(η 평균 × cost_per_eta)
+	var we := empty_world({"learn.enabled": true})
+	var p := grass_spot(we)
+	var i := we.index_of_id(add_slime(we, p, 0.5, 100, 1))
+	for k in SimBrain.ETA_GENES:
+		we.s_genome[i * we._G + we._eta_o + k] = 0.25
+	we.s_clearn[i] = float(we.cfg.learn.cost_per_eta) * we.eta_mean_of_genome(we.s_genome, i * we._G)
+	var spent0 := we.led_spent
+	act_once(we, i, SimBrain.ACT_REST, we.tick + 1)
+	var base := (float(we.cfg.metab.base) * we.s_size[i] + float(we.cfg.metab.sense_cost) * float(we.s_sense[i])) * float(we.cfg.metab.rest_factor)
+	var c_learn := float(we.cfg.learn.cost_per_eta) * 0.25
+	check(spent0 == 0.0 and we.led_spent == base + c_learn and we.led_learn == c_learn,
+			"쉬기 한 틱의 비용 %.5f = 대사 × 쉬기 배수 %.5f + 학습 비용 %.4f(η 0.25 × %.2f — 쉬어도 줄지 않음)" % [we.led_spent, base, c_learn,
+			float(we.cfg.learn.cost_per_eta)])
+	var w0 := world({"learn.cost_per_eta": 0.0}, 9, "learn_basic")
+	w0.step_n(100)
+	check(w0.led_learn == 0.0 and absf(w0.total_energy() - w0.ledger_expected()) < 1e-6, "learn.cost_per_eta = 0 이면 led_learn = 0")
+	done()
+
+
+## 결정성·왕복(14.2 검사 기준 7): 같은 씨앗 두 번 같은 글, 500 + 500 = 1,000(새 열이 든 timeseries.csv·학습 열이 든 lineage.csv·
+## 전체 상태·해시), 새 상태 변수가 모두 왕복, 해시 꼬리(Σ 배운 두뇌·Σ 기준선 — 바꾸면 해시가 바뀜), 학습 상태가 틀린 스냅숏 거부.
+func test_learn_snapshot() -> void:
+	var a := world({}, 5, "learn_basic")
+	a.step_n(300)
+	var b := world({}, 5, "learn_basic")
+	b.step_n(300)
+	check(a.history_hash == b.history_hash and SimSnapshot.to_text(a) == SimSnapshot.to_text(b) and a.s_w2.size() > 0,
+			"learn_basic·씨앗 5·300틱: 같은 씨앗 두 번 같은 해시·전체 상태 글")
+	var wd := world({}, 21, "learn_basic")
+	var rec := SimRecorder.new()
+	rec.record(wd)
+	var snaps := {}
+	var every := int(wd.cfg.record.every)
+	while wd.tick < 1000:
+		wd.step()
+		if wd.tick % every == 0:
+			rec.record(wd)
+		if wd.tick == 500 or wd.tick == 510:
+			snaps[wd.tick] = SimSnapshot.to_text(wd)
+	var learned_rows := 0
+	for row in rec.rows:
+		if int(row.learn_events) > 0 and float(row.pmax_mean) > 0.0 and float(row.eta_mean) > 0.0 and float(row.dw_mean) > 0.0:
+			learned_rows += 1
+	check(not wd.is_extinct() and learned_rows > 0, "learn_basic·씨앗 21: 1,000틱 살아 있고 학습 열이 채워진 기록 줄 %d개" % learned_rows)
+	for t: int in snaps:
+		var r := SimSnapshot.from_text(snaps[t])
+		check(r.error == "" and r.world != null, "%d틱 학습 스냅숏 열기: %s" % [t, str(r.error)])
+		if r.world == null:
+			continue
+		var w2: SimWorld = r.world
+		var rec2 := SimRecorder.new()
+		while w2.tick < 1000:
+			w2.step()
+			if w2.tick % every == 0:
+				rec2.record(w2)
+		var want: Array = []
+		for row in rec.rows:
+			if int(row.tick) > t:
+				want.append(row)
+		check(want.size() > 0 and csv_of(want, SimRecorder.TIMESERIES_COLUMNS) == csv_of(rec2.rows, SimRecorder.TIMESERIES_COLUMNS)
+				and SimRecorder.lineage_csv(w2) == SimRecorder.lineage_csv(wd) and SimSnapshot.to_text(w2) == SimSnapshot.to_text(wd)
+				and w2.history_hash == wd.history_hash,
+				"%d틱 → 열기 → 1,000틱 = 곧장 1,000틱(timeseries %d열·lineage %d열·전체 상태·해시)" % [t, SimRecorder.TIMESERIES_COLUMNS.size(),
+				SimRecorder.LINEAGE_COLUMNS.size()])
+	var rt: SimWorld = SimSnapshot.from_text(SimSnapshot.to_text(wd)).world
+	var diff: Array[String] = ["복원 실패"]
+	if rt != null:
+		diff = world_vars_differ(wd, rt)
+	check(rt != null and diff.is_empty() and rt.s_w2 == wd.s_w2 and rt.s_ring_h == wd.s_ring_h and rt.lin_assim == wd.lin_assim,
+			"학습 세계의 상태 변수 %d개가 모두 왕복(다른 변수: %s)" % [world_state_vars(wd).size(), ", ".join(diff)])
+	# 해시 꼬리: 같은 세계 사본의 배운 가중치 하나(또는 기준선 하나)만 바꾸면 다음 해시 검사점이 달라짐, 그대로면 같음
+	var hb: SimWorld = SimSnapshot.from_text(SimSnapshot.to_text(wd)).world
+	var hc: SimWorld = SimSnapshot.from_text(SimSnapshot.to_text(wd)).world
+	var hd: SimWorld = SimSnapshot.from_text(SimSnapshot.to_text(wd)).world
+	hc.s_w2[0] += 0.5
+	hd.s_rbar[0] += 0.5
+	for x: SimWorld in [hb, hc, hd]:
+		x._hash_step()
+	check(hb.history_hash != hc.history_hash and hb.history_hash != hd.history_hash and SimSnapshot.from_text(SimSnapshot.to_text(wd)).world.history_hash == wd.history_hash,
+			"해시 꼬리: 배운 가중치·기준선만 바꿔도 다음 해시가 달라짐(학습 끈 세계의 줄은 v0.1 그대로 — test_v01_golden)")
+	# 학습 끈 세계: 학습 배열·계통 학습 열은 빈 배열("")
+	var off = JSON.parse_string(SimSnapshot.to_text(world({}, 3)))
+	var empty_keys := true
+	for k in ["w2", "rbar", "dw_juv", "ring_a", "ring_pos", "ring_e", "ring_h"]:
+		empty_keys = empty_keys and str(off.slimes.get(k, "?")) == ""
+	for k in ["eta", "dw", "dw_juv", "assim"]:
+		empty_keys = empty_keys and str(off.lineage.get(k, "?")) == ""
+	check(empty_keys and str(off.stats.get("led_learn", "")) == SimSnapshot.f64_hex(0.0), "학습 끈 세계의 학습 배열은 길이 0(\"\"), 학습 장부 0")
+	# 거부(구조가 틀린 학습 스냅숏)
+	var text := SimSnapshot.to_text(wd)
+	var n := wd.population()
+	var ring := wd._ring
+	var dead_id := -1
+	for id in wd.lin_death.size():
+		if wd.lin_death[id] >= 0:
+			dead_id = id
+			break
+	var cases := {
+		"slimes.w2 짧음": func(d): d.slimes.w2 = SimSnapshot.b64(wd.s_w2.slice(0, wd._w2n)),
+		"slimes.ring_a 행동 8": func(d): d.slimes.ring_a = SimSnapshot.b64(_i32_set(wd.s_ring_a, 0, SimBrain.BASE_OUTPUTS)),
+		"slimes.ring_a 행동 -2": func(d): d.slimes.ring_a = SimSnapshot.b64(_i32_set(wd.s_ring_a, 0, -2)),
+		"slimes.ring_pos = H": func(d): d.slimes.ring_pos = SimSnapshot.b64(_i32_set(wd.s_ring_pos, n - 1, ring)),
+		"slimes.ring_h 없음": func(d): d.slimes.ring_h = "",
+		"slimes.rbar NaN": func(d): d.slimes.rbar = SimSnapshot.b64(_nan_tail(n)),
+		"slimes.dw_juv 음수": func(d): d.slimes.dw_juv = _f64_set(wd.s_dw_juv, 0, -1.0),
+		"lineage.assim 1.5": func(d): d.lineage.assim = SimSnapshot.b64(_f32_set(wd.lin_assim, dead_id, 1.5)),
+		"lineage.dw 살아 있는 개체 ≠ 0": func(d): d.lineage.dw = SimSnapshot.b64(_f32_set(wd.lin_dw, wd.s_id[0], 0.5)),
+		"lineage.eta 짧음": func(d): d.lineage.eta = SimSnapshot.b64(wd.lin_eta.slice(0, 3)),
+		"stats.led_learn > led_spent": func(d): d.stats.led_learn = SimSnapshot.f64_hex(wd.led_spent + 1.0),
+		"stats.period_pmax > period_think": func(d): d.stats.period_pmax = SimSnapshot.f64_hex(float(wd.period_think) + 1.0),
+		"stats.period_learn 글자": func(d): d.stats.period_learn = "1",
+		"learn.enabled 끔(배열 길이가 설정과 다름)": func(d): d.config.learn.enabled = false,
+		"learn.ring_len 4(고리 길이가 설정과 다름)": func(d): d.config.learn.ring_len = 4.0,
+	}
+	var reason := {"slimes.ring_a 행동 8": "행동 번호", "slimes.ring_a 행동 -2": "행동 번호", "slimes.ring_pos = H": "다음 자리",
+		"lineage.assim 1.5": "동화", "lineage.dw 살아 있는 개체 ≠ 0": "살아 있는", "stats.led_learn > led_spent": "학습 비용",
+		"stats.period_pmax > period_think": "학습 셈", "slimes.dw_juv 음수": "음수"}
+	var leaked: Array[String] = []
+	for name: String in cases:
+		var d = JSON.parse_string(text)
+		cases[name].call(d)
+		var r = SimSnapshot.from_dict(d)
+		if r.get("world") != null or str(r.get("error", "")) == "":
+			leaked.append(name)
+		elif reason.has(name) and not str(r.error).contains(reason[name]):
+			leaked.append("%s(이유 '%s')" % [name, str(r.error)])
+	check(dead_id >= 0 and leaked.is_empty(), "구조가 틀린 학습 스냅숏 %d종을 오류 문장으로 거부(샌 것: %s)" % [cases.size(), ", ".join(leaked)])
+	done()
+
+
+static func _i32_set(arr: PackedInt32Array, i: int, v: int) -> PackedInt32Array:
+	var a := arr.duplicate()
+	a[i] = v
+	return a
+
+
+static func _f32_set(arr: PackedFloat32Array, i: int, v: float) -> PackedFloat32Array:
+	var a := arr.duplicate()
+	a[i] = v
+	return a
+
+
+## 라마르크 비교(14.2 범위 6·검사 기준 11, DESIGN-v0.2 3.7): 부모 둘의 유전체를 같게(교차가 바꾸지 않게)·돌연변이율 0 으로 두고 배운
+## 두뇌만 다르게 손으로 정함. lamarck_frac 0 → 자식 유전체 = 부모 유전체 그대로, 1 → 자식 W2 행동 행 = float32(자름(타고난 + (ΔW_a + ΔW_b) ÷ 2)),
+## 혼자 분열이면 b = a(ΔW_a 그대로). 자식의 배운 두뇌 = 자식 유전체 W2. 우연 기준(random)에서는 쓰지 않음.
+func test_lamarck() -> void:
+	for frac: float in [0.0, 1.0]:
+		for asexual: bool in [false, true]:
+			var wd := empty_world({"learn.enabled": true, "mutation.rate": 0.0, "learn.lamarck_frac": frac, "repro.asexual_when_alone": asexual})
+			var p := grass_spot(wd)
+			add_slime(wd, p, 0.9, 100)
+			if not asexual:
+				add_slime(wd, p + Vector2i(1, 0), 0.9, 100)
+			var G := wd._G
+			var g0 := wd.s_genome.slice(0, G)
+			g0[wd._w2o + 1] = 3.9375
+			var n0 := wd.population()
+			for i in n0:
+				for k in G:
+					wd.s_genome[i * G + k] = g0[k]
+				for k in wd._w2n:
+					# 부모 a 의 배운 − 타고난 = 0.5, 부모 b = −0.25(첫 칸은 둘 다 + 0.5 — 3.9375 + 0.5 → 자름)
+					var dv := 0.5 if i == 0 or k == 1 else -0.25
+					wd.s_w2[i * wd._w2n + k] = float(g0[wd._w2o + k]) + dv
+			wd.s_dead.fill(0)
+			wd._reproduce()
+			var c := wd.index_of_id(n0)
+			var gc := wd.s_genome.slice(c * G, (c + 1) * G) if c != -1 else PackedFloat32Array()
+			var want := g0.duplicate()
+			if frac > 0.0:
+				for k in wd._w2n:
+					var da := wd.s_w2[k] - float(g0[wd._w2o + k])
+					var db := wd.s_w2[(n0 - 1) * wd._w2n + k] - float(g0[wd._w2o + k])
+					want[wd._w2o + k] = clampf(float(g0[wd._w2o + k]) + frac * ((da + db) * 0.5), -4.0, 4.0)
+			var w2_ok := c != -1
+			for k in wd._w2n:
+				w2_ok = w2_ok and wd.s_w2[c * wd._w2n + k] == float(gc[wd._w2o + k])
+			var label := "%s·lamarck %.0f" % ["혼자 분열" if asexual else "짝", frac]
+			check(c != -1 and gc == want and w2_ok and (frac == 0.0 or gc[wd._w2o + 1] == 4.0),
+					"%s: 자식 유전체 = %s, 자식의 배운 두뇌 = 자식 유전체 W2" % [label, "부모 유전체 그대로" if frac == 0.0 else
+					"타고난 + (ΔW_a + ΔW_b) ÷ 2(float32·자름 — 혼자 분열이면 ΔW_a)"])
+	# 우연 기준: 부모와 상관없는 새 유전체(라마르크 몫을 더하지 않음)
+	var wr := empty_world({"learn.enabled": true, "mutation.rate": 0.0, "learn.lamarck_frac": 1.0, "repro.inherit": "random"})
+	var pr := grass_spot(wr)
+	add_slime(wr, pr, 0.9, 100)
+	add_slime(wr, pr + Vector2i(1, 0), 0.9, 100)
+	for k in wr.s_w2.size():
+		wr.s_w2[k] += 0.5
+	var probe := SimRng.new()
+	probe.set_state_string(wr.rng_life.get_state_string())
+	var gr := SimBrain.random_genome(wr.cfg, wr.L, probe)
+	wr.s_dead.fill(0)
+	wr._reproduce()
+	var kr := wr.index_of_id(2)
+	check(kr != -1 and wr.s_genome.slice(kr * wr._G, (kr + 1) * wr._G) == gr, "우연 기준(random)은 라마르크 몫을 더하지 않음(자식 = random_genome)")
+	done()
+
+
+## learn.freeze(14.2 검사 기준 12): 500틱 동안 배운 두뇌 = 유전체 W2 행동 행 그대로(모든 개체), 고리는 채워짐, 갱신 0, 학습 비용·기준선은
+## 그대로 셈. 같은 씨앗의 학습 켬 세계는 배운 두뇌가 바뀜(대조).
+func test_learn_freeze() -> void:
+	var wd := world({"learn.enabled": true, "learn.freeze": true}, 6)
+	var learn_events := 0
+	for t in 500:
+		wd.step()
+		learn_events += wd.period_learn
+		wd.period_learn = 0
+	var changed := 0
+	var unfilled := 0
+	var rbar_nz := 0
+	for i in wd.population():
+		if wd.learned_amount_of(i) != 0.0:
+			changed += 1
+		if wd.s_age[i] >= wd._ring:
+			for s in wd._ring:
+				if wd.s_ring_a[i * wd._ring + s] == SimWorld.RING_EMPTY:
+					unfilled += 1
+		if wd.s_rbar[i] != 0.0:
+			rbar_nz += 1
+	var row := wd.sample()
+	check(float(row.dw_mean) == 0.0 and int(row.learn_events) == 0 and float(row.eta_mean) > 0.0, "freeze: 시계열 dw_mean 0·learn_events 0·eta_mean %.4f" % float(row.eta_mean))
+	check(wd.population() > 0 and changed == 0 and unfilled == 0 and learn_events == 0 and wd.led_learn > 0.0 and rbar_nz > 0,
+			"freeze·씨앗 6·500틱: 배운 두뇌 = 유전체(바뀐 개체 %d/%d), 고리가 채워짐(빈칸 %d), 갱신 %d번, 학습 비용 %.2f·기준선은 셈" % [changed,
+			wd.population(), unfilled, learn_events, wd.led_learn])
+	var wl := world({"learn.enabled": true}, 6)
+	wl.step_n(100)
+	var moved := 0
+	for i in wl.population():
+		if wl.learned_amount_of(i) > 0.0:
+			moved += 1
+	var rl := wl.sample()
+	check(moved > 0 and float(rl.dw_mean) > 0.0, "대조: 같은 씨앗의 학습 켬 세계는 100틱에 배운 두뇌가 바뀐 개체 %d마리(dw_mean %.4f)" % [moved, float(rl.dw_mean)])
+	done()
+
+
+## 관계 검사(14.2 범위 5·검사 기준 13, DESIGN-v0.2 3.5·8): learn.enabled 와 argmax·think_every 2·sharpness 0 을 각각 거부(학습 끔이면 받음),
+## eta_init ≤ eta_max, 고를 값·배열 규칙, 옛 설정용 SECTIONS_ADDED·CONFIG_KEYS_ADDED, 예설정 learn_basic.
+func test_learn_config() -> void:
+	for kv in [["brain.policy", "argmax"], ["brain.think_every", 2], ["brain.sharpness", 0]]:
+		var e := str(SimConfig.build("default", {"learn.enabled": true, kv[0]: kv[1]}).error)
+		check(e.contains("learn.enabled") and e.contains(kv[0]), "learn.enabled 와 %s = %s 거부: %s" % [kv[0], str(kv[1]), e])
+		check(SimConfig.build("default", {kv[0]: kv[1]}).error == "", "학습 끔이면 %s = %s 는 받음(v0.1 실험 그대로)" % [kv[0], str(kv[1])])
+	check(SimConfig.build("default", {"learn.enabled": true, "brain.sharpness": 1}).error == "", "learn.enabled 와 sharpness 1 은 받음")
+	var e2 := str(SimConfig.build("default", {"learn.eta_init": 0.6}).error)
+	check(e2.contains("learn.eta_init") and e2.contains("learn.eta_max"), "eta_init 0.6 > eta_max 0.5 거부: " + e2)
+	check(SimConfig.build("default", {"learn.eta_init": 0.5}).error == "", "eta_init = eta_max 는 받음")
+	check(SimConfig.CHOICES["learn.diag_factor"] == [SimBrain.DIAG_EXACT, SimBrain.DIAG_NONE] and str(cfg_with().learn.diag_factor) == SimBrain.DIAG_EXACT,
+			"learn.diag_factor 고를 값 = SimBrain.DIAG_*, 기본 exact")
+	for bad in [["learn.diag_factor", "Exact"], ["learn.stage_mult", [1.0, 0.5, 0.2]], ["learn.stage_mult", [1.0, 0.5, 0.2, 1.5]],
+			["learn.ring_len", 0], ["learn.ring_len", 2.5], ["learn.baseline_rate", 0.0], ["body.birth_size_frac", 0.0]]:
+		check(str(SimConfig.build("default", {bad[0]: bad[1]}).error).contains(bad[0]), "%s = %s 거부" % [bad[0], str(bad[1])])
+	check(SimSnapshot.SECTIONS_ADDED.has("learn") and SimSnapshot.CONFIG_KEYS_ADDED.has("life.adult_frac") and SimSnapshot.CONFIG_KEYS_ADDED.has("life.old_frac")
+			and SimSnapshot.CONFIG_KEYS_ADDED.has("body.grow_enabled") and SimSnapshot.CONFIG_KEYS_ADDED.has("body.birth_size_frac"),
+			"옛 설정 채우기: SECTIONS_ADDED 에 learn, CONFIG_KEYS_ADDED 에 life.adult_frac·old_frac·body.grow_enabled·birth_size_frac")
+	var lb := SimConfig.build("learn_basic", {})
+	check(lb.error == "" and bool(lb.config.learn.enabled) and bool(lb.config.body.grow_enabled) and not bool(cfg_with().learn.enabled)
+			and not bool(cfg_with().body.grow_enabled), "예설정 learn_basic = 학습·몸 자람 켬, 기본은 둘 다 끔")
+	done()
+
+
+## --fork-reset-learned(14.2 검사 기준 14, DESIGN-v0.2 11.2): 되돌린 뒤 모든 개체의 배운 두뇌 = 유전체 W2 행동 행, 기준선 0, 고리가 빔
+## (어린 동안 배운 양은 그대로). 학습 끈 세계는 거부(아무것도 안 바뀜). 실행기: --resume 없이 주면 인자 오류, 학습 끈 스냅숏은 종료
+## 코드 2, 학습 스냅숏은 되돌린 세계로 이어 돌림(summary.json 의 reset_learned).
+func test_reset_learned() -> void:
+	var wd := world({"learn.enabled": true}, 7)
+	wd.step_n(150)
+	var learned := 0
+	for i in wd.population():
+		if wd.learned_amount_of(i) > 0.0:
+			learned += 1
+	var juv := wd.s_dw_juv.duplicate()
+	check(learned > 0 and wd.reset_learned(), "150틱 학습 세계(배운 개체 %d)에서 reset_learned" % learned)
+	var bad := 0
+	for i in wd.population():
+		for k in wd._w2n:
+			if wd.s_w2[i * wd._w2n + k] != float(wd.s_genome[i * wd._G + wd._w2o + k]):
+				bad += 1
+	var ring_empty := true
+	for v in wd.s_ring_a:
+		ring_empty = ring_empty and v == SimWorld.RING_EMPTY
+	for v in wd.s_ring_pos:
+		ring_empty = ring_empty and v == 0
+	for v in wd.s_ring_e:
+		ring_empty = ring_empty and v == 0.0
+	for v in wd.s_ring_h:
+		ring_empty = ring_empty and v == 0.0
+	var rbar_zero := true
+	for v in wd.s_rbar:
+		rbar_zero = rbar_zero and v == 0.0
+	check(bad == 0 and ring_empty and rbar_zero and wd.s_dw_juv == juv, "되돌린 뒤 배운 두뇌 = 유전체 W2 행동 행(다른 칸 %d), 기준선 0, 고리 빔, 어린 동안 배운 양 그대로" % bad)
+	var off := world({}, 7)
+	off.step_n(20)
+	var t0 := SimSnapshot.to_text(off)
+	check(not off.reset_learned() and SimSnapshot.to_text(off) == t0, "학습 끈 세계: reset_learned 거부(false), 바뀐 것 없음")
+	var runner = load("res://tests/run_experiment.gd")
+	check(str(runner.parse_args(PackedStringArray(["--out=x", "--fork-reset-learned"])).get("error", "")).contains("--resume"),
+			"--fork-reset-learned 는 --resume 없이 주면 인자 오류")
+	var pa: Dictionary = runner.parse_args(PackedStringArray(["--out=x", "--resume=s.json", "--fork-reset-learned", "--fork-set=learn.freeze=true"]))
+	check(not pa.has("error") and pa.fork_reset and pa.fork_sets == {"learn.freeze": true}, "--fork-reset-learned·--fork-set 해석")
+	var dir := tmp_dir("test_reset_learned")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var snap := dir.path_join("learn.json")
+	var ws := world({"learn.enabled": true}, 7)
+	ws.step_n(150)
+	SimSnapshot.save_file(ws, snap)
+	var out := dir.path_join("out")
+	var a: Dictionary = runner.parse_args(PackedStringArray(["--out=" + out, "--resume=" + snap, "--fork-reset-learned", "--fork-set=learn.freeze=true",
+			"--max-ticks=%d" % (ws.tick + 30), "--generations=1000000000", "--quiet"]))
+	a.silent = true
+	var code: int = runner.run(a)
+	var sm = JSON.parse_string(FileAccess.get_file_as_string(out.path_join("summary.json")))
+	var fin: SimWorld = SimSnapshot.load_file(out.path_join("final.snapshot.json")).world
+	var still := 0
+	if fin != null:
+		for i in fin.population():
+			if fin.learned_amount_of(i) != 0.0:
+				still += 1
+	check(code == 0 and typeof(sm) == TYPE_DICTIONARY and sm.get("reset_learned") == true and fin != null and fin.tick == ws.tick + 30 and still == 0,
+			"실행기 --resume --fork-reset-learned --fork-set=learn.freeze=true: 30틱 뒤에도 배운 두뇌 = 유전체(다른 개체 %d), summary.reset_learned = true" % still)
+	var snap_off := dir.path_join("off.json")
+	SimSnapshot.save_file(off, snap_off)
+	var b: Dictionary = runner.parse_args(PackedStringArray(["--out=" + dir.path_join("out2"), "--resume=" + snap_off, "--fork-reset-learned", "--quiet"]))
+	b.silent = true
+	check(runner.run(b) == 2 and not FileAccess.file_exists(dir.path_join("out2").path_join("summary.json")), "학습 끈 스냅숏에 --fork-reset-learned → 종료 코드 2")
+	remove_tree(dir)
 	done()
 
 

@@ -3,7 +3,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://tests/run_experiment.gd -- --seed=42 --generations=1000 --out=results/seed42
 ## Windows 는 콘솔에 RESULT 줄이 보이는 Godot_v4.4.1-stable_win64_console.exe 로 같은 인자(docs/ANALYSIS.md "Windows").
 ## 선택: --preset=이름  --set=키=값(여러 번)  --max-ticks=N  --no-lineage  --snapshot-every=N  --resume=스냅숏.json
-##       --fork-set=키=값(여러 번, --resume 과만)  --quiet
+##       --fork-set=키=값(여러 번, --resume 과만)  --fork-reset-learned(--resume 과만)  --quiet
 ## 인자 규칙(어기면 인자 오류): --seed 는 64비트 정수, --generations 는 0 보다 큰 유한한 수, --max-ticks 는 1~SimConfig.TICK_MAX(1e9),
 ## --snapshot-every 는 0(끔)~SimConfig.TICK_MAX 의 정수(1e5·10k 처럼 글자가 섞이면 거부). 상대 경로는 프로젝트 폴더(--path) 기준.
 ## --resume: 설정·씨앗은 스냅숏의 것을 쓴다 — --seed·--preset·--set 과 함께 주면 인자 오류. 이어 돌린 summary.json 은
@@ -15,6 +15,9 @@ extends SceneTree
 ## forked = {키: 값}(바꾸지 않았으면 {}). 세계를 만들 때만 읽는 키(population.initial 등)는 바꿔도 이어 돌린 역사에 닿지 않는다.
 ## 이어 돌릴 스냅숏이 --out 폴더 바로 안에 있으면 거부(그 폴더를 비우며 지우게 되므로). 경로 글자만이 아니라, 지울 파일 가운데
 ## 크기·내용이 그 스냅숏과 같은 것이 있어도 거부한다(링크·대소문자만 다른 경로로 같은 폴더를 가리킨 경우 — 검토 최종 확인).
+## --fork-reset-learned(이식 시험 — DESIGN-v0.2 11.2): --resume 과만. 스냅숏을 열고 --fork-set 을 바꾼 뒤, 살아 있는 개체마다 배운 두뇌 =
+## 유전체 W2 행동 행, 기준선 0, 판단 고리를 비운다(SimWorld.reset_learned). 학습을 켠 세계(learn.enabled)가 아니면 종료 코드 2.
+## summary.json 의 reset_learned = true(아니면 false).
 ## 결과 폴더(--out): 없거나 비었으면 그대로 쓴다. 실행기가 쓰는 파일(OUT_FILES·snapshot-<틱>.json, 그리고 그 .tmp·.bak·.broken)만
 ## 있으면 그것을 모두 지우고 새로 쓴다(앞 실행의 lineage.csv·snapshot-N.json·.bak 이 새 결과와 섞이지 않게). OUT_KEEP(.gdignore·
 ## analyze.py 의 run.log·OS 가 만드는 파일)은 그대로 둔다. 그 밖의 파일이나 하위 폴더가 하나라도 있으면 아무것도 지우지 않고 오류 2.
@@ -52,7 +55,7 @@ func _init() -> void:
 
 static func parse_args(args: PackedStringArray) -> Dictionary:
 	var a := {seed = 1, generations = 100.0, out = "", preset = "default", sets = {}, max_ticks = -1,
-		lineage = true, snapshot_every = 0, resume = "", quiet = false, fork_sets = {}}
+		lineage = true, snapshot_every = 0, resume = "", quiet = false, fork_sets = {}, fork_reset = false}
 	# 이어 돌리기와 함께 줄 수 없는 인자(설정·씨앗은 스냅숏의 것을 씀)
 	var cond: Array[String] = []
 	for s in args:
@@ -60,6 +63,8 @@ static func parse_args(args: PackedStringArray) -> Dictionary:
 			a.lineage = false
 		elif s == "--quiet":
 			a.quiet = true
+		elif s == "--fork-reset-learned":
+			a.fork_reset = true
 		elif s.begins_with("--seed="):
 			var r := int_arg("--seed", s.substr(7), -INT64_MAX - 1, INT64_MAX)
 			if r.has("error"):
@@ -109,6 +114,8 @@ static func parse_args(args: PackedStringArray) -> Dictionary:
 		return {error = "--resume 은 스냅숏의 설정·씨앗으로 이어 돌립니다 — %s 와 함께 줄 수 없습니다" % "·".join(cond)}
 	if a.resume == "" and not a.fork_sets.is_empty():
 		return {error = "--fork-set 은 --resume 과만 씁니다(스냅숏을 연 뒤 설정 키만 바꿔 이어 돌림 — 처음부터 돌릴 때는 --set)"}
+	if a.resume == "" and a.fork_reset:
+		return {error = "--fork-reset-learned 는 --resume 과만 씁니다(스냅숏을 연 세계의 배운 두뇌를 타고난 것으로 되돌림)"}
 	return a
 
 
@@ -158,6 +165,9 @@ static func run(a: Dictionary) -> int:
 				printerr(fk.error)
 				return 2
 			wd = fk.world
+		if a.get("fork_reset", false) and not wd.reset_learned():
+			printerr("--fork-reset-learned 는 학습을 켠 세계(learn.enabled = true)에서만 씁니다 — 이 스냅숏은 학습이 꺼져 있습니다")
+			return 2
 		var same := same_file_in(out_dir, resumed_from)
 		if same != "":
 			printerr("이어 돌릴 스냅숏이 결과 폴더 안에 있습니다(%s = 결과 폴더의 %s) — 결과 폴더를 비우며 지우게 되므로 다른 --out 을 주세요"
@@ -232,7 +242,7 @@ static func run(a: Dictionary) -> int:
 	var extra := {end_reason = reason, run_seconds = secs, generations_target = a.generations,
 		preset = "" if a.resume != "" else a.preset, overrides = {} if a.resume != "" else a.sets,
 		resumed_from = resumed_from, resume_status = resume_status, max_ticks = max_ticks, write_failed = Array(failed),
-		forked = a.get("fork_sets", {})}
+		forked = a.get("fork_sets", {}), reset_learned = a.get("fork_reset", false)}
 	failed.append_array(rec.write_all(out_dir, wd, extra, a.lineage))
 	if a.get("silent", false):
 		return 0 if failed.is_empty() else 3

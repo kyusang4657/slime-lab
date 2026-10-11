@@ -4,22 +4,31 @@ extends RefCounted
 ## CSV: BOM 붙은 UTF-8(한국어 Windows 엑셀이 두 번 클릭으로 열어도 한글이 깨지지 않게), 쉼표, 영문 snake_case 열 이름,
 ## 소수점 ".". BOM 은 파일에 쓸 때만 붙인다(timeseries_csv() 같은 글에는 없음 — Godot 의 파일 읽기는 BOM 을 건너뜀).
 
-## 시계열 열: v0.1 22열(순서·값·뜻 그대로) 뒤에 v0.2 열을 단계마다 끝에 붙인다(DESIGN-v0.2 9.3). 0단계 = ACT_COLUMNS·EFF_COLUMNS
-## (이 목록은 v0.1 22열 + ACT_COLUMNS + EFF_COLUMNS 를 그대로 이은 것 — 검사 test_act_counts).
+## 시계열 열: v0.1 22열(순서·값·뜻 그대로) 뒤에 v0.2 열을 단계마다 끝에 붙인다(DESIGN-v0.2 9.3). 0단계 = ACT_COLUMNS·EFF_COLUMNS,
+## 1단계 = STAGE1_COLUMNS(이 목록은 v0.1 22열 + ACT_COLUMNS + EFF_COLUMNS + STAGE1_COLUMNS 를 그대로 이은 것 — 검사 test_act_counts).
 const TIMESERIES_COLUMNS: Array[String] = [
 	"tick", "day", "season", "light", "population", "births", "deaths", "mean_gen", "mean_energy",
 	"mean_size", "mean_sense", "mean_age", "food_total", "dropped_total", "stored_total", "carry_total",
 	"civ_stage", "storehouses", "farms", "forage_attempts", "store_drops", "farm_sprouts",
 	"act_forward", "act_left", "act_right", "act_eat", "act_rest", "act_gather", "act_drop", "act_plant",
 	"eff_forward", "eff_left", "eff_right", "eff_eat", "eff_rest", "eff_gather", "eff_drop", "eff_plant",
+	"stage_juvenile", "stage_young", "stage_adult", "stage_old", "mean_size_eff",
+	"learn_events", "eta_mean", "dw_mean", "rbar_mean", "pmax_mean",
 ]
 ## 구간 행동별 고른 횟수·효과가 난 횟수 열(행동 번호 SimBrain.ACT_* 순서 — SimWorld.period_act·period_eff, DESIGN-v0.2 11.1).
 const ACT_COLUMNS: Array[String] = ["act_forward", "act_left", "act_right", "act_eat", "act_rest", "act_gather", "act_drop", "act_plant"]
 const EFF_COLUMNS: Array[String] = ["eff_forward", "eff_left", "eff_right", "eff_eat", "eff_rest", "eff_gather", "eff_drop", "eff_plant"]
+## 1단계 열(DESIGN-v0.2 9.3): 생애 단계별 개체 수(SimBrain.LIFE_* 순서 — LIFE_STAGE_COLUMNS)·유효 크기 평균(늘 계산), 구간 학습 갱신 수·
+## 평균 η·평균 배운 양·평균 기준선·구간 판단마다 가장 큰 행동 확률의 평균(학습을 켰을 때만 — 끄면 0).
+const STAGE1_COLUMNS: Array[String] = ["stage_juvenile", "stage_young", "stage_adult", "stage_old", "mean_size_eff",
+	"learn_events", "eta_mean", "dw_mean", "rbar_mean", "pmax_mean"]
+const LIFE_STAGE_COLUMNS: Array[String] = ["stage_juvenile", "stage_young", "stage_adult", "stage_old"]
 const CHRONICLE_COLUMNS: Array[String] = ["tick", "mean_gen", "kind", "actor_id", "text"]
 ## 계통 열: v0.1 11열 뒤에 v0.2 열(DESIGN-v0.2 9.4). eaten = 평생 먹은 에너지(죽은 개체는 죽을 때, 살아 있는 개체는 쓸 때의 값).
 ## 개체별 셈이 없던 옛 스냅숏에서 이어 돌린 세계는 그때까지 태어난 개체(id < SimWorld.eaten_from_id)의 eaten 을 비워 둔다(평생 값을 모름).
-const LINEAGE_COLUMNS: Array[String] = ["id", "parent_a", "parent_b", "gen", "birth_tick", "death_tick", "death_cause", "children", "size", "sense", "hue", "eaten"]
+## 1단계: eta(태어날 때 η 평균)·dw(배운 양)·dw_juv(어린 동안 배운 양)·assim(동화 지수 — 11.2). 학습을 끄면 0.
+const LINEAGE_COLUMNS: Array[String] = ["id", "parent_a", "parent_b", "gen", "birth_tick", "death_tick", "death_cause", "children", "size", "sense", "hue", "eaten",
+	"eta", "dw", "dw_juv", "assim"]
 ## CSV 실수 소수 자릿수
 const DECIMALS := 6
 ## UTF-8 BOM(EF BB BF).
@@ -68,11 +77,27 @@ static func lineage_csv(world: SimWorld) -> String:
 	var eaten := world.lin_eaten.duplicate()
 	for i in world.s_id.size():
 		eaten[world.s_id[i]] = world.s_eaten[i]
+	# 학습(1단계): 죽은 개체는 계통 값, 살아 있는 개체는 지금 값(배운 양·어린 동안 배운 양·동화 지수). 학습을 끄면 0
+	var on := world.lin_eta.size() == world.lin_pa.size() and world.lin_pa.size() > 0
+	var dw := PackedFloat64Array()
+	var dw_juv := PackedFloat64Array()
+	var assim := PackedFloat64Array()
+	if on:
+		for id in world.lin_pa.size():
+			dw.append(float(world.lin_dw[id]))
+			dw_juv.append(float(world.lin_dw_juv[id]))
+			assim.append(float(world.lin_assim[id]))
+		for i in world.s_id.size():
+			var lid := world.s_id[i]
+			dw[lid] = world.learned_amount_of(i)
+			dw_juv[lid] = world.s_dw_juv[i]
+			assim[lid] = world.assim_of(i)
 	for id in world.lin_pa.size():
+		var learn_cells: Array = [fmt(float(world.lin_eta[id])), fmt(dw[id]), fmt(dw_juv[id]), fmt(assim[id])] if on else [fmt(0.0), fmt(0.0), fmt(0.0), fmt(0.0)]
 		lines.append(",".join([str(id), str(world.lin_pa[id]), str(world.lin_pb[id]), str(world.lin_gen[id]),
 				str(world.lin_birth[id]), str(world.lin_death[id]), str(world.lin_cause[id]), str(world.lin_children[id]),
 				fmt(float(world.lin_size[id])), fmt(float(world.lin_sense[id])), fmt(float(world.lin_hue[id])),
-				fmt(eaten[id]) if id >= world.eaten_from_id else ""]))
+				fmt(eaten[id]) if id >= world.eaten_from_id else ""] + learn_cells))
 	return "\n".join(lines) + "\n"
 
 

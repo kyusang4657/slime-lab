@@ -8,6 +8,9 @@ extends RefCounted
 ## 저장고 짓기와 저장 발견은 ⑦ 이 아니라 ③ 의 내려놓기 순간(_drop → _check_store_region)에 일어난다 — 같은 틱 뒤 차례 개체는
 ## 그 저장고에 바로 넣고 저장고 입력(9·10)으로 본다(검사 test_store_built_in_act).
 ## 슬라임은 필드별 배열(SoA)이고 배열 순서 = id 오름차순이다(출생은 뒤에 붙이고, 사망은 순서를 지켜 뺀다).
+## v0.2 1단계(DESIGN-v0.2 2·3절 — 모두 스위치 뒤, 끄면 v0.1 과 같은 비트): 몸 자람(body.grow_enabled — ③ 의 나이 증가 뒤 크기 갱신),
+## 평생 학습(learn.enabled — ③ 의 판단 때 고리 쓰기, 대사에 학습 비용, 대사 뒤 보상·기준선·배운 두뇌 갱신, ④ 의 라마르크 비교,
+## ⑤ 의 계통 학습량, ⑧ 해시 꼬리).
 
 const STAGE_NONE := 0
 const STAGE_FORAGE := 1
@@ -32,6 +35,8 @@ const EVENT_GEN_STEP := 0.01
 ## DESIGN-v0.2 11.3).
 const INHERIT_GENOME := "genome"
 const INHERIT_RANDOM := "random"
+## 판단 고리의 빈칸(행동 번호 자리 — DESIGN-v0.2 3.4).
+const RING_EMPTY := -1
 
 var cfg: Dictionary = {}
 var L: Dictionary = {}
@@ -94,11 +99,22 @@ var s_genome := PackedFloat32Array()
 var s_last_eff := PackedByteArray()
 ## 태어난 뒤 먹은 에너지(장부 led_eaten 과 같은 값을 개체마다 — DESIGN-v0.2 12.2).
 var s_eaten := PackedFloat64Array()
+## 평생 학습(DESIGN-v0.2 3.1·3.3·3.4 — learn.enabled 일 때만 채움, 끄면 길이 0): 배운 두뇌(출력층 행동 행, 개체 × n_act × 은닉, float64),
+## 기준선, 어린 동안 배운 양, 판단 고리(개체 × H 칸: 행동(빈칸 RING_EMPTY)·보정 e·은닉 값 H × 은닉, 다음에 쓸 자리).
+var s_w2 := PackedFloat64Array()
+var s_rbar := PackedFloat64Array()
+var s_dw_juv := PackedFloat64Array()
+var s_ring_a := PackedInt32Array()
+var s_ring_e := PackedFloat32Array()
+var s_ring_h := PackedFloat32Array()
+var s_ring_pos := PackedInt32Array()
 # ── 슬라임(유전체에서 계산, 저장 안 함) ──
 var s_size := PackedFloat64Array()
 var s_sense := PackedInt32Array()
 var s_emax := PackedFloat64Array()
 var s_dead := PackedByteArray()
+## 틱마다의 학습 비용 = learn.cost_per_eta × (η 평균)(유전체에서 계산 — learn.enabled 일 때만, DESIGN-v0.2 3.6)
+var s_clearn := PackedFloat64Array()
 
 # ── 계통(id 로 바로 찾음, 태어난 모든 개체) ──
 var lin_pa := PackedInt32Array()
@@ -113,6 +129,12 @@ var lin_sense := PackedFloat32Array()
 var lin_hue := PackedFloat32Array()
 ## 평생 먹은 에너지(⑤ 에서 죽을 때 s_eaten 을 옮겨 씀 — 살아 있는 개체는 0, lineage.csv 의 eaten 은 s_eaten).
 var lin_eaten := PackedFloat64Array()
+## 학습(learn.enabled 일 때만 채움 — DESIGN-v0.2 9.4·11.2): 태어날 때 η 평균, 죽을 때의 배운 양·어린 동안 배운 양·동화 지수
+## (살아 있는 개체는 0 — lineage.csv 는 쓸 때의 값).
+var lin_eta := PackedFloat32Array()
+var lin_dw := PackedFloat32Array()
+var lin_dw_juv := PackedFloat32Array()
+var lin_assim := PackedFloat32Array()
 
 # ── 장부·통계 ──
 var led_initial := 0.0
@@ -134,6 +156,12 @@ var period_deaths := 0
 ## 64비트 정수: 한 구간의 개체·틱 합은 개체 상한 × record.every 까지 커질 수 있어 32비트로는 넘침(검사를 통과하는 설정에서도 — 9.1).
 var period_act := PackedInt64Array()
 var period_eff := PackedInt64Array()
+## 학습 비용의 누적(led_spent 의 일부 — 관찰용, DESIGN-v0.2 3.6). 구간 학습 갱신 수·판단 수·판단마다 가장 큰 행동 확률의 합
+## (학습을 켰을 때만 셈 — sample() 이 0 으로 되돌림, 9.3 의 learn_events·pmax_mean).
+var led_learn := 0.0
+var period_learn := 0
+var period_think := 0
+var period_pmax := 0.0
 var peak_population := 0
 var next_milestone := 0
 var extinct_tick := -1
@@ -153,6 +181,8 @@ var _out := PackedFloat64Array()
 var _bucket_head := PackedInt32Array()
 var _bucket_next := PackedInt32Array()
 var _mated := PackedByteArray()
+## 마지막 sample 정책 뽑기의 가중치 합(고른 행동의 확률 π = 가중치 ÷ 이 값 — 3.4)
+var _pick_total := 0.0
 
 # ── 자주 쓰는 설정 값(설정에서 한 번 읽음) ──
 var _G := 0
@@ -180,6 +210,26 @@ var _store_cap := 0.0
 var _sample_policy := true
 var _sharpness := 1
 var _inherit_random := false
+# v0.2 1단계(DESIGN-v0.2 2·3절)
+var _learn_on := false
+var _grow_on := false
+var _freeze := false
+var _ring := 0
+var _w2n := 0
+var _eta_o := 0
+var _beta := 0.0
+var _min_surprise := 0.0
+var _diag_exact := true
+var _clamp_w := 0.0
+var _maturity := 0
+var _adult_frac := 0.0
+var _old_frac := 0.0
+var _birth_frac := 0.0
+var _eps := 0.0
+var _lamarck := 0.0
+var _cost_eta := 0.0
+var _stage_mult := PackedFloat64Array()
+var _lam := PackedFloat64Array()
 
 
 # ════════════════════════════ 만들기 ════════════════════════════
@@ -215,6 +265,10 @@ func setup(config: Dictionary, seed_in: int) -> String:
 			var g := SimBrain.random_genome(cfg, L, rng_life)
 			var e0 := float(cfg.body.start_energy_frac) * float(cfg.body.energy_per_size) * float(g[_to + SimBrain.TRAIT_SIZE])
 			_spawn(c % w, c / w, rng_life.below(SimGrid.DIR_COUNT), g, e0, 0, NO_PARENT, NO_PARENT, rng_life.below(spread + 1))
+			# 몸 자람(DESIGN-v0.2 2.2): 처음 에너지 = 비율 × 그 나이의 최대 에너지(성숙 전이면 작은 몸 — 난수 뽑기는 그대로)
+			if _grow_on:
+				var last := s_energy.size() - 1
+				s_energy[last] = float(cfg.body.start_energy_frac) * s_emax[last]
 	led_initial = total_energy()
 	peak_population = s_id.size()
 	next_milestone = int(cfg.record.generation_milestone)
@@ -258,6 +312,26 @@ func _load_config(config: Dictionary) -> void:
 	_sample_policy = str(cfg.brain.policy) == SimBrain.POLICY_SAMPLE
 	_sharpness = int(cfg.brain.sharpness)
 	_inherit_random = str(cfg.repro.inherit) == INHERIT_RANDOM
+	var lc: Dictionary = cfg.learn
+	_learn_on = bool(lc.enabled)
+	_grow_on = bool(cfg.body.grow_enabled)
+	_freeze = bool(lc.freeze)
+	_ring = int(lc.ring_len) if _learn_on else 0
+	_w2n = SimBrain.BASE_OUTPUTS * _n_hid
+	_eta_o = L.eta_offset
+	_beta = float(lc.baseline_rate)
+	_min_surprise = float(lc.min_surprise)
+	_diag_exact = str(lc.diag_factor) == SimBrain.DIAG_EXACT
+	_clamp_w = float(cfg.brain.weight_clamp)
+	_maturity = int(cfg.repro.maturity)
+	_adult_frac = float(cfg.life.adult_frac)
+	_old_frac = float(cfg.life.old_frac)
+	_birth_frac = float(cfg.body.birth_size_frac)
+	_eps = float(cfg.body.energy_per_size)
+	_lamarck = float(lc.lamarck_frac)
+	_cost_eta = float(lc.cost_per_eta)
+	_stage_mult = PackedFloat64Array(lc.stage_mult)
+	_lam = SimBrain.decay_table(float(lc.decay), int(lc.ring_len))
 	_wts.resize(SimBrain.BASE_OUTPUTS)
 	period_act.resize(SimBrain.BASE_OUTPUTS)
 	period_act.fill(0)
@@ -339,7 +413,9 @@ func _spawn(x: int, y: int, head: int, g: PackedFloat32Array, energy: float, gen
 	s_genome.append_array(g)
 	s_last_eff.append(0)
 	s_eaten.append(0.0)
-	_append_derived(g)
+	_append_derived(g, age)
+	if _learn_on:
+		_append_learned(g)
 	s_dead.append(0)
 	count_grid[y * w + x] += 1
 	lin_pa.append(pa)
@@ -353,14 +429,51 @@ func _spawn(x: int, y: int, head: int, g: PackedFloat32Array, energy: float, gen
 	lin_sense.append(g[_to + SimBrain.TRAIT_SENSE])
 	lin_hue.append(g[_to + SimBrain.TRAIT_HUE])
 	lin_eaten.append(0.0)
+	if _learn_on:
+		lin_eta.append(eta_mean_of_genome(g, 0))
+		lin_dw.append(0.0)
+		lin_dw_juv.append(0.0)
+		lin_assim.append(0.0)
 	return id
 
 
-func _append_derived(g: PackedFloat32Array) -> void:
+## 유전체에서 계산하는 값(저장 안 함): 크기(몸 자람이면 유전자 크기 × g(나이) — DESIGN-v0.2 2.2)·감지 반경·최대 에너지,
+## 학습이면 틱마다의 학습 비용.
+func _append_derived(g: PackedFloat32Array, age: int) -> void:
 	var size := float(g[_to + SimBrain.TRAIT_SIZE])
+	if _grow_on:
+		size *= SimBrain.growth_factor(age, _maturity, _birth_frac)
 	s_size.append(size)
 	s_sense.append(int(floorf(float(g[_to + SimBrain.TRAIT_SENSE]) + 0.5)))
 	s_emax.append(float(cfg.body.energy_per_size) * size)
+	if _learn_on:
+		s_clearn.append(_cost_eta * eta_mean_of_genome(g, 0))
+
+
+## 갓 태어난 개체의 학습 상태(DESIGN-v0.2 3.1·3.4): 배운 두뇌 = 유전체 W2 행동 행(float32 → float64), 기준선·어린 동안 배운 양 0,
+## 고리는 빈칸.
+func _append_learned(g: PackedFloat32Array) -> void:
+	for k in _w2n:
+		s_w2.append(float(g[_w2o + k]))
+	s_rbar.append(0.0)
+	s_dw_juv.append(0.0)
+	for k in _ring:
+		s_ring_a.append(RING_EMPTY)
+		s_ring_e.append(0.0)
+	for k in _ring * _n_hid:
+		s_ring_h.append(0.0)
+	s_ring_pos.append(0)
+
+
+## 유전체(base 부터 한 개체)의 학습률 유전자 η 평균(학습 끔이면 0).
+func eta_mean_of_genome(g: PackedFloat32Array, base: int) -> float:
+	var n: int = L.eta_len
+	if n == 0:
+		return 0.0
+	var s := 0.0
+	for k in n:
+		s += float(g[base + _eta_o + k])
+	return s / float(n)
 
 
 # ════════════════════════════ 진행 ════════════════════════════
@@ -553,6 +666,7 @@ func _act(i: int) -> void:
 	var hd := s_head[i]
 	var size := s_size[i]
 	var emax := s_emax[i]
+	var e_before := s_energy[i]
 	var action := s_last_action[i]
 	if (tick + s_id[i]) % _think_every == 0:
 		action = _think(i, x, y, c, hd, emax)
@@ -597,6 +711,10 @@ func _act(i: int) -> void:
 		SimBrain.ACT_PLANT:
 			if stage >= STAGE_FARM:
 				eff = _plant(i, x, y, hd)
+	if _learn_on:
+		# 학습 비용(DESIGN-v0.2 3.6): 쉬기 배수 뒤에 더함 — 쉬어도 줄지 않음. 장부는 소비(led_spent), 그 몫을 led_learn 에 따로
+		cost += s_clearn[i]
+		led_learn += s_clearn[i]
 	period_act[action] += 1
 	if eff:
 		period_eff[action] += 1
@@ -605,7 +723,19 @@ func _act(i: int) -> void:
 		s_last_eff[i] = 0
 	s_energy[i] -= cost
 	led_spent += cost
+	if _learn_on and s_energy[i] > 0.0:
+		# 보상(3.2 — 한입 단위: ΔE ÷ (한입 × 효율 × 크기), 번식·가르침 비용은 들지 않음)·기준선(3.3): δ = r − b, b += β × δ.
+		# learn.freeze 여도 기준선은 고친다(정책에 닿지 않음). 놀람이 크면 배운 두뇌를 고침(3.5)
+		var delta := (s_energy[i] - e_before) / (_bite * _eff * size) - s_rbar[i]
+		s_rbar[i] += _beta * delta
+		if not _freeze and absf(delta) >= _min_surprise:
+			_learn(i, delta)
 	s_age[i] += 1
+	# 몸 자람(DESIGN-v0.2 2.2): 나이 증가 뒤, 성숙 나이까지만(그 뒤 크기 비율 1 — 몸은 줄지 않음)
+	if _grow_on and s_age[i] <= _maturity:
+		var sz := float(s_genome[i * _G + _to + SimBrain.TRAIT_SIZE]) * SimBrain.growth_factor(s_age[i], _maturity, _birth_frac)
+		s_size[i] = sz
+		s_emax[i] = _eps * sz
 	if s_energy[i] <= 0.0:
 		s_dead[i] = CAUSE_STARVED
 	elif s_age[i] >= s_max_age[i]:
@@ -667,13 +797,57 @@ func _think(i: int, x: int, y: int, c: int, hd: int, emax: float) -> int:
 			s += gnm[o + k] * inp[k]
 		hid[j] = s / (1.0 + absf(s))
 	var o2 := base + _w2o
-	for q in _n_out:
-		var s2 := 0.0
-		var oq := o2 + q * n_hid
-		for j in n_hid:
-			s2 += gnm[oq + j] * hid[j]
-		out[q] = s2
+	if _learn_on:
+		# 표현형 경로(DESIGN-v0.2 3.1): 행동 행은 배운 두뇌 s_w2, 기억 행은 유전체(SimBrain.forward_phen 과 같은 식 — 검사)
+		var sw := s_w2
+		var wb := i * _w2n
+		for q in SimBrain.BASE_OUTPUTS:
+			var s2 := 0.0
+			var oq := wb + q * n_hid
+			for j in n_hid:
+				s2 += sw[oq + j] * hid[j]
+			out[q] = s2
+		for q in range(SimBrain.BASE_OUTPUTS, _n_out):
+			var s3 := 0.0
+			var oq3 := o2 + q * n_hid
+			for j in n_hid:
+				s3 += gnm[oq3 + j] * hid[j]
+			out[q] = s3
+	else:
+		for q in _n_out:
+			var s2 := 0.0
+			var oq := o2 + q * n_hid
+			for j in n_hid:
+				s2 += gnm[oq + j] * hid[j]
+			out[q] = s2
 	var best := _pick_action()
+	if _learn_on:
+		# 판단 고리에 이번 판단(DESIGN-v0.2 3.4 — 행동을 고른 바로 뒤): 행동, 보정 e(3.5 — SimBrain.diag_e 와 같은 식), 은닉 값.
+		# float32 로 넣고 다시 읽어서만 씀(저장·복원이 비트 단위로 같게). 구간 셈: 판단 수와 가장 큰 행동 확률(9.3 pmax_mean)
+		var wts := _wts
+		var total := _pick_total
+		var pi_a := wts[best] / total if total > 0.0 else 1.0
+		var e := 1.0 - pi_a
+		if _diag_exact:
+			var ob := out[best]
+			var d := 1.0 / (1.0 + absf(ob)) if ob < 0.0 else 1.0 / ((1.0 + ob) * (1.0 + 2 * ob))
+			e = (1.0 - pi_a) * float(_sharpness) * d
+		var hn := _ring
+		var p := s_ring_pos[i]
+		var slot := i * hn + p
+		s_ring_a[slot] = best
+		s_ring_e[slot] = e
+		var rh := s_ring_h
+		var hb := slot * n_hid
+		for j in n_hid:
+			rh[hb + j] = hid[j]
+		s_ring_pos[i] = (p + 1) % hn
+		var top := 0.0
+		for q in SimBrain.BASE_OUTPUTS:
+			if wts[q] > top:
+				top = wts[q]
+		period_pmax += top / total if total > 0.0 else 1.0
+		period_think += 1
 	for k in _n_mem:
 		var m := _out[SimBrain.BASE_OUTPUTS + k]
 		s_mem[mb + k] = m / (1.0 + absf(m))
@@ -698,12 +872,66 @@ func _pick_action() -> int:
 			wq *= b
 		wts[q] = wq
 		total += wq
+	_pick_total = total
 	var r := rng_life.uniform() * total
 	for q in SimBrain.BASE_OUTPUTS:
 		r -= _wts[q]
 		if r < 0.0:
 			return q
 	return SimBrain.BASE_OUTPUTS - 1
+
+
+## 배운 두뇌 갱신 한 번(DESIGN-v0.2 3.5 — _act 가 놀람 abs(δ) ≥ learn.min_surprise 이고 freeze 가 아닐 때 부름): 고리의 m = 0(방금) … H − 1
+## 차례로 c = δ × stage_mult[단계] × η[a] × λᵐ × e, 행동 행 a 의 가중치 += c × 은닉, ±weight_clamp 로 자름(비교로). SimBrain.learn_update 와
+## 같은 식을 펼쳐 씀(검사로 비트 일치). 어린 단계면 실제로 바뀐 양을 s_dw_juv 에 더함.
+func _learn(i: int, delta: float) -> void:
+	period_learn += 1
+	var st := SimBrain.life_stage(s_age[i], s_max_age[i], _maturity, _adult_frac, _old_frac)
+	var dm := delta * _stage_mult[st]
+	var hn := _ring
+	var nh := _n_hid
+	var rb := i * hn
+	var pos := s_ring_pos[i]
+	var wb0 := i * _w2n
+	var eb := i * _G + _eta_o
+	var clamp_w := _clamp_w
+	var lam := _lam
+	var gnm := s_genome
+	var w2 := s_w2
+	var ra := s_ring_a
+	var re := s_ring_e
+	var rh := s_ring_h
+	# 바뀐 양은 어린 단계에서만 셈(그 밖에서는 쓰지 않으므로 고리를 따로 — 가중치마다 덧셈 셋을 아낌)
+	var juvenile := st == SimBrain.LIFE_JUVENILE
+	var moved := 0.0
+	for m in hn:
+		var s := (pos - 1 - m + hn) % hn
+		var a := ra[rb + s]
+		if a < 0:
+			continue
+		var c := dm * float(gnm[eb + a]) * lam[m] * float(re[rb + s])
+		var hb := (rb + s) * nh
+		var wb := wb0 + a * nh
+		if juvenile:
+			for j in nh:
+				var old := w2[wb + j]
+				var nw := old + c * float(rh[hb + j])
+				if nw > clamp_w:
+					nw = clamp_w
+				elif nw < -clamp_w:
+					nw = -clamp_w
+				moved += absf(nw - old)
+				w2[wb + j] = nw
+		else:
+			for j in nh:
+				var nw := w2[wb + j] + c * float(rh[hb + j])
+				if nw > clamp_w:
+					nw = clamp_w
+				elif nw < -clamp_w:
+					nw = -clamp_w
+				w2[wb + j] = nw
+	if juvenile:
+		s_dw_juv[i] += moved
 
 
 func _store_inputs(x: int, y: int, c: int, hd: int) -> void:
@@ -925,8 +1153,14 @@ func _reproduce() -> void:
 			var gb := s_genome.slice(b * _G, (b + 1) * _G)
 			g = SimBrain.crossover(L, ga, gb, rng_life)
 			SimBrain.mutate(cfg, L, g, rng_life)
-		# 자식 에너지는 자식의 최대 에너지까지(넘친 몫은 효율 손실과 함께 사라짐 — 장부 led_repro_loss)
-		var e_child := minf((ca + cb) * teff, float(cfg.body.energy_per_size) * float(g[_to + SimBrain.TRAIT_SIZE]))
+			if _learn_on and _lamarck > 0.0:
+				_lamarck_add(g, i, b)
+		# 자식 에너지는 자식의 최대 에너지까지(넘친 몫은 효율 손실과 함께 사라짐 — 장부 led_repro_loss). 몸 자람이면 태어날 때의
+		# 최대 에너지(작은 몸 — _append_derived 와 같은 식, DESIGN-v0.2 2.2)
+		var e_cap := float(cfg.body.energy_per_size) * float(g[_to + SimBrain.TRAIT_SIZE])
+		if _grow_on:
+			e_cap = float(cfg.body.energy_per_size) * (float(g[_to + SimBrain.TRAIT_SIZE]) * SimBrain.growth_factor(0, _maturity, _birth_frac))
+		var e_child := minf((ca + cb) * teff, e_cap)
 		led_repro_loss += (ca + cb) * (1.0 - teff) + ((ca + cb) * teff - e_child)
 		births.append({x = s_x[i], y = s_y[i], head = rng_life.below(SimGrid.DIR_COUNT), g = g, e = e_child,
 				gen = maxi(s_gen[i], s_gen[b]) + 1, pa = s_id[i], pb = s_id[b] if b != i else NO_PARENT})
@@ -937,6 +1171,21 @@ func _reproduce() -> void:
 		_spawn(bdata.x, bdata.y, bdata.head, bdata.g, bdata.e, bdata.gen, bdata.pa, bdata.pb, 0)
 	total_births += births.size()
 	period_births += births.size()
+
+
+## 라마르크 비교(DESIGN-v0.2 3.7, learn.lamarck_frac > 0 — 기본 0 이면 부르지 않음): 교차·돌연변이 뒤 자식 유전체 W2 행동 행에
+## frac × ((ΔW_a + ΔW_b) ÷ 2)를 더하고 ±weight_clamp 로 자른다(유전체에 넣으며 float32 로 반올림). ΔW = 부모의 배운 − 타고난,
+## 혼자 분열이면 b = a. 난수를 쓰지 않음. 우연 기준(repro.inherit = random)에서는 쓰지 않음(부모와 상관없는 두뇌).
+func _lamarck_add(g: PackedFloat32Array, ia: int, ib: int) -> void:
+	for k in _w2n:
+		var da := s_w2[ia * _w2n + k] - float(s_genome[ia * _G + _w2o + k])
+		var db := s_w2[ib * _w2n + k] - float(s_genome[ib * _G + _w2o + k])
+		var v := float(g[_w2o + k]) + _lamarck * ((da + db) * 0.5)
+		if v > _clamp_w:
+			v = _clamp_w
+		elif v < -_clamp_w:
+			v = -_clamp_w
+		g[_w2o + k] = v
 
 
 func _remove_dead() -> void:
@@ -951,15 +1200,30 @@ func _remove_dead() -> void:
 		return
 	# 유전체는 살아남은 개체의 덩어리만 이어 붙여 새로 만든다(원소 단위 이동보다 훨씬 빠름)
 	var genome := PackedFloat32Array()
+	var w2 := PackedFloat64Array()
+	var ring_a := PackedInt32Array()
+	var ring_e := PackedFloat32Array()
+	var ring_h := PackedFloat32Array()
+	var rh := _ring * _n_hid
 	for i in n:
 		if s_dead[i] == 0:
 			genome.append_array(s_genome.slice(i * _G, (i + 1) * _G))
+			if _learn_on:
+				w2.append_array(s_w2.slice(i * _w2n, (i + 1) * _w2n))
+				ring_a.append_array(s_ring_a.slice(i * _ring, (i + 1) * _ring))
+				ring_e.append_array(s_ring_e.slice(i * _ring, (i + 1) * _ring))
+				ring_h.append_array(s_ring_h.slice(i * rh, (i + 1) * rh))
 	for i in n:
 		if s_dead[i] != 0:
 			var id := s_id[i]
 			lin_death[id] = tick
 			lin_cause[id] = s_dead[i]
 			lin_eaten[id] = s_eaten[i]
+			# 학습: 죽을 때의 배운 양·어린 동안 배운 양·동화 지수(DESIGN-v0.2 11.2 — 덩어리 배열은 아직 옛 것이라 i 그대로 읽음)
+			if _learn_on:
+				lin_dw[id] = learned_amount_of(i)
+				lin_dw_juv[id] = s_dw_juv[i]
+				lin_assim[id] = assim_of(i)
 			var c := s_y[i] * w + s_x[i]
 			count_grid[c] -= 1
 			if s_carry[i] > 0.0:
@@ -986,6 +1250,11 @@ func _remove_dead() -> void:
 			s_last_eff[k] = s_last_eff[i]
 			s_eaten[k] = s_eaten[i]
 			s_dead[k] = 0
+			if _learn_on:
+				s_rbar[k] = s_rbar[i]
+				s_dw_juv[k] = s_dw_juv[i]
+				s_ring_pos[k] = s_ring_pos[i]
+				s_clearn[k] = s_clearn[i]
 			for m in _n_mem:
 				s_mem[k * _n_mem + m] = s_mem[i * _n_mem + m]
 		k += 1
@@ -1008,6 +1277,15 @@ func _remove_dead() -> void:
 	s_dead.resize(k)
 	s_mem.resize(k * _n_mem)
 	s_genome = genome
+	if _learn_on:
+		s_rbar.resize(k)
+		s_dw_juv.resize(k)
+		s_ring_pos.resize(k)
+		s_clearn.resize(k)
+		s_w2 = w2
+		s_ring_a = ring_a
+		s_ring_e = ring_e
+		s_ring_h = ring_h
 
 
 # ── 바닥 먹이 ──
@@ -1177,6 +1455,9 @@ func _hash_step() -> void:
 		foodsum += v
 	var line := "%s|%d|%d|%d|%d|%d|%s|%s|%s|%s" % [history_hash, tick, s_id.size(), idsum, psum, stage,
 			bits(total_energy()), bits(gsum), bits(foodsum), bits(store_drops_total)]
+	# 켠 기능의 꼬리(DESIGN-v0.2 7.2 — 끄면 줄이 v0.1 그대로): learn = Σ 배운 두뇌, Σ 기준선
+	if _learn_on:
+		line += "|%s|%s" % [bits(sum_of(s_w2)), bits(sum_of(s_rbar))]
 	history_hash = line.sha256_text()
 
 
@@ -1264,6 +1545,41 @@ func is_extinct() -> bool:
 	return s_id.is_empty()
 
 
+## i 번째 개체의 생애 단계 SimBrain.LIFE_*(DESIGN-v0.2 2.1 — 나이·자기 수명에서 계산).
+func life_stage_of(i: int) -> int:
+	return SimBrain.life_stage(s_age[i], s_max_age[i], _maturity, _adult_frac, _old_frac)
+
+
+## i 번째 개체의 배운 양 = 행동 가중치의 abs(배운 − 타고난) 평균(DESIGN-v0.2 11.2, 학습 끔이면 0).
+func learned_amount_of(i: int) -> float:
+	if not _learn_on:
+		return 0.0
+	return SimBrain.learned_amount(L, s_genome, i * _G, s_w2, i * _w2n)
+
+
+## i 번째 개체의 동화 지수(DESIGN-v0.2 11.2 — 자기 고리의 은닉 값마다 타고난·배운 W2 의 가장 큰 행동이 같은 몫, 학습 끔이면 0).
+func assim_of(i: int) -> float:
+	if not _learn_on:
+		return 0.0
+	return SimBrain.assimilation(L, s_genome, i * _G, s_w2, i * _w2n, s_ring_a, s_ring_h, i * _ring, _ring)
+
+
+## --fork-reset-learned(DESIGN-v0.2 11.2 이식 시험): 살아 있는 개체마다 배운 두뇌 = 유전체 W2 행동 행, 기준선 0, 고리를 비움
+## (행동 빈칸, 다음 자리 0, 보정·은닉 0). 어린 동안 배운 양(지난 기록)은 그대로. 학습을 켠 세계만 — 아니면 false(아무것도 안 바꿈).
+func reset_learned() -> bool:
+	if not _learn_on:
+		return false
+	for i in s_id.size():
+		for k in _w2n:
+			s_w2[i * _w2n + k] = float(s_genome[i * _G + _w2o + k])
+	s_rbar.fill(0.0)
+	s_ring_a.fill(RING_EMPTY)
+	s_ring_pos.fill(0)
+	s_ring_e.fill(0.0)
+	s_ring_h.fill(0.0)
+	return true
+
+
 func drain_events() -> Array:
 	var e := _pending_events
 	_pending_events = []
@@ -1278,10 +1594,13 @@ func slime_info(id: int) -> Dictionary:
 		id = id, parent_a = lin_pa[id], parent_b = lin_pb[id], gen = lin_gen[id], birth = lin_birth[id],
 		death = lin_death[id], cause = lin_cause[id], children = lin_children[id],
 		size = lin_size[id], sense = lin_sense[id], hue = lin_hue[id], alive = false,
+		eta = float(lin_eta[id]) if _learn_on else 0.0, eaten = lin_eaten[id],
 	}
 	var i := index_of_id(id)
 	if i != -1:
 		d.alive = true
+		d.life_stage = life_stage_of(i)
+		d.eaten = s_eaten[i]
 		d.x = s_x[i]
 		d.y = s_y[i]
 		d.heading = s_head[i]
@@ -1324,10 +1643,48 @@ func sample() -> Dictionary:
 	for a in SimBrain.BASE_OUTPUTS:
 		row[SimRecorder.ACT_COLUMNS[a]] = period_act[a]
 		row[SimRecorder.EFF_COLUMNS[a]] = period_eff[a]
+	# v0.2 1단계 열(9.3): 생애 단계별 개체 수·유효 크기 평균(늘 계산), 학습 셈(켰을 때만 — 끄면 0). 몸 자람을 켜면 mean_size 는
+	# v0.1 뜻(유전자 크기 평균) 그대로, 실제 크기 평균은 mean_size_eff(끄면 둘이 같음)
+	var n := s_id.size()
+	var counts := PackedInt32Array()
+	counts.resize(SimBrain.LIFE_STAGE_NAMES.size())
+	counts.fill(0)
+	for i in n:
+		counts[life_stage_of(i)] += 1
+	for st in counts.size():
+		row[SimRecorder.LIFE_STAGE_COLUMNS[st]] = counts[st]
+	row.mean_size_eff = mean_of(s_size)
+	if _grow_on:
+		row.mean_size = _mean_gene_size()
+	var eta_s := 0.0
+	var dw_s := 0.0
+	if _learn_on:
+		for i in n:
+			eta_s += eta_mean_of_genome(s_genome, i * _G)
+			dw_s += learned_amount_of(i)
+	row.learn_events = period_learn
+	row.eta_mean = eta_s / float(n) if n > 0 else 0.0
+	row.dw_mean = dw_s / float(n) if n > 0 else 0.0
+	row.rbar_mean = mean_of(s_rbar)
+	row.pmax_mean = period_pmax / float(period_think) if period_think > 0 else 0.0
 	period_births = 0
 	period_deaths = 0
 	period_act.fill(0)
 	period_eff.fill(0)
+	period_learn = 0
+	period_think = 0
+	period_pmax = 0.0
 	return row
+
+
+## 살아 있는 개체의 유전자 크기 평균(몸 자람을 켰을 때의 mean_size — v0.1 뜻).
+func _mean_gene_size() -> float:
+	var n := s_id.size()
+	if n == 0:
+		return 0.0
+	var s := 0.0
+	for i in n:
+		s += float(s_genome[i * _G + _to + SimBrain.TRAIT_SIZE])
+	return s / float(n)
 
 

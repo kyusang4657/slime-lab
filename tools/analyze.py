@@ -44,20 +44,23 @@ import pandas as pd
 RUNNER_SCRIPT = "res://tests/run_experiment.gd"
 ## 손 사본: 아래 목록은 시뮬레이션 상수를 옮겨 적은 것이라 tools/test_analyze.py TestHandCopies 가 원본과 견준다(단계마다 열이
 ## 늘면 함께 고침). 결과를 읽을 때 열 목록은 실행마다 summary.json 의 timeseries_columns·lineage_columns 를 먼저 쓴다(run_columns).
-## scripts/sim/sim_recorder.gd 의 TIMESERIES_COLUMNS 와 같은 순서(v0.1 22열 + v0.2 0단계 행동 셈 16열 — DESIGN-v0.2 9.3)
+## scripts/sim/sim_recorder.gd 의 TIMESERIES_COLUMNS 와 같은 순서(v0.1 22열 + v0.2 0단계 행동 셈 16열 + 1단계 생애·학습 10열 —
+## DESIGN-v0.2 9.3)
 TIMESERIES_COLUMNS = [
     "tick", "day", "season", "light", "population", "births", "deaths", "mean_gen", "mean_energy",
     "mean_size", "mean_sense", "mean_age", "food_total", "dropped_total", "stored_total", "carry_total",
     "civ_stage", "storehouses", "farms", "forage_attempts", "store_drops", "farm_sprouts",
     "act_forward", "act_left", "act_right", "act_eat", "act_rest", "act_gather", "act_drop", "act_plant",
     "eff_forward", "eff_left", "eff_right", "eff_eat", "eff_rest", "eff_gather", "eff_drop", "eff_plant",
+    "stage_juvenile", "stage_young", "stage_adult", "stage_old", "mean_size_eff",
+    "learn_events", "eta_mean", "dw_mean", "rbar_mean", "pmax_mean",
 ]
 ## sim_recorder.gd 의 ACT_COLUMNS·EFF_COLUMNS(구간 행동별 고른 횟수·효과가 난 횟수, 행동 번호 SimBrain.ACT_* 순서)
 ACT_COLUMNS = ["act_forward", "act_left", "act_right", "act_eat", "act_rest", "act_gather", "act_drop", "act_plant"]
 EFF_COLUMNS = ["eff_forward", "eff_left", "eff_right", "eff_eat", "eff_rest", "eff_gather", "eff_drop", "eff_plant"]
-## sim_recorder.gd 의 LINEAGE_COLUMNS(v0.1 11열 + eaten — DESIGN-v0.2 9.4)
+## sim_recorder.gd 의 LINEAGE_COLUMNS(v0.1 11열 + eaten + 1단계 eta·dw·dw_juv·assim — DESIGN-v0.2 9.4)
 LINEAGE_COLUMNS = ["id", "parent_a", "parent_b", "gen", "birth_tick", "death_tick", "death_cause", "children", "size",
-                   "sense", "hue", "eaten"]
+                   "sense", "hue", "eaten", "eta", "dw", "dw_juv", "assim"]
 ## scripts/sim/sim_recorder.gd 의 CHRONICLE_COLUMNS
 CHRONICLE_COLUMNS = ["tick", "mean_gen", "kind", "actor_id", "text"]
 ## SimWorld.STAGE_NAMES (0 없음 1 채집 2 저장 3 농사)

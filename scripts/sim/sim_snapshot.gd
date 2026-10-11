@@ -58,18 +58,23 @@ static func to_dict(wd: SimWorld) -> Dictionary:
 			age = b64(wd.s_age), gen = b64(wd.s_gen), max_age = b64(wd.s_max_age), last_repro = b64(wd.s_last_repro),
 			last_action = b64(wd.s_last_action), energy = b64(wd.s_energy), carry = b64(wd.s_carry),
 			mem = b64(wd.s_mem), genome = b64(wd.s_genome), last_eff = b64(wd.s_last_eff), eaten = b64(wd.s_eaten),
+			w2 = b64(wd.s_w2), rbar = b64(wd.s_rbar), dw_juv = b64(wd.s_dw_juv), ring_a = b64(wd.s_ring_a),
+			ring_pos = b64(wd.s_ring_pos), ring_e = b64(wd.s_ring_e), ring_h = b64(wd.s_ring_h),
 		},
 		lineage = {
 			count = wd.lin_pa.size(), pa = b64(wd.lin_pa), pb = b64(wd.lin_pb), gen = b64(wd.lin_gen),
 			birth = b64(wd.lin_birth), death = b64(wd.lin_death), cause = b64(wd.lin_cause),
 			children = b64(wd.lin_children), size = b64(wd.lin_size), sense = b64(wd.lin_sense), hue = b64(wd.lin_hue),
-			eaten = b64(wd.lin_eaten),
+			eaten = b64(wd.lin_eaten), eta = b64(wd.lin_eta), dw = b64(wd.lin_dw), dw_juv = b64(wd.lin_dw_juv),
+			assim = b64(wd.lin_assim),
 		},
 		stats = {
 			led_initial = f64_hex(wd.led_initial), led_eaten = f64_hex(wd.led_eaten), led_spent = f64_hex(wd.led_spent),
 			led_repro_loss = f64_hex(wd.led_repro_loss), led_died = f64_hex(wd.led_died),
 			led_eaten_open = f64_hex(wd.led_eaten_open), eaten_from_id = wd.eaten_from_id,
 			period_act = b64(wd.period_act), period_eff = b64(wd.period_eff),
+			led_learn = f64_hex(wd.led_learn), period_pmax = f64_hex(wd.period_pmax), period_learn = wd.period_learn,
+			period_think = wd.period_think,
 			total_births = wd.total_births, total_deaths = wd.total_deaths, period_births = wd.period_births,
 			period_deaths = wd.period_deaths, peak_population = wd.peak_population, next_milestone = wd.next_milestone,
 			extinct_tick = wd.extinct_tick,
@@ -148,6 +153,14 @@ static func from_dict(d: Variant) -> Dictionary:
 	else:
 		wd.s_eaten.resize(n0)
 		wd.s_eaten.fill(0.0)
+	# 1단계 학습 상태(옛 파일에 없으면 빈 배열 — 옛 파일은 학습 끔. 길이는 validate_world 가 설정과 견줌)
+	wd.s_w2 = _bytes(s, "w2").to_float64_array()
+	wd.s_rbar = _bytes(s, "rbar").to_float64_array()
+	wd.s_dw_juv = _bytes(s, "dw_juv").to_float64_array()
+	wd.s_ring_a = _bytes(s, "ring_a").to_int32_array()
+	wd.s_ring_pos = _bytes(s, "ring_pos").to_int32_array()
+	wd.s_ring_e = _bytes(s, "ring_e").to_float32_array()
+	wd.s_ring_h = _bytes(s, "ring_h").to_float32_array()
 	var ln: Dictionary = d.lineage
 	wd.lin_pa = _bytes(ln, "pa").to_int32_array()
 	wd.lin_pb = _bytes(ln, "pb").to_int32_array()
@@ -164,6 +177,10 @@ static func from_dict(d: Variant) -> Dictionary:
 	else:
 		wd.lin_eaten.resize(wd.lin_pa.size())
 		wd.lin_eaten.fill(0.0)
+	wd.lin_eta = _bytes(ln, "eta").to_float32_array()
+	wd.lin_dw = _bytes(ln, "dw").to_float32_array()
+	wd.lin_dw_juv = _bytes(ln, "dw_juv").to_float32_array()
+	wd.lin_assim = _bytes(ln, "assim").to_float32_array()
 	var st: Dictionary = d.stats
 	wd.led_initial = hex_f64(st.led_initial)
 	wd.led_eaten = hex_f64(st.led_eaten)
@@ -177,6 +194,10 @@ static func from_dict(d: Variant) -> Dictionary:
 		wd.period_act = _bytes(st, "period_act").to_int64_array()
 	if st.has("period_eff"):
 		wd.period_eff = _bytes(st, "period_eff").to_int64_array()
+	wd.led_learn = hex_f64(st.led_learn) if st.has("led_learn") else 0.0
+	wd.period_pmax = hex_f64(st.period_pmax) if st.has("period_pmax") else 0.0
+	wd.period_learn = int(st.get("period_learn", 0))
+	wd.period_think = int(st.get("period_think", 0))
 	wd.total_births = int(st.total_births)
 	wd.total_deaths = int(st.total_deaths)
 	wd.period_births = int(st.period_births)
@@ -204,7 +225,7 @@ static func from_dict(d: Variant) -> Dictionary:
 	# 유전체에서 계산하는 값과 칸별 개체 수는 저장하지 않고 다시 만든다(검증 뒤에)
 	var n := wd.s_id.size()
 	for i in n:
-		wd._append_derived(wd.s_genome.slice(i * wd._G, (i + 1) * wd._G))
+		wd._append_derived(wd.s_genome.slice(i * wd._G, (i + 1) * wd._G), wd.s_age[i])
 		wd.s_dead.append(0)
 		wd.count_grid[wd.s_y[i] * wd.w + wd.s_x[i]] += 1
 	wd._compute_time()
@@ -245,12 +266,13 @@ const STATS_HEX: Array[String] = ["led_initial", "led_eaten", "led_spent", "led_
 const STATS_INT: Array[String] = ["total_births", "total_deaths", "period_births", "period_deaths", "peak_population", "next_milestone", "extinct_tick"]
 ## v0.2 에서 더한 키(DESIGN-v0.2 9.1). 있으면 꼴·길이·범위를 검사하고, 옛 스냅숏에 없으면 9.1 표의 '옛 파일에 없으면' 값으로 채운다:
 ## slimes.last_eff·eaten = 0, lineage.eaten = 0, stats.period_act·period_eff = 0 8개(i64), stats.led_eaten_open = 연 틱의 led_eaten,
-## stats.eaten_from_id = 연 틱의 계통 수.
-const SLIMES_B64_ADDED: Array[String] = ["last_eff", "eaten"]
-const LINEAGE_B64_ADDED: Array[String] = ["eaten"]
+## stats.eaten_from_id = 연 틱의 계통 수. 1단계(학습): slimes.w2·rbar·dw_juv·ring_a·ring_pos·ring_e·ring_h, lineage.eta·dw·dw_juv·assim
+## = 빈 배열(옛 파일은 학습 끔 — 켠 세계면 길이를 설정과 견줌), stats.led_learn·period_pmax·period_learn·period_think = 0.
+const SLIMES_B64_ADDED: Array[String] = ["last_eff", "eaten", "w2", "rbar", "dw_juv", "ring_a", "ring_pos", "ring_e", "ring_h"]
+const LINEAGE_B64_ADDED: Array[String] = ["eaten", "eta", "dw", "dw_juv", "assim"]
 const STATS_B64_ADDED: Array[String] = ["period_act", "period_eff"]
-const STATS_HEX_ADDED: Array[String] = ["led_eaten_open"]
-const STATS_INT_ADDED: Array[String] = ["eaten_from_id"]
+const STATS_HEX_ADDED: Array[String] = ["led_eaten_open", "led_learn", "period_pmax"]
+const STATS_INT_ADDED: Array[String] = ["eaten_from_id", "period_learn", "period_think"]
 ## 연대기 사건의 필수 키(글자·수)와, 있으면 수여야 하는 키.
 const EVENT_TEXT: Array[String] = ["kind", "text"]
 const EVENT_NUM: Array[String] = ["tick", "actor", "mean_gen"]
@@ -462,6 +484,10 @@ static func validate_world(wd: SimWorld) -> String:
 			return "개체의 마지막 행동이 잘못되었습니다"
 		if is_nan(wd.s_energy[i]) or is_inf(wd.s_energy[i]):
 			return "개체 에너지가 수가 아닙니다"
+	# 학습 상태는 개체 id 순서·범위를 본 뒤에(살아 있는 개체의 계통 값을 id 로 찾음)
+	var le := _check_learned(wd, n, lc)
+	if le != "":
+		return le
 	if not _cells_ok(wd.store_tiles, cells):
 		return "저장고 위치가 지도 밖입니다"
 	if wd.store_food.size() != wd.store_tiles.size():
@@ -470,11 +496,55 @@ static func validate_world(wd: SimWorld) -> String:
 		return "문명 단계가 잘못되었습니다"
 	if wd.tick < 0:
 		return "틱이 음수입니다"
-	for v in [wd.led_initial, wd.led_eaten, wd.led_spent, wd.led_repro_loss, wd.led_died, wd.store_drops_total, wd.led_eaten_open]:
+	for v in [wd.led_initial, wd.led_eaten, wd.led_spent, wd.led_repro_loss, wd.led_died, wd.store_drops_total, wd.led_eaten_open,
+			wd.led_learn, wd.period_pmax]:
 		if not is_finite(v):
 			return "장부 값이 유한한 수가 아닙니다"
 	if wd.led_eaten_open < 0.0 or wd.led_eaten_open > wd.led_eaten:
 		return "먹은 양 장부의 시작점(led_eaten_open %s)이 0~led_eaten(%s) 밖입니다" % [str(wd.led_eaten_open), str(wd.led_eaten)]
+	if wd.led_learn < 0.0 or wd.led_learn > wd.led_spent:
+		return "학습 비용 장부(led_learn %s)가 0~led_spent(%s) 밖입니다" % [str(wd.led_learn), str(wd.led_spent)]
+	if wd.period_learn < 0 or wd.period_think < 0 or wd.period_pmax < 0.0 or wd.period_pmax > float(wd.period_think):
+		return "학습 셈이 잘못되었습니다(갱신 %d, 판단 %d, 가장 큰 확률의 합 %s — 합은 0~판단 수)" % [wd.period_learn, wd.period_think, str(wd.period_pmax)]
+	return ""
+
+
+## 1단계 학습 상태의 길이·범위(DESIGN-v0.2 9.1): 학습을 켠 세계는 배운 두뇌 n × 행동 × 은닉, 고리 n × H(은닉은 × 은닉), 개체마다 하나인
+## 값 n, 계통 L. 끈 세계는 모두 길이 0. 고리의 행동은 빈칸(-1)~행동 수 미만, 다음 자리는 0~H 미만, 배운 양은 음수가 아니고
+## 동화 지수는 0~1, 살아 있는 개체의 계통 학습량은 0(죽을 때 씀). 문제가 없으면 "".
+static func _check_learned(wd: SimWorld, n: int, lc: int) -> String:
+	var on := wd._learn_on
+	var per := n if on else 0
+	var lin := lc if on else 0
+	var hr := wd._ring
+	if wd.s_w2.size() != per * wd._w2n or wd.s_rbar.size() != per or wd.s_dw_juv.size() != per or wd.s_ring_pos.size() != per \
+			or wd.s_ring_a.size() != per * hr or wd.s_ring_e.size() != per * hr or wd.s_ring_h.size() != per * hr * wd._n_hid:
+		return "배운 두뇌·판단 고리 배열 길이가 맞지 않습니다(learn.enabled = %s — 켜면 개체 %d × 행동 %d × 은닉 %d·고리 %d칸, 끄면 0)" % [
+				str(on), n, SimBrain.BASE_OUTPUTS, wd._n_hid, hr]
+	for arr in [wd.lin_eta, wd.lin_dw, wd.lin_dw_juv, wd.lin_assim]:
+		if arr.size() != lin:
+			return "계통 학습 배열(eta·dw·dw_juv·assim) 길이가 맞지 않습니다(learn.enabled = %s — 켜면 계통 %d, 끄면 0)" % [str(on), lc]
+	for arr in [wd.s_w2, wd.s_rbar, wd.s_dw_juv, wd.s_ring_e, wd.s_ring_h, wd.lin_eta, wd.lin_dw, wd.lin_dw_juv, wd.lin_assim]:
+		if not _finite(arr):
+			return "배운 두뇌·고리·계통 학습 값에 유한하지 않은 수가 있습니다"
+	for v in wd.s_ring_a:
+		if v < SimWorld.RING_EMPTY or v >= SimBrain.BASE_OUTPUTS:
+			return "판단 고리의 행동 번호가 잘못되었습니다: %d" % v
+	for v in wd.s_ring_pos:
+		if v < 0 or v >= hr:
+			return "판단 고리의 다음 자리가 0~%d 밖입니다: %d" % [hr - 1, v]
+	for arr in [wd.s_dw_juv, wd.lin_eta, wd.lin_dw, wd.lin_dw_juv]:
+		for v in arr:
+			if v < 0.0:
+				return "배운 양·학습률(dw_juv·eta·dw)에 음수가 있습니다: %s" % str(v)
+	for v in wd.lin_assim:
+		if v < 0.0 or v > 1.0:
+			return "동화 지수(assim)가 0~1 밖입니다: %s" % str(v)
+	if on:
+		for i in n:
+			var id := wd.s_id[i]
+			if wd.lin_dw[id] != 0.0 or wd.lin_dw_juv[id] != 0.0 or wd.lin_assim[id] != 0.0:
+				return "살아 있는 개체의 계통 학습량(lineage.dw·dw_juv·assim)은 0 이어야 합니다(개체 %d — 죽을 때 씀)" % id
 	return ""
 
 
