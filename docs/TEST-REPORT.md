@@ -18,25 +18,25 @@
 ## 2. 결과 요약
 
 - **최종 판정: 검사 기준 1~11 모두 통과(이 컨테이너). 기준선 48실행 완료. 관문 A-1 은 지금 정의로는 판정 불가로 보임(우연 기준 세계가 씨앗 1~12 모두 1,000틱 전에 멸종 — 1단계 전에 사용자 판단 필요). CI·1,000세대 해시·플랫폼 간은 미검증.**
-- 통과 / 실패 / 미검증: **12 / 0 / 3**(V13 GitHub Actions, V14 1,000세대 해시, V15 관문 A-1 판정 — 아래 표)
+- 통과 / 실패 / 미검증: **12 / 0 / 3**(Z13 GitHub Actions, Z14 1,000세대 해시, Z15 관문 A-1 판정 — 아래 표)
 
 | ID | 확인 내용 | 판정 | 근거 |
 | --- | --- | --- | --- |
-| V01 | 기준 1: 새 장치를 끈 세계 = v0.1 금 값 6개·픽스처, 박아 둔 값 그대로 | 통과 | `test_v01_golden`(6개 모두 — 7절 전체 실행. `--skip-slow` 는 1·5번을 건너뜀). 기준선 기본·씨앗 1 의 실행기 RESULT `hash=171a3a4f1a5f`·6,391틱(문서 기록과 같음 — 5절) |
-| V02 | 기준 2: 기록 줄마다 Σ act = 진행 전 개체 수 합, eff ≤ act, 돌기·쉬기 eff = act, 열리기 전 효과 0 | 통과 | `test_act_counts`(흐름 3개 + 손 장면 14개) |
-| V03 | 기준 3: 500틱 → 저장 → 열기 → 500틱 = 곧장 1,000틱(새 열·`eaten`) | 통과 | `test_snapshot_v02_roundtrip`(500·510틱 스냅숏) |
-| V04 | 기준 4: v0.1.0 픽스처 열기·이어 돌린 금 값, 시험용 새 절, 먹은 양 장부 | 통과 | `test_snapshot_v01_fixture`, `test_snapshot_corrupt`(새 키 9종) |
-| V05 | 기준 5: 정수 원소 규칙이 1.5 를 거부 | 통과 | `test_v02_config`, `test_sim_labels.py` |
-| V06 | 기준 6: `repro.inherit = random`(짝·혼자 분열), 같은 씨앗 두 번 같은 해시, genome 이면 금 값 | 통과 | `test_chance_baseline` |
-| V07 | 기준 7: `--fork-set` — 바꾼 갈래만 다르고 그대로 갈래 = 끊김 없이, `brain.hidden` 바꿈은 2, `--resume` 없이 주면 인자 오류 | 통과 | `test_runner_cli.py` `TestFork` 4개·`TestAblateReal`, `run_tests` `test_runner`(4절 R1~R5) |
-| V08 | 기준 8: 손 사본 검사는 열 하나를 지우면 실패 | 통과 | `test_analyze.py` `TestHandCopies`(4절 R6) |
-| V09 | 기준 9: `test_design_format` 이 9절 표를 읽고 통과(표에서 열을 지우면 실패) | 통과 | `tools/test_design_format.py` 4개 |
-| V10 | 기준 10: `test_static_rules`(매직 넘버·허용 목록) | 통과 | 7절 규칙 검사(`--skip-slow`·전체) |
-| V11 | 기준 11: `test_performance` < 1,750 그대로 | 통과 | 687배(7절 전체 실행, 28.0µs)·650배(`--skip-slow` 실행, 29.5µs)·742배(core) |
-| V12 | 범위 10: 기준선 기본·`fast_civ`·`chance_baseline` × 씨앗 1~12 × 평균 100세대(+ A-1′ 조건 12) | 통과(돌림·기록) | 5절 |
-| V13 | GitHub Actions 에서 0단계 코드의 검사·CI 해시 grep(`hash=171a3a4f1a5f `) | 미검증 | 푸시하지 않음(작업 지시) |
-| V14 | 1,000세대 해시 `58e2ef0b38c5` = v0.1 | 미검증 | 7단계에 수동으로(DESIGN-v0.2 12.1) |
-| V15 | 관문 A-1 이 판정 가능한가(미리 보기) | 미검증(판정 불가로 보임) | 우연 기준·A-1′ 모두 0/12(5.4). 학습을 켠 A-1 세계는 1단계에서야 잴 수 있음 |
+| Z01 | 기준 1: 새 장치를 끈 세계 = v0.1 금 값 6개·픽스처, 박아 둔 값 그대로 | 통과 | `test_v01_golden`(6개 모두 — 7절 전체 실행. `--skip-slow` 는 1·5번을 건너뜀). 기준선 기본·씨앗 1 의 실행기 RESULT `hash=171a3a4f1a5f`·6,391틱(문서 기록과 같음 — 5절) |
+| Z02 | 기준 2: 기록 줄마다 Σ act = 진행 전 개체 수 합, eff ≤ act, 돌기·쉬기 eff = act, 열리기 전 효과 0 | 통과 | `test_act_counts`(흐름 3개 + 손 장면 14개) |
+| Z03 | 기준 3: 500틱 → 저장 → 열기 → 500틱 = 곧장 1,000틱(새 열·`eaten`) | 통과 | `test_snapshot_v02_roundtrip`(500·510틱 스냅숏) |
+| Z04 | 기준 4: v0.1.0 픽스처 열기·이어 돌린 금 값, 시험용 새 절, 먹은 양 장부 | 통과 | `test_snapshot_v01_fixture`, `test_snapshot_corrupt`(새 키 9종) |
+| Z05 | 기준 5: 정수 원소 규칙이 1.5 를 거부 | 통과 | `test_v02_config`, `test_sim_labels.py` |
+| Z06 | 기준 6: `repro.inherit = random`(짝·혼자 분열), 같은 씨앗 두 번 같은 해시, genome 이면 금 값 | 통과 | `test_chance_baseline` |
+| Z07 | 기준 7: `--fork-set` — 바꾼 갈래만 다르고 그대로 갈래 = 끊김 없이, `brain.hidden` 바꿈은 2, `--resume` 없이 주면 인자 오류 | 통과 | `test_runner_cli.py` `TestFork` 4개·`TestAblateReal`, `run_tests` `test_runner`(4절 R1~R5) |
+| Z08 | 기준 8: 손 사본 검사는 열 하나를 지우면 실패 | 통과 | `test_analyze.py` `TestHandCopies`(4절 R6) |
+| Z09 | 기준 9: `test_design_format` 이 9절 표를 읽고 통과(표에서 열을 지우면 실패) | 통과 | `tools/test_design_format.py` 4개 |
+| Z10 | 기준 10: `test_static_rules`(매직 넘버·허용 목록) | 통과 | 7절 규칙 검사(`--skip-slow`·전체) |
+| Z11 | 기준 11: `test_performance` < 1,750 그대로 | 통과 | 687배(7절 전체 실행, 28.0µs)·650배(`--skip-slow` 실행, 29.5µs)·742배(core) |
+| Z12 | 범위 10: 기준선 기본·`fast_civ`·`chance_baseline` × 씨앗 1~12 × 평균 100세대(+ A-1′ 조건 12) | 통과(돌림·기록) | 5절 |
+| Z13 | GitHub Actions 에서 0단계 코드의 검사·CI 해시 grep(`hash=171a3a4f1a5f `) | 미검증 | 푸시하지 않음(작업 지시) |
+| Z14 | 1,000세대 해시 `58e2ef0b38c5` = v0.1 | 미검증 | 7단계에 수동으로(DESIGN-v0.2 12.1) |
+| Z15 | 관문 A-1 이 판정 가능한가(미리 보기) | 미검증(판정 불가로 보임) | 우연 기준·A-1′ 모두 0/12(5.4). 학습을 켠 A-1 세계는 1단계에서야 잴 수 있음 |
 
 ## 3. 설계와 다르게 한 것
 
@@ -52,7 +52,7 @@
 | --- | --- | --- |
 | `test_v01_golden` | 금 값 6개(역사 해시 64자 + v0.1 22열 SHA-256)·픽스처 | 쉬기에 `rng_life.uniform()` 한 번 → `실패: 금 값 demo_fast·씨앗 2·1,000틱(밭 단계): 역사 해시 3f20f45cda23(금 879c26462ba3)…` |
 | `test_build_ci.py` | CI 100세대 단계의 해시 grep | grep 줄을 지움 → `AssertionError: 0 == 0 : 역사 해시가 금 값과 다름` |
-| `test_act_counts` | 행동 셈(위 V02) | 판단하는 틱에만 셈 → `실패: default·씨앗 7 …의 Σ act = 진행 전 개체 수 합`, 가득 찬 저장고 내려놓기를 효과로 → `실패: 손 장면 14개의 효과 판정 …(기대 효과 0)` |
+| `test_act_counts` | 행동 셈(위 Z02) | 판단하는 틱에만 셈 → `실패: default·씨앗 7 …의 Σ act = 진행 전 개체 수 합`, 가득 찬 저장고 내려놓기를 효과로 → `실패: 손 장면 14개의 효과 판정 …(기대 효과 0)` |
 | `test_eaten_ledger` | 먹은 양 장부(12.2) | 죽을 때 `lin_eaten` 기록을 지움 → `실패: 기본·씨앗 9·600틱: 먹은 양 장부 상대 오차 0.872051` |
 | `test_snapshot_v02_roundtrip` | 500+500 = 1,000 | `period_act`·`period_eff` 를 저장하지 않음 → `실패: 510틱 → 열기 → 1,000틱의 timeseries.csv(38열·25줄) = 곧장 1,000틱` |
 | `test_snapshot_v01_fixture`·`_corrupt` | 형식 수리 | 절 채우기를 끔 → `설정 오류: 설정 키가 없습니다: probe_section`, `last_eff` 길이 검사를 뺌 → `구조가 틀린 스냅숏 31종을 오류 문장으로 거부(샌 것: slimes.last_eff 길이 1)` |
