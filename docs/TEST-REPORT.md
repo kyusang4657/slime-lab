@@ -2,6 +2,96 @@
 
 판정은 `통과 / 실패 / 미검증` 중 하나만 씁니다. 자동 검사로 확인한 것과 확인하지 못한 것을 구분합니다.
 
+# v0.2 1단계: 성장 + 스스로 학습 — 기록·분석 도구 (records 몫)
+
+[`DESIGN-v0.2.md`](DESIGN-v0.2.md) 14.2 의 범위 7 가운데 기록 쪽(시계열·계통 열 확정, `summary.json` 의 `features`)과 범위 8(이식 시험 `--fork-reset-learned` 의 명령줄 검사와 `analyze.py ablate --reset-learned`, 관문 A 도구 `analyze.py gate-a`, 볼드윈 보고서 `analyze.py baldwin`)을 구현한 기록입니다. 시뮬레이션은 아래 sim 절 그대로이고 이 절은 역사를 바꾸지 않습니다(기록기의 `summary.json` 키 하나 — 해시·CSV 열은 그대로). **관문 A 의 판정 실행은 하지 않았습니다** — 판정 조건을 사용자가 다시 정하는 중이라(0단계 절 5.4) 도구는 조건을 이름 붙은 변형(`A-1`·`A-1-life`)으로 두고, 작은 시험 실행으로 끝까지 도는지만 봤습니다(판정 표는 만들지 않음). 화면(10절 1단계 목록)은 다음 몫입니다.
+
+## 1. 대상 기록
+
+| 항목 | 기록 |
+| --- | --- |
+| 대상 | main `f6bdcd7`(sim 몫 끝) 위의 커밋 — 아래 7절. 푸시하지 않음 |
+| 일시 / 담당 | 2026-10-11 / 제작 AI(Claude Code) records 에이전트 |
+| 엔진·환경 | Godot 4.4.1-stable. 클라우드 리눅스 컨테이너 4코어(GPU 없음), 다른 에이전트와 CPU·디스크를 나눠 씀(작업 중 디스크 남은 자리가 약 70MB 여서 되돌림 확인 사본은 `build/`·`results/`·그림을 뺀 12MB 로 만듦) |
+| 범위 | 기록기(`SimRecorder.FEATURE_SWITCHES`·`features`), 문서 형식 검사(`tools/test_design_format.py` — 구현을 마친 단계까지의 열·키 확정, `summary.json` 키), 분석 도구(`ablate --reset-learned`·`ablate.json`, `gate-a`, `baldwin`), 검사(`run_tests` `test_runner`, `test_runner_cli.py` `TestResetLearned`, `test_analyze.py` `TestGateA`·`TestBaldwin`·`TestAblate`), 문서(ANALYSIS·README·CONFIG(예설정 설명)·DESIGN '구현(1단계)' 메모) |
+
+## 2. 결과 요약
+
+- **최종 판정: 이 몫의 검사 모두 통과(이 컨테이너). 기록 열은 9.3·9.4 그대로 확정, `gate-a` 두 변형·`baldwin`·`ablate --reset-learned` 가 손으로 만든 결과와 실제 실행기에서 돎. 관문 A 판정·GitHub Actions 는 미검증.**
+- 통과 / 실패 / 미검증: **10 / 0 / 2**
+
+| ID | 확인 내용 | 판정 | 근거 |
+| --- | --- | --- | --- |
+| Q01 | 범위 7(기록): 시계열 1단계 10열·계통 4열 = DESIGN-v0.2 9.3·9.4 의 1단계까지 열(순서까지), 2단계 이후의 열·스냅숏 키는 코드에 없음, 1단계까지 스냅숏 키 = 9.1 표 | 통과 | `test_design_format.py` `test_implemented_stage_complete`(새), `test_v02_columns_appended_in_table_order`, `TestHandCopies`(손 사본 그대로) |
+| Q02 | `summary.json` 의 `features` = 켠 장치 스위치(몸 자람 → 학습 순서, freeze·꺼진 장치의 키는 넣지 않음), 기본은 빔·`reset_learned` false | 통과 | `run_tests` `test_runner`, `test_runner_cli.py` `TestResetLearned` |
+| Q03 | `summary.json` 의 키가 모두 DESIGN-v0.1 8.4·DESIGN-v0.2 9.5 에 적힘 — 새 검사가 처음 돌 때 `reset_learned` 가 9.5 에 없음을 찾아 9.5 에 메모를 더함 | 통과 | `test_design_format.py` `test_summary_keys_listed`(새) |
+| Q04 | 검사 기준 14 를 명령줄 그대로: `--resume … --fork-reset-learned` 직후 스냅숏을 파이썬으로 풀어 살아 있는 모든 개체의 배운 두뇌(`slimes.w2`) = 유전체 W2 행동 행(비트), 기준선 0, 고리 빔, 어린 동안 배운 양 그대로, 시계열 `dw_mean`·계통 `dw` 0. `--fork-set=learn.freeze=true` 와 함께면 60틱 뒤에도 그대로·갱신 0, 그대로 갈래 = 끊김 없이(해시). `--resume` 없이 인자 오류 2, 학습 끈 스냅숏 2(앞 결과 그대로) | 통과 | `test_runner_cli.py` `TestResetLearned` 4개 |
+| Q05 | `ablate --reset-learned`: 바꾼 갈래에만 `--fork-reset-learned`, `ablate.json`, 기본 폴더 이름, `reset_learned` 가 다른 이전 갈래는 mismatch, `--set`·`--reset-learned` 둘 다 없으면 2. 실제 실행기(learn_basic 평균 0.3세대에서 60틱): 바꾼 갈래 끝에 배운 두뇌 = 유전체, 그대로 갈래 = 끊김 없이 | 통과 | `test_analyze.py` `TestAblate`(2개 새), `TestResetLearned.test_ablate_reset_learned_real` |
+| Q06 | `gate-a`: 갈래 명령줄(변형·보조 판), 손으로 정한 대상 값(씨앗 12 × 갈래 3)의 세 행·두 차이·효과 크기·씨앗 수, 통과, 문턱 경계 셋의 실패(먹은 양 9/12·비 1.04·② 7/12), 변형마다 판정 불가(A-1 의 생존 틱·대상 모자람, A-1-life 의 끝에 살아 있는 대상), 학습 끔 갈래는 판정에 안 씀, 씨앗 수 ≠ 12 는 판정 안 함, 실패한 실행, 다시 돌리면 같은 보고서 | 통과 | `test_analyze.py` `TestGateA` 6개 |
+| Q07 | `baldwin`: 세대 추이(죽은 개체만 — 살아 있는 개체는 뺌), 첫 → 끝 방향(죽은 개체 30 미만 구간은 뺌), 이식 시험 표, 학습 끈 대조, 동화·감춤 항목(예·아니오·자료 없음), 뺀 실행·폴더의 까닭 | 통과 | `test_analyze.py` `TestBaldwin` 3개 |
+| Q08 | `gate-a --variant A-1`·`--variant A-1-life` 가 실제 실행기로 끝까지 돌고 보고서를 씀(씨앗 하나씩 — 판정 표 아님, 5절) | 통과(돌림) | 5절 |
+| Q09 | 규칙 검사(`--skip-slow`)·파이썬 전체가 그대로 통과(v0.1 금 값 4개 포함 — 기록기는 역사에 닿지 않음) | 통과 | 6절 |
+| Q10 | 화면 모듈 둘이 그대로 통과 — `param_checks`(예설정 설명 한 줄이 바뀜 — 글꼴 검사 포함), `experiment_checks`(실험실 내보내기의 `summary.json` 에 `features` 가 생김) | 통과 | 6절 |
+| Q11 | 관문 A(A-1·A-2) 판정 | 미검증 | 작업 지시대로 하지 않음(판정 조건을 사용자가 다시 정하는 중) |
+| Q12 | GitHub Actions 에서 이 코드의 검사 | 미검증 | 푸시하지 않음(작업 지시) |
+
+## 3. 정한 것·설계와 다르게 한 것
+
+DESIGN-v0.2 의 해당 줄(9.3·9.4·9.5·11.2·11.4·11.5·14.2·14.3)에 '구현(1단계)' 로 적었습니다.
+
+- **`features`** 는 켠 **장치** 스위치만(`SimRecorder.FEATURE_SWITCHES` — 1단계 `body.grow_enabled`·`learn.enabled`, 단계마다 끝에 더함). 대조 갈래의 `learn.freeze`·우연 기준의 `repro.inherit` 는 설정이라 넣지 않고 `config` 에서 읽습니다.
+- **`gate-a` 의 판정 조건은 이름 붙은 변형** `GATE_A_VARIANTS`: `A-1`(14.3 그대로 — 1,000틱, 두 판정 갈래 모두 1,000틱 생존·대상 ≥ 30), `A-1-life`(제안 — A-1′ 세계 400·400·1.0 에서 생존 요구를 빼고 대상 ≥ 30, 대상이 모두 죽을 때까지 또는 멸종까지 최대 1,500틱 — `GATE_A_LIFE_MAX_TICKS`). 문턱(`GATE_A_WIN` 10·`GATE_A_RATIO` 1.05·`GATE_A_SECONDARY_WIN` 8·`GATE_A_MIN_BIRTHS` 30·`GATE_A_SEEDS` 12)은 14.3 그대로이고 명령 인자로 바꿀 수 없으며 보고서 머리에 인쇄합니다.
+- 14.3 이 정하지 않은 것을 정함: '높은 씨앗'은 씨앗 값이 학습 쪽에서 **더 큰** 씨앗(같으면 세지 않음). ② 는 지표마다 부호 셈("성숙까지 산 몫이 8/12 이상에서 높거나, 평균 자식 수가 8/12 이상에서 높음" — 씨앗마다 둘 중 하나를 세는 읽기보다 엄격, A-2 문장과 같은 뜻). 묶은 값은 판정 가능 씨앗의 대상을 한데 모아 먹은 양 중앙값·나머지 평균. 성숙까지 산 = 죽은 나이 > `repro.maturity`(나이를 더한 뒤 번식 자격으로 번식 단계에 살아서 닿음 — `_act`·`_eligible`). 판정 갈래는 학습·freeze 둘(학습 끔은 셋째 행으로 보고만). 씨앗 수가 12 가 아니면 '판정 안 함'.
+- A-2 는 `gate-a` 에 넣지 않았습니다(대상 구간 [F, F + 100) 과 우연 기준 기준 행이 `ablate` 의 꼴과 달라 — 갈래는 `ablate --set learn.freeze=true` 로 돌릴 수 있음).
+- **`baldwin`** 은 이식 시험을 스스로 돌리지 않고 `ablate --reset-learned --set learn.freeze=true` 의 결과 폴더(`--probe`, 평균 세대마다)와 학습 끈 실행의 `ablate` 결과(`--control-probe`)를 읽습니다(`ablate.json` 으로 조건을 앎). 동화·감춤은 방향 수의 과반으로 적고(통계 검정 아님), 첫 → 끝 구간은 죽은 개체 30(`BALDWIN_MIN_DEAD`) 이상인 구간만. **행동 행별 η 는 보고하지 않습니다**(11.2 는 "η(행동 행별)" — 기록 열에는 8행 평균만 있어서, 스냅숏 유전체를 풀지 않음).
+- `ablate` 의 `--set` 은 이제 선택입니다(`--set`·`--reset-learned` 가운데 하나는 있어야 함 — 둘 다 없으면 2).
+- `tools/test_design_format.py` 에 `IMPLEMENTED_STAGE`(지금 1 — 단계를 마칠 때 올림)와 `summary.json` 키 검사를 더함. 예설정 `chance_baseline` 설명에 관문 A-1 세계(+ 학습·몸 자람, `gate-a`)를 적고 CONFIG.md 를 다시 만듦(`learn_basic` 은 8절 그대로 — 학습·몸 자람 켬, 바꾸지 않음).
+- 관찰(판정 아님): 작은 시험 실행 두 개(5절)에서 세 갈래 모두 대상의 성숙까지 산 몫이 1.000 이었습니다(자식이 부모에게 받은 에너지만으로 31틱 넘게 삶). 이 지표가 갈래를 가르지 못할 수 있으니 판정 조건을 다시 정할 때 참고하세요.
+
+## 4. 새 검사와 되돌림 확인
+
+새 검사마다 저장소 밖 사본(`build/`·`results/`·그림을 뺀 12MB — 디스크가 모자라서)에 변이를 하나씩 넣어 검사가 실패함을 보고 원상 복구했습니다(하네스가 변이 뒤 파일 해시가 원본과 같은지 확인). N 번호는 이 절에서만 씁니다.
+
+| 검사 | 본 것 | 깨뜨린 것 → 실패 문장 |
+| --- | --- | --- |
+| N1 `test_implemented_stage_complete` | 1단계 계통 열이 모두 있음 | `LINEAGE_COLUMNS` 에서 `assim` 을 뺌 → `AssertionError: Lists differ: ['eaten', 'eta', 'dw', 'dw_juv'] != ['eaten', 'eta', 'dw', 'dw_juv', 'assim']` |
+| N2 `test_implemented_stage_complete` | 뒤 단계 키는 코드에 없음 | `SLIMES_B64_ADDED` 에 2단계 `store_t` → `AssertionError: Lists differ: […'ring_pos', 'store_t', 'w2'] != […'ring_pos', 'w2']`(9.1 표에는 있어 옛 검사 `test_v02_snapshot_keys_listed` 는 통과하던 변이) |
+| N3 `test_summary_keys_listed` | `summary.json` 키가 문서에 | 9.5 의 `reset_learned` 문장을 지움 → `AssertionError: Lists differ: ['reset_learned'] != []`(이 검사를 처음 돌렸을 때도 같은 실패 — 문서에 없었음) |
+| N4 `test_runner` | `features` 는 장치만 | `FEATURE_SWITCHES` 에 `learn.freeze` → `실패: features = 켠 장치 스위치(몸 자람 → 학습 순서, freeze·꺼진 장치의 키는 넣지 않음): { … "learn_basic { \"learn.freeze\": true }": "body.grow_enabled,learn.enabled,learn.freeze", … "default { … }": "learn.freeze" }` |
+| N5 `test_runner` | `summary.json` 에 `features` | 기록기에서 뺌 → `실패: 요약: features = [](기본 — 켠 장치 없음), reset_learned = false` |
+| N6 `TestGateA` | 같으면 세지 않음 | `a > o` → `a >= o` → `AssertionError: '\| 성숙까지 산 몫 \| 0.611 \| 0.500 \| 0.500 \| 0.111 \| 0.111 \| 0.222 \| 8/12 \| 8/12 \|' not found in …`(같은 값의 씨앗 넷이 이긴 것으로 셈) |
+| N7 `TestGateA` | 성숙 경계(죽은 나이 30 = 성숙은 아님) | `life > maturity` → `>=` → `AssertionError: '- **판정: 통과**' not found in … - **판정: 실패**` |
+| N8 `TestGateA` | A-1 의 1,000틱 생존 요구 | `A-1` 의 `need_ticks` 0 → `AssertionError: '- **판정: 판정 불가 — 씨앗 2개(3, 4)…' not found in … 씨앗 1개(4)…`(900틱 멸종 씨앗을 판정함) |
+| N9 `TestGateA` | 대상 구간 끝 600 은 빠짐 | `< hi` → `<= hi` → 성숙까지 산 몫 줄 없음(틱 600 출생 개체가 대상에 섞임) |
+| N10 `TestGateA` | 학습 끔 갈래는 판정 조건이 아님 | `GATE_A_JUDGED` 에 `off` → `… not found in … 씨앗 3개(3, 4, 5)…` |
+| N11 `TestGateA` | 묶은 먹은 양은 중앙값 | 평균으로 → `AssertionError: '\| 평생 먹은 양(중앙값) \| 12.00 \| 10.00 \| 11.00 \| 2.00 \| 1.00 \| 0.200 \| 10/12 \| 10/12 \|' not found in …` |
+| N12 `TestBaldwin` | 죽은 개체만 | 살아 있는 개체도 셈 → `AssertionError: '\| \`learn_basic\` \| 0–10 \| 0.0500 \| 0.550 \| 0.0100 \| 0.0050 \| 11.0 \| 2 · 60 \|' not found in …` |
+| N13 `TestBaldwin` | 첫 → 끝 방향은 죽은 개체 ≥ 30 구간만 | 거르기를 뺌 → `AssertionError: '\| η 평균 \| 2 · 0 (2) \|' not found in …`(개체 5명인 20–30 구간이 끝 구간이 됨) |
+| N14 `TestBaldwin` | 타고난 = 바꾼 갈래 | 그대로 갈래를 읽음 → `AssertionError: '\| \`control_g30\` \| 30.0 \| 7.50 \| 7.25 \| 1/2 \|  \|' not found in …` |
+| N15 `TestAblate` | `--fork-reset-learned` 는 바꾼 갈래에만 | 그대로 갈래에도 → `AssertionError: Tuples differ: (4, 0) != (2, 2)` |
+| N16 `TestAblate` | `reset_learned` 가 다른 이전 갈래는 mismatch | 견주지 않음 → `AssertionError: Tuples differ: (0, []) != (1, [])` |
+| N17 `TestAblate` | 바꿀 것이 없으면 2 | 그 검사를 뺌 → `AssertionError: Tuples differ: (0, [['g', '--headless', …]]) != (2, [])` |
+| N18 `TestResetLearned` | 되돌리면 고리 보정도 0 | `reset_learned` 에서 `s_ring_e.fill(0.0)` 을 뺌 → `AssertionError: np.False_ is not true : 기준선 0, 고리 빔` |
+| N19 `TestResetLearned` | 이식 시험 갈래의 배운 두뇌 = 유전체 | `reset_learned` 가 배운 두뇌를 되돌리지 않음 → `AssertionError: Tuples differ: (120, 8160) != (120, 0)`(60틱 뒤 유전체와 다른 가중치 8,160칸) |
+
+## 5. 작은 시험 실행(판정 아님)
+
+`gate-a` 가 실제 실행기로 끝까지 도는지만 봤습니다(작업 지시 — 판정 표 금지). `python3 tools/analyze.py gate-a --variant A-1 --seeds 1 --jobs 2` 는 갈래 셋을 6초에(멸종 447~730틱 — 1,000틱 전이라 '판정 불가', 씨앗 하나라 '판정 안 함'), `--variant A-1-life --seeds 2` 는 9초에 돌고(멸종 573~834틱, 갈래마다 대상 55~95명으로 판정 가능 조건은 채움) `gate_a.md`·`gate_a.csv` 를 썼습니다. 그 결과 폴더는 지웠고 값은 판정에 쓰지 않습니다. `baldwin` 은 손으로 만든 결과 폴더로만, `ablate --reset-learned` 는 `TestResetLearned` 의 실제 실행(learn_basic, 씨앗 1)으로 확인했습니다.
+
+## 6. 실행 기록
+
+| 검사 | 마지막 결과 |
+| --- | --- |
+| 규칙(`run_tests.gd -- --skip-slow`) | `RESULT: 522 checks passed, 0 failed` (214초, `SCRIPT ERROR` 없음. `ERROR:` 13줄은 깨진 예설정·쓰기 실패·저장 검증 실패를 일부러 만드는 검사의 것 — sim 절과 같은 수. 성능: 개체·틱당 기준 일 602번·30.9µs, 상대 성능 켬 = 끔 0.935·1단계 1.098(차 3.13µs)) |
+| 파이썬(`unittest discover -s tools`) | `Ran 143 tests in 102.690s` · `OK` |
+| 화면 모듈(`run_view_tests.gd -- --only=…`) | `param_checks`: `RESULT: 262 passed, 0 failed (view)`, `experiment_checks`: `RESULT: 88 passed, 0 failed (view)` (`MIN_CHECKS` 그대로 — 화면 검사는 바꾸지 않음) |
+
+검사 수: 규칙 `--skip-slow` 522(sim 절 520 + `test_runner` 의 `features` 2개), 파이썬 143(126 → 새 검사 `TestGateA` 6·`TestBaldwin` 3·`TestAblate` 2·`TestResetLearned` 4·`test_design_format` 2). 화면 검사 전체는 돌리지 않았습니다(화면 코드를 바꾸지 않음 — 닿는 두 모듈만 따로 돌림). 규칙 전체(느린 검사 포함)도 이 몫에서는 돌리지 않았습니다(시뮬레이션 코드를 바꾸지 않음 — 기록기의 `summary.json` 키 하나, `--skip-slow` 가 건너뛰는 것은 금 값 1·5번과 긴 실행).
+
+## 7. 커밋
+
+`398479a`(7: 기록 — `features`, 열·키 확정 검사) · `2adb029`(8: 분석 도구 — `ablate --reset-learned`·`gate-a`·`baldwin`) · `a9f451f`(9: 실행기 이식 시험 명령줄 검사) · `717aad5`(10: 문서) · 이 기록(11). 푸시하지 않음.
+
 # v0.2 1단계: 성장 + 스스로 학습 — 시뮬레이션·스냅숏·설정 (sim 몫)
 
 [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 14.2 의 1단계 가운데 범위 1~6(생애 단계·몸 자람·학습률 유전자 구간·배운 두뇌·학습 규칙·학습 비용과 라마르크 비교)과 범위 7 의 시뮬레이션·스냅숏 쪽(해시 꼬리·스냅숏 키·옛 설정 채우기·`stats` 셈), 검사 기준 1~16 을 구현한 기록입니다. 기록 열 이름 확정·분석 도구(`analyze.py gate-a`·`baldwin`)·화면(10절 1단계 목록)은 다음 몫이라 이 절에 없습니다. 관문 A 의 판정 실행은 하지 않았습니다(판정 조건을 사용자가 다시 정하는 중 — 아래 0단계 절 5.4).
