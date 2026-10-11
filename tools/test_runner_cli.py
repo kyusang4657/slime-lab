@@ -291,14 +291,18 @@ class TestFork(RunnerCase):
         before = listing(keep)
         cases = {"brain.hidden=12": "유전체", "brain.memory_units=2": "기억", "map.width=60": "지도",
                  "없는.키=1": "알 수 없는 설정 키", "metab.base=\"x\"": "종류", "metab.base=-1": "설정 오류"}
+        # 경우마다 앞 결과가 든 폴더 사본(병렬로 돌려도 서로의 결과 폴더를 건드리지 않게)
+        outs = {kv: self.tmp / f"keep_fork{i}" for i, kv in enumerate(cases)}
+        for d in outs.values():
+            shutil.copytree(keep, d)
         with ThreadPoolExecutor(PARALLEL) as pool:
             res = dict(zip(cases, pool.map(lambda kv: run_runner(f"--resume={self.snap}", f"--fork-set={kv}",
-                                                                  "--max-ticks=120", f"--out={keep}", "--quiet"), cases)))
+                                                                  "--max-ticks=120", f"--out={outs[kv]}", "--quiet"), cases)))
         for kv, word in cases.items():
-            self.assertEqual(res[kv].returncode, 2, f"{kv}: {res[kv].stderr[-500:]}")
+            self.assertEqual(res[kv].returncode, 2, f"--fork-set={kv} 는 종료 코드 2 여야 함: {res[kv].stderr[-300:]}")
             self.assertIn("--fork-set", res[kv].stderr, kv)
             self.assertIn(word, res[kv].stderr, kv)
-        self.assertEqual(listing(keep), before)
+            self.assertEqual(listing(outs[kv]), before, f"{kv}: 앞 결과 그대로")
 
     def test_fork_needs_resume(self) -> None:
         """--fork-set 은 --resume 과만(처음부터 돌릴 때는 --set) — 없이 주거나 키=값 꼴이 아니면 인자 오류 2, 결과 폴더 없음."""

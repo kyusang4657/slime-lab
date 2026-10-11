@@ -850,7 +850,8 @@ class TestActions(TempDirCase):
         root = self._run("v01cols", summary_extra={"timeseries_columns": analyze.TIMESERIES_COLUMNS[:22]})
         with quiet():
             analyze.report(root, root, plots=False)
-        self.assertFalse((root / "actions.csv").exists())
+        self.assertFalse((root / "actions.csv").exists(),
+                         "summary.json 의 timeseries_columns(v0.1 22열)를 CSV 머리보다 먼저 봐야 함 — 행동 셈을 읽어 actions.csv 를 씀")
         root = self._run("v02cols", summary_extra={"timeseries_columns": analyze.TIMESERIES_COLUMNS})
         with quiet():
             analyze.report(root, root, plots=False)
@@ -975,12 +976,12 @@ class TestAblate(TempDirCase):
         branch = [c for c in fake.calls if any(a.startswith("--resume=") for a in c)]
         self.assertEqual(len(base), 3)
         self.assertTrue(all("--generations=30" in c and "--preset=default" in c and "--no-lineage" in c for c in base))
-        self.assertEqual(len(branch), 4)
+        self.assertEqual(len(branch), 4, "갈래 = 견줄 수 있는 씨앗 2개 × 2(기준 실행이 그 세대 전에 멸종한 씨앗 3 은 뺌)")
         snap1 = self.tmp / "base" / "seed1" / "final.snapshot.json"
         same1 = [c for c in branch if f"--resume={snap1}" in c and not any(a.startswith("--fork-set=") for a in c)]
         fork1 = [c for c in branch if f"--resume={snap1}" in c and "--fork-set=learn_x.k=0" in c]
-        self.assertEqual(len(same1), 1)
-        self.assertEqual(len(fork1), 1)
+        self.assertEqual(len(same1), 1, "그대로 갈래(--fork-set 없음)의 명령이 씨앗마다 하나")
+        self.assertEqual(len(fork1), 1, "바꾼 갈래(--fork-set)의 명령이 씨앗마다 하나")
         for c in same1 + fork1:
             self.assertIn("--max-ticks=500", c)
             self.assertIn("--generations=1000000000", c)
@@ -1013,7 +1014,7 @@ class TestAblate(TempDirCase):
         with mock.patch.object(analyze.subprocess, "run", other), quiet():
             code = analyze.main(["ablate", "--runs", str(self.tmp / "base"), "--at-gen", "30", "--set", "learn_x.k=1",
                                  "--ticks", "100", "--seeds", "1-3", "--godot", "g", "--out", str(self.tmp / "abl")])
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 1, "바꾼 값이 다른 이전 갈래 결과는 mismatch 로 실패(덮어쓰지도, 이번 결과로 세지도 않음)")
         self.assertEqual(other.calls, [])
         runs = read_csv_rows(self.tmp / "abl" / "runs.csv")
         self.assertEqual(sorted(r["status"] for r in runs if r["cell"] == analyze.ABLATE_FORK), ["mismatch"] * 3)
@@ -1037,7 +1038,8 @@ class TestAblate(TempDirCase):
         with mock.patch.object(analyze.subprocess, "run", FakeAblateRunner()), quiet():
             analyze.main(["ablate", "--runs", str(self.tmp / "base"), "--at-gen", "30", "--set", "learn_x.k=0",
                           "--ticks", "100", "--seeds", "1", "--godot", "g"])
-        self.assertTrue((self.tmp / "base-ablate" / "learn_x.k=0__g30__t100" / "ablate.md").is_file())
+        self.assertTrue((self.tmp / "base-ablate" / "learn_x.k=0__g30__t100" / "ablate.md").is_file(),
+                        "기본 --out = <runs>-ablate/<키=값>__g<세대>__t<틱>")
         self.assertEqual(sorted(p.name for p in (self.tmp / "base").iterdir()), [".gdignore", "runs.csv", "seed1"])
 
 
