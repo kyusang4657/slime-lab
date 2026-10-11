@@ -110,7 +110,7 @@ DESIGN-v0.2 의 해당 줄에 '구현(1단계)' 로 적었습니다.
 | --- | --- |
 | 규칙 전체(느린 검사 포함) | `RESULT: 525 checks passed, 0 failed` (261초, `SCRIPT ERROR` 없음. `ERROR:` 13줄은 깨진 예설정·쓰기 실패·저장 검증 실패를 일부러 만드는 검사의 것 — 0단계와 같은 수. 성능 669배·30.2µs, 상대 성능 켬 = 끔 1.155·1단계 1.050. 그 전 실행 524개·684배·1.096·1.122) |
 | 규칙(`--skip-slow`) | `RESULT: 520 checks passed, 0 failed` (205초, 성능 740배·30.4µs, 상대 성능 0.949·1단계 1.127. 그 전 실행 514개·622배·0.918·1.204) |
-| 화면(`run_view_tests.gd`, 전체) | 처음 `1300 passed, 1 failed` — `param_checks` 의 글꼴 검사(이름표의 그리스 글자, 3절) → 고친 뒤 `param_checks` `262 passed, 0 failed`. 나머지 모듈은 그대로 통과(검사 수·`MIN_CHECKS` 그대로 — 화면 코드는 고급 설정 절 이름 하나만 더함) |
+| 화면(`run_view_tests.gd`, 전체) | `RESULT: 1301 passed, 0 failed (view)` (211초, `SCRIPT ERROR`·`ERROR:` 없음). 처음에는 `1300 passed, 1 failed` — `param_checks` 의 글꼴 검사(이름표의 그리스 글자, 3절)였고 고친 뒤 다시 돌림. 검사 수·`MIN_CHECKS` 그대로(화면 코드는 고급 설정 절 이름 하나만 더함) |
 | 파이썬(`unittest discover -s tools`) | `Ran 126 tests in 85.942s` · `OK` |
 | 실제 화면(`xvfb-run … ui_driver.gd`, 1600×900) | `RESULT: 53 passed, 0 failed (ui)`(고급 설정에 '학습' 절이 생김 — 화면 코드는 그대로. 오디오 장치가 없어 ALSA `ERR_CANT_OPEN` 한 줄. 찍은 그림은 되돌림) |
 
