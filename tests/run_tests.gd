@@ -1246,6 +1246,16 @@ func test_runner() -> void:
 			and PackedStringArray(sm.get("lineage_columns", [])) == PackedStringArray(SimRecorder.LINEAGE_COLUMNS),
 			"요약: timeseries_columns·lineage_columns = SimRecorder 의 열")
 	check(typeof(sm.get("forked")) == TYPE_DICTIONARY and sm.forked.is_empty(), "요약: forked = {}(반사실 재생이 아님)")
+	# features(DESIGN-v0.2 9.5): 켠 장치 스위치만(SimRecorder.FEATURE_SWITCHES 순서). 기본은 빔, 대조 설정(freeze·우연 기준)은 장치가 아님
+	check(typeof(sm.get("features")) == TYPE_ARRAY and sm.features.is_empty() and sm.get("reset_learned") == false,
+			"요약: features = [](기본 — 켠 장치 없음), reset_learned = false")
+	var feats := {}
+	for p in [["learn_basic", {}], ["learn_basic", {"learn.freeze": true}], ["chance_baseline", {"body.grow_enabled": true}],
+			["default", {"learn.freeze": true, "learn.cost_per_eta": 0.5}]]:
+		var fb := SimConfig.build(p[0], p[1])
+		feats["%s %s" % [p[0], str(p[1])]] = ",".join(SimRecorder.features(fb.config)) if fb.error == "" else fb.error
+	check(feats.values() == ["body.grow_enabled,learn.enabled", "body.grow_enabled,learn.enabled", "body.grow_enabled", ""],
+			"features = 켠 장치 스위치(몸 자람 → 학습 순서, freeze·꺼진 장치의 키는 넣지 않음): %s" % str(feats))
 	var bad_cfg: Dictionary = runner.parse_args(PackedStringArray(["--out=" + dir, "--set=없는.키=1", "--quiet"]))
 	bad_cfg.silent = true
 	check(runner.run(bad_cfg) == 2, "설정 오류 코드 2")

@@ -24,6 +24,10 @@ const STAGE1_COLUMNS: Array[String] = ["stage_juvenile", "stage_young", "stage_a
 	"learn_events", "eta_mean", "dw_mean", "rbar_mean", "pmax_mean"]
 const LIFE_STAGE_COLUMNS: Array[String] = ["stage_juvenile", "stage_young", "stage_adult", "stage_old"]
 const CHRONICLE_COLUMNS: Array[String] = ["tick", "mean_gen", "kind", "actor_id", "text"]
+## summary.json 의 features(DESIGN-v0.2 9.5): 켠 장치 스위치(참·거짓 설정 키 '절.잎')를 이 순서로, 켠 것만. 단계마다 그 단계의
+## 장치 스위치를 끝에 더한다(1단계 = 몸 자람·학습). 대조 갈래의 learn.freeze·우연 기준의 repro.inherit 는 장치가 아니라 설정이라
+## 여기에 없다(summary.json 의 config 에서 읽음 — analyze.py gate-a 도 그렇게 가름).
+const FEATURE_SWITCHES: Array[String] = ["body.grow_enabled", "learn.enabled"]
 ## 계통 열: v0.1 11열 뒤에 v0.2 열(DESIGN-v0.2 9.4). eaten = 평생 먹은 에너지(죽은 개체는 죽을 때, 살아 있는 개체는 쓸 때의 값).
 ## 개체별 셈이 없던 옛 스냅숏에서 이어 돌린 세계는 그때까지 태어난 개체(id < SimWorld.eaten_from_id)의 eaten 을 비워 둔다(평생 값을 모름).
 ## 1단계: eta(태어날 때 η 평균)·dw(배운 양)·dw_juv(어린 동안 배운 양)·assim(동화 지수 — 11.2). 학습을 끄면 0.
@@ -115,9 +119,20 @@ static func summary(world: SimWorld, extra: Dictionary) -> Dictionary:
 		extinct_tick = world.extinct_tick, history_hash = world.history_hash, config = world.cfg,
 		# 열 목록(DESIGN-v0.2 9.5): 단계마다 열이 늘므로 분석 도구가 손 사본 대신 이것으로 읽는다
 		timeseries_columns = TIMESERIES_COLUMNS, lineage_columns = LINEAGE_COLUMNS,
+		features = features(world.cfg),
 	}
 	d.merge(extra)
 	return d
+
+
+## 설정 cfg 에서 켠 장치 스위치(FEATURE_SWITCHES 순서) — summary.json 의 features.
+static func features(cfg: Dictionary) -> Array[String]:
+	var out: Array[String] = []
+	for k in FEATURE_SWITCHES:
+		var p := k.split(".")
+		if bool(cfg[p[0]][p[1]]):
+			out.append(k)
+	return out
 
 
 ## 결과 폴더에 파일을 쓴다. 실패한 파일 이름 목록을 돌려준다(성공이면 빈 배열).

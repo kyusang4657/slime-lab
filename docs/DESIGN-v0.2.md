@@ -600,9 +600,12 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 | 5 | `inventions_total`, `max_depth_alive`, `recipes_mean`, `traces_active` | 발명 수, 지금 있는 물건의 최대 기능 깊이, 평균 수첩 칸, 살아 있는 흔적 |
 | 6 | `stores_from_items`, `farms_from_items`, `shelters` | 물건으로 생긴 건물 수 |
 
+- 구현(1단계): 1단계 열 10개를 이 표 그대로 확정했습니다(`SimRecorder.STAGE1_COLUMNS` — 이름·순서·뜻). `eta_mean`·`dw_mean` 은 살아 있는 개체의 평균, `rbar_mean` 은 살아 있는 개체의 기준선 평균이고, 학습을 끄면 셋과 `learn_events`·`pmax_mean` 은 0 입니다. `tools/test_design_format.py` 는 상수 `IMPLEMENTED_STAGE`(지금 1)까지의 9.1·9.3·9.4 키·열이 코드와 같고(순서까지) 그 뒤 단계의 것은 코드에 없는지 봅니다 — 단계를 마칠 때 올립니다.
+
 ### 9.4 계통(`lineage.csv`) 새 열
 `eaten`(0 — 평생 먹은 에너지), `eta`(1 — 태어날 때 η 평균), `dw`(1 — 배운 양), `dw_juv`(1 — 어린 동안 배운 양, 3.5), `assim`(1 — 동화 지수, 11.2), `cparent`·`tribe`·`know_birth`·`know_death`(3), `best_depth`(5). 죽은 개체는 죽을 때의 값, 살아 있는 개체는 기록할 때(파일을 쓸 때)의 값입니다. 꺼진 장치의 열은 0(문화 부모는 −1).
 
+- 구현(1단계): `eta`·`dw`·`dw_juv`·`assim` 을 이 순서로 확정했습니다(`SimRecorder.LINEAGE_COLUMNS`). 학습을 끈 세계는 넷 다 0 입니다.
 - 구현(0단계): 개체별 셈이 없던 옛 스냅숏에서 이어 돌린 실행은 id < `eaten_from_id`(9.1)인 개체의 `eaten` 칸을 **비워 둡니다**(평생 값을 모름 — 0 으로 쓰면 '정말 0 을 먹음'과 가를 수 없어 `analyze.py` 의 `eaten.csv` 앞 세대 중앙값이 0 이 됐음, 검증 지적). `analyze.py` 는 빈 칸을 뺍니다.
 
 ### 9.5 사건·`inventions.csv`·`summary.json`
@@ -617,6 +620,7 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 - `inventions.csv`(5단계): `code`, `hard`, `edge`, `hollow`, `bind`, `warm`, `life`(성질 굳·날·오·엮·온·생), `depth`, `first_tick`, `first_mean_gen`, `first_actor`, `parent_a`, `parent_b`, `technique`, `times_made`, `peak_alive`, `last_alive_tick`, `lost_tick`, `streak_start_tick`.
 - `summary.json` 에 더함: `timeseries_columns`, `lineage_columns`(분석 도구가 손 사본 대신 읽음), `features`(켠 스위치 이름 목록), `forked`(반사실 재생에서 바꾼 키, 11.4), `know_first_ticks`(3), `max_function_depth`·`d_sustained`(5).
   - 구현(0단계): `timeseries_columns`·`lineage_columns` 는 `SimRecorder.summary` 가 써서 실행기·실험실 내보내기 모두에 있고, `forked` 는 실행기만 씁니다(처음부터 돌리면 `{}`). `features` 는 켤 스위치가 생기는 1단계부터.
+  - 구현(1단계): `features` = 켠 **장치** 스위치 이름(`SimRecorder.FEATURE_SWITCHES` 순서 — 1단계는 `body.grow_enabled`·`learn.enabled`, 단계마다 끝에 더함). 실행기·실험실 내보내기 모두에 있습니다. 대조 갈래의 `learn.freeze`·우연 기준의 `repro.inherit` 는 장치가 아니라 설정이라 넣지 않습니다(`config` 에서 읽음 — `analyze.py gate-a` 도 그렇게 가름). 실행기는 `reset_learned`(참·거짓 — `--fork-reset-learned` 로 배운 두뇌를 되돌렸나, 11.2)도 씁니다(`forked` 는 설정 키만). `tools/test_design_format.py` 가 `summary.json` 의 키(`SimRecorder.summary`·실행기의 `extra`)가 DESIGN-v0.1 8.4 나 이 절에 있는지, 구현을 마친 단계까지의 9.1·9.3·9.4 키·열이 코드와 같은지(그 뒤 단계의 것은 없는지) 봅니다.
 - 문서 형식 검사: `tools/test_design_format.py` 는 지금 DESIGN-v0.1 8.3·8.4 만 읽습니다(:14). 0단계에서 이 절(9.1·9.3·9.4)의 표도 함께 읽게 고칩니다. v0.1 의 키·열은 DESIGN-v0.1 8.3·8.4 에, v0.2 에서 더한 것은 이 절에 있으므로, 두 문서의 표에서 모은 이름의 합집합과 코드 상수를 견줍니다.
 
 ## 10. 화면
