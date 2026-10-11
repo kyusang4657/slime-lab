@@ -70,6 +70,8 @@ const EATEN_UNKNOWN := "모름(옛 스냅숏 전 출생)"
 const STAGE_TICK_W := 1.5
 const STAGE_TICK_ALPHA := 0.75
 const STAGE_TICK_LEN := 0.3
+## 나이 막대 눈금을 그리지 않는 가운데 글 둘레의 여백(px — 글자 테두리 절반에 더함)
+const STAGE_TICK_TEXT_GAP := 2.0
 
 ## 자식 목록을 다시 훑은 횟수(검사용: 자식 수가 그대로면 refresh 가 훑지 않는다)
 var children_scans := 0
@@ -505,7 +507,10 @@ func _show_age(d: Dictionary) -> void:
 	var maturity := int(cfg.repro.maturity)
 	var b := stage_bounds(mx, maturity, float(cfg.life.adult_frac), float(cfg.life.old_frac))
 	var st := int(d.get("life_stage", SimBrain.life_stage(age, mx, maturity, float(cfg.life.adult_frac), float(cfg.life.old_frac))))
-	_v_age.text = age_text(age, mx, st)
+	var at := age_text(age, mx, st)
+	if at != _v_age.text:
+		_v_age.text = at
+		_age_bar.queue_redraw()
 	_age_bar.max_value = float(mx)
 	_age_bar.value = float(mini(age, mx))
 	var ticks := PackedFloat64Array()
@@ -866,6 +871,8 @@ func _build_state() -> void:
 	_v_age.add_theme_color_override("font_outline_color", _c_bg)
 	_v_age.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_age_bar.add_child(_v_age)
+	_age_bar.label = _v_age
+	_age_bar.text_pad = float(UiConfig.integer("info.energy_outline")) * 0.5 + STAGE_TICK_TEXT_GAP
 	_key(g, "에너지")
 	_energy_bar = ProgressBar.new()
 	_energy_bar.show_percentage = false
@@ -1316,7 +1323,9 @@ class RelativeButton:
 
 
 ## 나이 막대(v0.2 1단계): ProgressBar(채움 = 생애 단계 색 — InfoPanel 이 fill 모양을 바꿈) 위에 단계 경계 눈금(ticks = 0~1 몫).
-## 눈금은 위·아래 가장자리의 짧은 금(tick_len × 높이)이라 가운데 글자("54 / 209틱")를 가로질러 '|' 로 읽히지 않는다.
+## 눈금은 위·아래 가장자리의 짧은 금(tick_len × 높이). 가운데 글("54 / 209틱 · 젊은")이 차지하는 가로 구간(글 폭 + 양쪽 text_pad)에는
+## 그리지 않는다 — 글자 높이가 막대 높이에 가까워 짧은 금도 글자에 닿아 '/¦209' 처럼 읽혔음(1단계 검증 — 1600×900 실제 화면).
+## 그 구간의 경계는 채움 색(단계)과 말풍선의 단계 구간으로 읽는다.
 class AgeBar:
 	extends ProgressBar
 	var ticks := PackedFloat64Array()
@@ -1324,10 +1333,31 @@ class AgeBar:
 	var tick_color := Color.WHITE
 	var tick_width := 1.5
 	var tick_len := 0.3
+	## 가운데 글(InfoPanel._v_age)과 글 둘레의 비울 폭(px — 글자 테두리 절반 + 여백)
+	var label: Label
+	var text_pad := 0.0
+
+	## 가운데 글이 차지하는 가로 구간 (x0, x1)(px, 글 폭 + 양쪽 text_pad). 글이 없으면 빈 구간(x0 > x1).
+	func text_span() -> Vector2:
+		if label == null or label.text == "":
+			return Vector2(1.0, 0.0)
+		var font := label.get_theme_font("font")
+		var w := font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x
+		var cx := size.x * 0.5
+		return Vector2(cx - w * 0.5 - text_pad, cx + w * 0.5 + text_pad)
+
+	## 그릴 눈금의 x(px) — 글 구간 안의 눈금은 뺌.
+	func drawn_tick_xs() -> PackedFloat64Array:
+		var span := text_span()
+		var xs := PackedFloat64Array()
+		for f in ticks:
+			var x := roundf(f * size.x)
+			if x + tick_width * 0.5 < span.x or x - tick_width * 0.5 > span.y:
+				xs.append(x)
+		return xs
 
 	func _draw() -> void:
 		var h := size.y * tick_len
-		for f in ticks:
-			var x := roundf(f * size.x)
+		for x in drawn_tick_xs():
 			draw_line(Vector2(x, 0.0), Vector2(x, h), tick_color, tick_width)
 			draw_line(Vector2(x, size.y - h), Vector2(x, size.y), tick_color, tick_width)

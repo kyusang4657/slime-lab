@@ -9,7 +9,7 @@ const DEATH_GUARD := 1000
 ## 지켜볼 개체의 남은 수명 하한(틱): refresh 와 자식 단추 늘어남을 여러 번 겪도록
 const MIN_LIFE_LEFT := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 90
+const MIN_CHECKS := 91
 ## 1600×900 실험실에서 정보 창 높이(창 높이 − 위쪽 막대 최소 높이) — V07
 const LAB_HEIGHT_1600 := 900.0
 ## V07 을 재 볼 개체 수 한도
@@ -539,6 +539,23 @@ func _stage1(t, panel: InfoPanel, world: SimWorld) -> void:
 			and panel._age_bar.ticks == want_ticks and panel._age_bar.stage == st0
 			and is_equal_approx(panel._age_bar.value, float(d0.age)) and is_equal_approx(panel._age_bar.max_value, float(d0.max_age)),
 			"나이 막대: \"%s\", 눈금 %s = 단계 경계 ÷ 수명, 단계 %d" % [panel._v_age.text, panel._age_bar.ticks, st0])
+	# 눈금은 가운데 글이 차지하는 가로 구간(글 폭 + 테두리 절반 + 여백)에 그리지 않음(1단계 검증 — 1600×900 실제 화면에서 금이 글자에
+	# 닿아 '54 /¦209틱' 으로 읽혔음). 가운데(0.5)의 눈금은 빠지고 글 밖 왼쪽 눈금은 그려짐, 실제 개체의 그린 눈금은 모두 글 구간 밖
+	var ab := panel._age_bar
+	var span := ab.text_span()
+	var font := panel._v_age.get_theme_font("font")
+	var tw := font.get_string_size(panel._v_age.text, HORIZONTAL_ALIGNMENT_LEFT, -1, panel._v_age.get_theme_font_size("font_size")).x
+	var outside := true
+	for x in ab.drawn_tick_xs():
+		outside = outside and (x + ab.tick_width * 0.5 < span.x or x - ab.tick_width * 0.5 > span.y)
+	var keep := ab.ticks.duplicate()
+	var left_f := (span.x - 2.0 * ab.tick_width) / ab.size.x
+	ab.ticks = PackedFloat64Array([0.5, left_f])
+	var mid_drawn := ab.drawn_tick_xs()
+	ab.ticks = keep
+	t.check(span.y - span.x >= tw and span.x > 0.0 and span.y < ab.size.x and outside and mid_drawn.size() == 1 and mid_drawn[0] < span.x,
+			"나이 막대 눈금은 가운데 글 구간 %s(글 폭 %.0f + 테두리·여백, 막대 %.0f) 밖에만: 가운데 눈금은 빠지고 글 밖 눈금 %s 은 그림, 개체의 그린 눈금 %s" % [
+			str(span), tw, ab.size.x, str(mid_drawn), str(ab.drawn_tick_xs())])
 	var fill := panel._age_bar.get_theme_stylebox("fill") as StyleBoxFlat
 	var stage_cols: Array = UiConfig.value("slime.life_stage_colors")
 	t.check(fill != null and fill.bg_color.is_equal_approx(Color.from_string(str(stage_cols[st0]), Color.MAGENTA).darkened(InfoPanel.FILL_DARKEN)),
