@@ -3232,12 +3232,19 @@ const HAND_RING := 4
 ## 손 계산 갱신의 세계 경로에서 개체의 수명(단계 경계 = 비율 × 이 값).
 const HAND_MAX_AGE := 200
 ## 세계 번식 경로의 η 유전 검사(test_learn_genome): 부모 a 의 η[k] = A × (k + 1), 부모 b = B × (2k + 1) — 2진 소수라 float32 그대로,
-## 유전자마다 두 부모가 다르고 eta_init(0.05)·[0, eta_max] 경계와도 다름.
+## 유전자마다 두 부모가 다르고 eta_init·[0, eta_max] 경계와도 다름(첫 값 0.05·0.5, 관문 A 재조정 뒤 0.8·8.0 — 둘 다 아님).
 const INHERIT_ETA_A := 0.046875
-## 스냅숏의 학습률 유전자 범위 검사(test_learn_snapshot): 낮춘 eta_max(learn_basic 의 처음 값 0.05 보다 작게), 2진수로 정확하지 않은
+## 스냅숏의 학습률 유전자 범위 검사(test_learn_snapshot): 낮춘 eta_max(learn_basic 의 처음 값 — 기본 eta_init 0.8 — 보다 작게), 2진수로 정확하지 않은
 ## eta_max(float32 반올림이 위로 — 0.2 → 0.20000000298).
 const SNAP_LOW_ETA_MAX := 0.01
 const SNAP_F32_ETA_MAX := 0.2
+## 관계 검사 eta_init ≤ eta_max(test_learn_config): 기본 상한에 이 값을 더한 처음 값은 거부.
+const ETA_OVER_MAX := 0.5
+## 관문 A 재조정으로 고른 학습 기본값(TEST-REPORT "v0.2 관문 A 재조정" 3절 — 씨앗 1~12 의 후보 C15: η 묶음 eta_init 0.8·cost_per_eta
+## 0.0025(= 0.002 ÷ 0.8 — 틱당 학습 비용은 첫 값 그대로)·eta_max 8.0(= 10 × eta_init), 고리 감쇠 λ 0.95, 나머지는 첫 값).
+## 새 씨앗 13~24 의 관문 A 판정이 이 기본값으로 돌므로 바뀌면 test_learn_config 가 알림(바꾸려면 재조정 기록과 함께).
+const LEARN_TUNED := {"learn.eta_init": 0.8, "learn.eta_max": 8.0, "learn.cost_per_eta": 0.0025, "learn.decay": 0.95,
+	"learn.stage_mult": [1.0, 0.6, 0.3, 0.1], "learn.min_surprise": 0.2, "learn.ring_len": 8, "learn.baseline_rate": 0.05, "learn.diag_factor": "exact"}
 const INHERIT_ETA_B := 0.015625
 
 
@@ -3972,9 +3979,30 @@ func test_learn_config() -> void:
 		check(e.contains("learn.enabled") and e.contains(kv[0]), "learn.enabled 와 %s = %s 거부: %s" % [kv[0], str(kv[1]), e])
 		check(SimConfig.build("default", {kv[0]: kv[1]}).error == "", "학습 끔이면 %s = %s 는 받음(v0.1 실험 그대로)" % [kv[0], str(kv[1])])
 	check(SimConfig.build("default", {"learn.enabled": true, "brain.sharpness": 1}).error == "", "learn.enabled 와 sharpness 1 은 받음")
-	var e2 := str(SimConfig.build("default", {"learn.eta_init": 0.6}).error)
-	check(e2.contains("learn.eta_init") and e2.contains("learn.eta_max"), "eta_init 0.6 > eta_max 0.5 거부: " + e2)
-	check(SimConfig.build("default", {"learn.eta_init": 0.5}).error == "", "eta_init = eta_max 는 받음")
+	# 상한은 기본값에서 읽음(관문 A 재조정으로 0.5 → 8.0 — 예전 검사는 0.6 > 0.5 를 박아 둬 기본 상한이 바뀌면 거부를 보지 못함)
+	var emax := float(cfg_with().learn.eta_max)
+	var e2 := str(SimConfig.build("default", {"learn.eta_init": emax + ETA_OVER_MAX}).error)
+	check(e2.contains("learn.eta_init") and e2.contains("learn.eta_max"), "eta_init %s > eta_max %s(기본) 거부: %s" % [str(emax + ETA_OVER_MAX), str(emax), e2])
+	check(SimConfig.build("default", {"learn.eta_init": emax}).error == "", "eta_init = eta_max(%s) 는 받음" % str(emax))
+	# 기본값 = 관문 A 재조정으로 고른 값(LEARN_TUNED)
+	var cd := cfg_with()
+	var off_tuned: Array[String] = []
+	for k: String in LEARN_TUNED:
+		var want = LEARN_TUNED[k]
+		var have = cd[k.get_slice(".", 0)][k.get_slice(".", 1)]
+		var same := false
+		if typeof(want) == TYPE_ARRAY:
+			same = typeof(have) == TYPE_ARRAY and have.size() == want.size()
+			if same:
+				for j in want.size():
+					same = same and float(have[j]) == float(want[j])
+		elif typeof(want) == TYPE_STRING:
+			same = str(have) == want
+		else:
+			same = float(have) == float(want)
+		if not same:
+			off_tuned.append("%s = %s(조정 값 %s)" % [k, str(have), str(want)])
+	check(off_tuned.is_empty(), "학습 기본값 = 관문 A 재조정으로 고른 값(%d키 — 다른 키: %s)" % [LEARN_TUNED.size(), ", ".join(off_tuned)])
 	check(SimConfig.CHOICES["learn.diag_factor"] == [SimBrain.DIAG_EXACT, SimBrain.DIAG_NONE] and str(cfg_with().learn.diag_factor) == SimBrain.DIAG_EXACT,
 			"learn.diag_factor 고를 값 = SimBrain.DIAG_*, 기본 exact")
 	for bad in [["learn.diag_factor", "Exact"], ["learn.stage_mult", [1.0, 0.5, 0.2]], ["learn.stage_mult", [1.0, 0.5, 0.2, 1.5]],

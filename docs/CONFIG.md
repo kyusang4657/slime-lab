@@ -166,13 +166,13 @@
 | `learn.enabled` | 평생 학습 | `false` | 참·거짓 | true / false (검사) | 켜면 개체마다 출력층 행동 8행의 '배운 두뇌'를 따로 들고 보상 조절 학습으로 고치고, 행동 행마다 학습률 유전자(eta)를 유전체 끝에 붙임(유전자 163 → 171). 배운 두뇌는 유전되지 않음(DESIGN-v0.2 3절). brain.policy = "sample"·brain.think_every = 1·brain.sharpness 1 이상이어야 함(검사). 유전체 길이가 바뀌므로 저장한 실험을 이어 돌리며 바꿀 수 없음 |
 | `learn.freeze` | 학습 멈춤 | `false` | 참·거짓 | true / false (검사) | 켜면 판단 고리와 기준선은 채우지만 배운 두뇌를 고치지 않음. 학습 비용은 그대로 냄 — 관문 A 의 대조(DESIGN-v0.2 14.3) |
 | `learn.ring_len` | 고리 길이 | `8` | 판단 수 | 1~32 (검사) | 보상을 나눠 줄 최근 판단 수 H. 놀람이 클 때 고리의 판단마다 고침(방금 판단은 몫 1, 그 앞은 learn.decay, 그 앞은 learn.decay 의 제곱 …) |
-| `learn.decay` | 고리 감쇠 | `0.8` | 배수 | 0~1 (검사) | 고리에서 m 판단 전의 몫 = 이 값을 m 번 곱한 값(0.8 이면 7판단 전 0.21) |
+| `learn.decay` | 고리 감쇠 | `0.95` | 배수 | 0~1 (검사) | 고리에서 m 판단 전의 몫 = 이 값을 m 번 곱한 값(0.8 이면 7판단 전 0.21) |
 | `learn.baseline_rate` | 기준선 속도 | `0.05` | 비율 | 0 초과 ~ 1 (검사) | 기준선 b ← b + 이 값 × (보상 - b). 보상에서 기준선을 뺀 놀람으로 배움(대사 때문에 보상은 거의 늘 음수라) |
 | `learn.min_surprise` | 놀람 문턱 | `0.2` | 한입 | 0~1e6 (검사) | 놀람(보상 - 기준선)의 크기가 이 값 이상일 때만 배운 두뇌를 고침(보상 단위 = 한입 — 배고픈 개체가 한입을 다 먹으면 약 +1) |
-| `learn.eta_init` | 학습률 유전자 처음 값 | `0.05` | 학습률 | 0~100, 학습률 유전자 상한 이하 (검사) | 처음 개체(와 우연 기준의 새 유전체)의 학습률 유전자(eta) |
-| `learn.eta_max` | 학습률 유전자 상한 | `0.5` | 학습률 | 0~100 (검사) | 학습률 유전자의 범위 [0, 이 값] — 돌연변이가 이 범위로 자름 |
+| `learn.eta_init` | 학습률 유전자 처음 값 | `0.8` | 학습률 | 0~100, 학습률 유전자 상한 이하 (검사) | 처음 개체(와 우연 기준의 새 유전체)의 학습률 유전자(eta) |
+| `learn.eta_max` | 학습률 유전자 상한 | `8.0` | 학습률 | 0~100 (검사) | 학습률 유전자의 범위 [0, 이 값] — 돌연변이가 이 범위로 자름 |
 | `learn.mutation_scale_eta` | 학습률 유전자 돌연변이 배율 | `0.1` | 배수 | 0~100 (검사) | 학습률 유전자 돌연변이 크기 = mutation.sigma × 이 값 |
-| `learn.cost_per_eta` | 학습 비용 | `0.04` | 에너지/틱 | 0~1e6 (검사) | 매 틱 대사에 이 값 × (학습률 유전자 8개의 평균)을 더함(쉬기 배수 뒤라 쉬어도 줄지 않음 — 배우는 능력의 값, DESIGN-v0.2 3.6) |
+| `learn.cost_per_eta` | 학습 비용 | `0.0025` | 에너지/틱 | 0~1e6 (검사) | 매 틱 대사에 이 값 × (학습률 유전자 8개의 평균)을 더함(쉬기 배수 뒤라 쉬어도 줄지 않음 — 배우는 능력의 값, DESIGN-v0.2 3.6) |
 | `learn.stage_mult` | 단계별 학습률 배수 | `[1.0, 0.6, 0.3, 0.1]` | 배수 4개 | 어린·젊은·어른·늙은 4개, 각 0~1 (검사) | 생애 단계마다 유효 학습률 = 학습률 유전자 × 이 값(DESIGN-v0.2 2.3). 패널에서는 보기만 함(예설정·명령줄 --set 으로 바꿈) |
 | `learn.lamarck_frac` | 라마르크 몫 | `0.0` | 비율 | 0~1 (검사) | 비교용: 0 보다 크면 자식 유전체 W2 행동 행에 이 값 × 부모의 (배운 - 타고난) 평균을 더함(기본 0 = 배운 두뇌는 유전되지 않음, DESIGN-v0.2 3.7). 우연 기준(repro.inherit = random)·학습 끔에서는 쓰지 않음 |
 | `learn.diag_factor` | 갱신 보정 | `"exact"` | 글자 | "exact" / "none" (검사) | 고른 행동의 갱신 보정 e: exact = (1 - 고른 확률) × brain.sharpness × d(출력) — 출력이 포화될수록 덜 고침, none = 1 - 고른 확률(비교용, DESIGN-v0.2 3.5). 패널에서는 보기만 함 |
@@ -242,5 +242,5 @@
 | `fast_civ` | 빠른 문명 | `discovery.forage_threshold` = `280`, `discovery.store_threshold` = `30.0`, `discovery.region_size` = `16`, `discovery.farm_radius` = `16`, `discovery.farm_threshold` = `15` | 연구용: 씨앗 12개 중 11개는 발견이 진화 도중에 열림(씨앗 7 은 첫 세대 폭발로 2세대 안에 채집·저장·농사), 씨앗 1~12 모두 100세대 안에 농사(중앙값 14.3세대 — 규칙 고침 뒤 다시 잼, 씨앗 1·7 은 농사 뒤 멸종). 근거·씨앗별 결과는 docs/TUNING-fast_civ.md |
 | `demo_fast` | 시연·검사용(아주 빠른 발견) | `discovery.forage_threshold` = `120`, `discovery.store_threshold` = `30.0`, `discovery.farm_threshold` = `8` | 예전 fast_civ 값. 씨앗 1~12 의 농사 중앙값 2.3세대(대부분 첫 세대 폭발), 씨앗 1 은 13.2세대(1,037틱) — 그래프·연대기 캡처는 씨앗 1, 농사 장면 캡처(ui_driver·map_capture·perf_capture)는 씨앗 11 |
 | `no_resources` | 자원 없음 | `resources.scale` = `0.0`, `plants.initial_fill` = `0.0` | — |
-| `learn_basic` | 학습·성장(1단계) | `learn.enabled` = `true`, `body.grow_enabled` = `true` | 연구용(v0.2 1단계): 평생 학습(배운 두뇌·학습률 유전자)과 몸 자람을 켬(docs/DESIGN-v0.2.md 2·3절). 관문 A-2 의 세계. 값은 모두 첫 값(조정 전) |
+| `learn_basic` | 학습·성장(1단계) | `learn.enabled` = `true`, `body.grow_enabled` = `true` | 연구용(v0.2 1단계): 평생 학습(배운 두뇌·학습률 유전자)과 몸 자람을 켬(docs/DESIGN-v0.2.md 2·3절). 관문 A-2 의 세계. 학습 값은 관문 A 재조정(씨앗 1~12 — docs/TEST-REPORT.md "v0.2 관문 A 재조정")으로 고친 기본값(학습률 유전자 처음 값 0.8·상한 8·비용 0.0025, 고리 감쇠 0.95), 나머지는 첫 값 |
 | `chance_baseline` | 우연 기준(유전 없음) | `repro.inherit` = `"random"` | 연구용 대조: 자식이 부모와 상관없는 새 무작위 두뇌를 받아 진화가 없음(docs/DESIGN-v0.2.md 11.3). 문명 지표(행동 비율 등)는 같은 틱의 이 기준과의 차이로 봄. 오래 살지 못함: 씨앗 1~12 모두 469~663틱에 멸종(0단계 기준선, docs/TEST-REPORT.md) — 같은 틱으로 견줄 수 있는 것은 처음 약 600틱. 관문 A-1 의 세계는 이 예설정에 학습·몸 자람을 켠 것(analyze.py gate-a — docs/ANALYSIS.md) |
