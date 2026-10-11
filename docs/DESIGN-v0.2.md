@@ -849,7 +849,7 @@ v0.1 22열(sim_recorder.gd:7-11)의 순서·값·뜻은 그대로 두고, v0.2 �
 15. 상대 성능 ≤ 12.5 의 1단계 한도, µs 기록.
 16. `test_static_rules`.
 
-**구현(1단계) 메모 — 검사 이름(sim 몫):** 기준 1 `test_v01_golden`·`test_learn_genome`(번식 1번당 `rng_life` 뽑기 176 = v0.1, 켬 192), 2 `test_learn_genome`, 3 `test_learn_update_hand`(2진 소수 손 계산 + `act_once` 로 돈 세계 경로 = 정적 함수), 4 `test_learning_picks`, 5 `test_learn_clamp`, 6 `test_learn_ledger`, 7 `test_learn_snapshot`, 8 `test_world_think_matches`, 9 `test_body_growth`, 10 `test_life_stage`, 11 `test_lamarck`, 12 `test_learn_freeze`, 13 `test_learn_config`, 14 `test_reset_learned`, 15 `test_performance_relative`(한도 1.33 — 12.5), 16 `test_static_rules`. 시계열 1단계 10열·계통 4열은 9.3·9.4 그대로 붙였고(`SimRecorder.STAGE1_COLUMNS`·`LIFE_STAGE_COLUMNS`, `analyze.py` 손 사본도), 열 이름 확정·`gate-a`·`baldwin`·화면은 기록·화면 몫입니다.
+**구현(1단계) 메모 — 검사 이름(sim 몫):** 기준 1 `test_v01_golden`(꺼진 장치의 다른 키만 바꾼 세계도 금 값)·`test_learn_genome`(번식 1번당 `rng_life` 뽑기 176 = v0.1, 켬 192), 2 `test_learn_genome`, 3 `test_learn_update_hand`(2진 소수 손 계산 + `act_once` 로 돈 세계 경로 = 정적 함수), 4 `test_learning_picks`, 5 `test_learn_clamp`, 6 `test_learn_ledger`, 7 `test_learn_snapshot`, 8 `test_world_think_matches`, 9 `test_body_growth`, 10 `test_life_stage`, 11 `test_lamarck`, 12 `test_learn_freeze`, 13 `test_learn_config`, 14 `test_reset_learned`, 15 `test_performance_relative`(한도 1.33 — 12.5), 16 `test_static_rules`. 시계열 1단계 10열·계통 4열은 9.3·9.4 그대로 붙였고(`SimRecorder.STAGE1_COLUMNS`·`LIFE_STAGE_COLUMNS`, `analyze.py` 손 사본도), 열 이름 확정·`gate-a`·`baldwin`·화면은 기록·화면 몫입니다.
 
 ### 14.3 관문 A — 배우는 슬라임이 실제로 더 잘하나
 사용자 기준: "배우는 슬라임이 두뇌를 고정한 슬라임(같은 씨앗)보다 한 생애 안에서 실제로 더 잘하나 — 먹은 양·생존·번식, 우연 기준과의 차이로". 고정한 쪽은 `learn.freeze = true`(학습 비용은 냄)이고, 학습을 아예 끈 세계는 비용까지 뺀 셋째 행으로 함께 적습니다.

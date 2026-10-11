@@ -2701,6 +2701,9 @@ const V01_GOLDEN := [
 	["argmax·판단 3틱·혼자 분열·씨앗 7·1,000틱", "default", {"brain.policy": "argmax", "brain.think_every": 3, "repro.asexual_when_alone": true}, 7, 1000,
 		"44929f8442f0bc95835cbe214be4d878570dcf6b24f019d6c7d1686e1b7c4691", "110bf754b763d49953b632e10659e865870ec9972bdc8e4611e215d135baa5d8", false],
 ]
+## 꺼진 1단계 장치(learn.enabled·body.grow_enabled 끔)의 다른 키와 생애 단계 비율: 바꿔도 역사에 닿지 않아야 함(금 값 그대로 — 14.2 검사 기준 1).
+const V01_OFF_KEYS := {"learn.freeze": true, "learn.cost_per_eta": 1.0, "learn.lamarck_frac": 1.0, "learn.ring_len": 3, "learn.diag_factor": "none",
+	"learn.stage_mult": [0.5, 0.5, 0.5, 0.5], "body.birth_size_frac": 0.2, "life.adult_frac": 0.1, "life.old_frac": 0.2}
 ## v0.1.0 실행기로 만든 스냅숏(--seed=42 --max-ticks=200 의 final.snapshot.json, DESIGN-v0.1 8.3 예시와 같은 실행)과,
 ## 그것을 열어 100틱 이어 돌린 역사 해시·22열 SHA-256(연 틱 줄부터 — 기록 방식은 위와 같음).
 const V01_FIXTURE := "res://tests/fixtures/v0.1.0-seed42-t200.snapshot.json"
@@ -2757,6 +2760,13 @@ func test_v01_golden() -> void:
 		var sha := csv_of(rec.rows, V01_TIMESERIES_COLUMNS).sha256_text()
 		check(wd.history_hash == g[5] and sha == g[6], "금 값 %s: 역사 해시 %s(금 %s), 22열 SHA-256 %s(금 %s)" % [g[0],
 				wd.history_hash.substr(0, 12), str(g[5]).substr(0, 12), sha.substr(0, 12), str(g[6]).substr(0, 12)])
+	# 꺼진 1단계 장치의 키만 바꾼 세계(학습·몸 자람 끔 — DESIGN-v0.2 14.2 검사 기준 1): 금 값 2번(기본·씨앗 11·1,500틱) 그대로
+	var g2: Array = V01_GOLDEN[1]
+	var wo := world(V01_OFF_KEYS, g2[3], g2[1])
+	var reco := record_until(wo, g2[4])
+	var sha_o := csv_of(reco.rows, V01_TIMESERIES_COLUMNS).sha256_text()
+	check(wo.history_hash == g2[5] and sha_o == g2[6], "꺼진 장치의 키만 바꾼 세계(%s): 금 값 %s 그대로(해시 %s, 22열 %s)" % [
+			", ".join(PackedStringArray(V01_OFF_KEYS.keys())), g2[0], wo.history_hash.substr(0, 12), sha_o.substr(0, 12)])
 	var r := SimSnapshot.from_text(FileAccess.get_file_as_string(V01_FIXTURE))
 	check(r.error == "" and r.world != null, "v0.1.0 픽스처가 열림: " + str(r.error))
 	if r.world != null:
