@@ -50,7 +50,7 @@ Godot 4.4.1 · GDScript · 오프라인 · 서버·로그인·광고·결제·�
 
 **조작:** 끌기 = 이동, 휠 = 확대·축소, 오른쪽 끌기 = 회전, 클릭 = 슬라임 고르기(비교 모드에서는 누른 지도의 실험) · 스페이스 = 멈춤, 1~7 = 속도(1·2·4·8·16·32·64배), F = 따라가기(죽어 기록만 남은 개체는 "죽은 개체는 따라갈 수 없습니다"), Home(또는 0) = 모든 지도 전체 보기(지도 위 "전체 보기" = 그 지도만), Esc = 선택 해제 · Ctrl(맥은 Cmd)+N = 새 실험(비교 모드면 나란히 시작), Ctrl+S = 스냅숏 저장, Ctrl+O = 열기, Ctrl+E = 내보내기 · 아무것도 초점이 없을 때 Tab = 실험 조건 패널 첫 칸, 단추·고르기 상자는 Tab 으로 옮겨 가고 Enter = 누름(스페이스는 그대로 멈춤). 글 칸(씨앗·숫자)에 입력 중이면 단축키는 동작하지 않고(Ctrl 단축키는 됨), Enter = 확정, Esc = 입력 취소. 그래프 위 마우스 = 값 읽기, 연대기 줄 클릭 = 그 시점·행위자(이 둘은 마우스 전용). 위쪽 막대 오른쪽에 "목표 N배 / 실제 M배"(실제는 벽시계로 잼 — 따라가면 정확히 목표 배속, 시뮬레이션이 프레임 예산에 걸리거나 화면이 아주 느려 실제가 목표의 90% 아래면 경고 색).
 
-설계와 이유: [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) · 설정 키 설명서: [`docs/CONFIG.md`](docs/CONFIG.md) · 화면이 쓰는 시뮬레이션 API: [`docs/SIM-API.md`](docs/SIM-API.md) · 화면 구성 요소 계약: [`docs/VIEW-API.md`](docs/VIEW-API.md) · 여러 실행 분석: [`docs/ANALYSIS.md`](docs/ANALYSIS.md) · `fast_civ` 조정 근거: [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md) · 검수: [`docs/TEST-REPORT.md`](docs/TEST-REPORT.md)
+설계와 이유: [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) · 다음 판 설계(배우고 물려주며 문명을 개척하는 슬라임, 구현 전): [`docs/DESIGN-v0.2.md`](docs/DESIGN-v0.2.md) · 설정 키 설명서: [`docs/CONFIG.md`](docs/CONFIG.md) · 화면이 쓰는 시뮬레이션 API: [`docs/SIM-API.md`](docs/SIM-API.md) · 화면 구성 요소 계약: [`docs/VIEW-API.md`](docs/VIEW-API.md) · 여러 실행 분석: [`docs/ANALYSIS.md`](docs/ANALYSIS.md) · `fast_civ` 조정 근거: [`docs/TUNING-fast_civ.md`](docs/TUNING-fast_civ.md) · 검수: [`docs/TEST-REPORT.md`](docs/TEST-REPORT.md)
 
 ## 실행
 
