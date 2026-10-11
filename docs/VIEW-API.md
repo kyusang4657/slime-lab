@@ -528,7 +528,7 @@ func run(t) -> void:
 | 멤버 | 뜻 |
 |---|---|
 | `func set_color_mode(m: int) -> void` · `var color_mode` · `COLOR_LINEAGE`·`COLOR_LIFE_STAGE`·`COLOR_LEARNED`·`COLOR_MODE_NAMES` | 슬라임 색 방식: 계통 색(기본, 예전 그대로 — `Color.from_hsv(lin_hue, ui.slime.saturation, ui.slime.value)`) · 생애 단계(`ui.slime.life_stage_colors[life_stage_of(i)]`) · 배운 양(`learned_color(learned_amount_of(i))`). 밤 밝힘 배수는 셋 모두 곱함. 세계를 다시 붙여도 방식은 그대로, 모르는 번호는 계통 색 |
-| `func learned_color(v) -> Color` · `func life_stage_color(stage) -> Color` | 배운 양 색: `ui.slime.learned_colors` 띠(sRGB 선형 보간)를 0 ~ `ui.slime.learned_full`(0.08 — learn_basic 300~1,800틱 개체 평균 약 0.03, 90% 약 0.06~0.07, 가장 큰 값 약 0.14) 에 고르게, 넘으면 끝 색 |
+| `func learned_color(v) -> Color` · `func life_stage_color(stage) -> Color` | 배운 양 색: `ui.slime.learned_colors` 띠(sRGB 선형 보간)를 0 ~ `ui.slime.learned_full`(0.08 — learn_basic 300~1,800틱 개체 평균 약 0.03, 90 백분위 약 0.05~0.07, 가장 큰 값 약 0.14) 에 고르게, 넘으면 끝 색 |
 | `func slime_instance_color(k) -> Color` | (검사용) k 번째 슬라임 인스턴스의 칠한 색 |
 
 - 배운 양은 개체마다 행동 × 은닉 번 빼기(약 7µs — 250마리면 약 2ms)라 프레임마다 다시 재지 않고 `ui.map.learned_refresh_ticks`(10)틱마다(세계가 되돌아가면 바로) 잰 값을 id 로 맞춘다(그사이 태어난 개체는 0 — 태어날 때 배운 두뇌 = 타고난). 배운 양 색 슬라임 갱신 평균 약 0.7ms/프레임(216마리, 헤드리스 — `map_checks` 가 출력).
