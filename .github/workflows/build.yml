@@ -67,6 +67,8 @@ jobs:
           ./godot --headless --path . --script res://tests/run_experiment.gd -- --seed=1 --generations=100 --out=results/ci --quiet 2>&1 | tee "$RUNNER_TEMP/t2.log" | tail -1
           # 줄 끝까지 맞춘다: 결과 파일 쓰기 실패면 RESULT 끝에 " write_failed=…" 가 붙고 종료 코드 3
           grep -q "^RESULT: .*reason=generations$" "$RUNNER_TEMP/t2.log"
+          # v0.1 금 값(DESIGN-v0.2 12.1): 새 장치를 모두 끈 기본 세계는 씨앗 1·100세대(6,391틱)에서 이 역사 해시
+          grep -q "hash=171a3a4f1a5f " "$RUNNER_TEMP/t2.log"
           if grep -nE "SCRIPT ERROR|^ERROR:" "$RUNNER_TEMP/t2.log"; then exit 1; fi
 
       - uses: actions/upload-artifact@v6

@@ -321,8 +321,10 @@ class TestWorkflowShape(unittest.TestCase):
 # ───────────────────────── 2. test 잡 단계를 실제로 돌리기 ─────────────────────────
 
 FAKE_GODOT = '#!/usr/bin/env bash\nprintf "%b" "${FAKE_OUT:-}"\nexit "${FAKE_RC:-0}"\n'
-GOOD_RESULT = ("RESULT: seed=1 generations=100.0 ticks=6690 pop=105 civ=2(저장) hash=713cea4dea1d time=24.4s "
+GOOD_RESULT = ("RESULT: seed=1 generations=100.0 ticks=6391 pop=117 civ=3(농사) hash=171a3a4f1a5f time=20.6s "
                "reason=generations\\n")
+# 100세대 단계가 견주는 v0.1 금 값 해시(DESIGN-v0.2 12.1 — tests/run_tests.gd V01_GOLDEN 1번의 앞 12자)
+GOLDEN_HASH12 = "171a3a4f1a5f"
 
 
 class TestWorkflowSteps(unittest.TestCase):
@@ -345,6 +347,8 @@ class TestWorkflowSteps(unittest.TestCase):
             "쓰기 실패 꼬리만(종료 코드 0)": (failed_tail, 0),
             "종료 코드만 3": (GOOD_RESULT, 3),
             "엔진 ERROR 줄": ("ERROR: 파일을 쓸 수 없습니다: results/ci/summary.json\\n" + GOOD_RESULT, 0),
+            "역사 해시가 금 값과 다름": (GOOD_RESULT.replace(GOLDEN_HASH12, "713cea4dea1d"), 0),
+            "해시 글자가 금 값으로 시작만 함": (GOOD_RESULT.replace(GOLDEN_HASH12, GOLDEN_HASH12 + "0"), 0),
         }
         for name, (out, rc) in cases.items():
             with self.subTest(name):

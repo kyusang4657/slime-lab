@@ -95,6 +95,7 @@ func _init() -> void:
 		"test_child_energy_cap", "test_store_built_in_act", "test_spoil_lifetime", "test_growth_interval",
 		"test_farm_abandon_any_growth", "test_light_curve", "test_store_not_on_farm", "test_action_names", "test_harsh_winter",
 		"test_farm_rule_values", "test_civ_rule_values", "test_runner_guards",
+		"test_v01_golden",
 	]
 	# --only 의 이름은 모두 있는 검사여야 한다(J15): 오타 난 이름을 말없이 빼고 '0개·0 failed·종료 코드 0' 으로 끝나지 않게
 	var unknown := PackedStringArray()
@@ -2516,6 +2517,90 @@ func test_civ_rule_values() -> void:
 	w4.s_dead[i4] = SimWorld.CAUSE_STARVED
 	w4._remove_dead()
 	check(w4.population() == 0 and w4.dropped[c4] == 4.0 and w4.drop_listed[c4] == 1, "굶어 죽은 개체의 운반분 4 → 그 칸 바닥 먹이 %.1f" % w4.dropped[c4])
+	done()
+
+
+# ───────────────────────── v0.2 0단계: 관찰 바닥(DESIGN-v0.2 14.1) ─────────────────────────
+
+## v0.1 금 값(DESIGN-v0.2 12.1): 0단계 코드를 바꾸기 전에 v0.1.0 코드(3830afb — 시뮬레이션은 3e53998 그대로)로 잰 값.
+## [이름, 예설정, 덮어쓰기, 씨앗, 틱, 역사 해시(64자), timeseries.csv 의 v0.1 22열 글의 SHA-256, 느린 검사]. 기록 방식은 실행기와 같다
+## (틱 0 줄, record.every 배수마다, 끝 줄 — 1번의 SHA-256 = 실행기 --seed=1 --generations=100 의 timeseries.csv 에서 BOM 을 뗀 글).
+## 1~5 는 sample 정책·판단 1틱마다·혼자 분열 끔이고, 6 이 판단하지 않은 틱의 되풀이·argmax·혼자 분열(b == i)을 덮는다
+## (279틱에 멸종 — 그 전에 출생 115, 그 가운데 혼자 분열 78). 새 장치를 모두 끈 세계는 모든 단계에서 이 값 그대로여야 한다.
+const V01_GOLDEN := [
+	["S19 기본·씨앗 1·6,391틱(평균 100세대)", "default", {}, 1, 6391,
+		"171a3a4f1a5ff834851c008ef1b33f17d1f671cd8bb7b857d0a330f75450eb6d", "aeb65cb0b94f978422fb037061ba4196d5e03124995ba97347ca490f8ed88d18", true],
+	["기본·씨앗 11·1,500틱", "default", {}, 11, 1500,
+		"77d84598c4996b24c322738ad1ea6bafbfacd4005bdf13f054b30123f7719932", "cd64b7d887354be1e64de073e785ccd35e5415308ac6e0fc203e2a2f21dba62f", false],
+	["demo_fast·씨앗 2·1,000틱(밭 단계)", "demo_fast", {}, 2, 1000,
+		"879c26462ba33b36281f79d9a6d6fd92fe4ea4ebba2a6699b62ac584c26845d3", "5c66fd7fcd187dcf84ec51c626174003c9a644b77fe17eb6b401ec570477b4d1", false],
+	["기억 2·씨앗 5·1,000틱", "default", {"brain.memory_units": 2}, 5, 1000,
+		"6d91774daed66cc417c96f5086a5b3bebd78577bd66c8f0e322c72c4ba247153", "b0e8c0a246babb4277016ffb9d79ab7519e4c0f86498b7518ae984d4be67ec23", false],
+	["fast_civ·씨앗 1·3,400틱", "fast_civ", {}, 1, 3400,
+		"88a400eb539b2cc17e0d270f56da0d40da646a794fbf7d3cb77dd5283fa302eb", "f4ef868cb786007b3494fe67e4302d82f00740c2e21a096663ba46adadb025b3", true],
+	["argmax·판단 3틱·혼자 분열·씨앗 7·1,000틱", "default", {"brain.policy": "argmax", "brain.think_every": 3, "repro.asexual_when_alone": true}, 7, 1000,
+		"44929f8442f0bc95835cbe214be4d878570dcf6b24f019d6c7d1686e1b7c4691", "110bf754b763d49953b632e10659e865870ec9972bdc8e4611e215d135baa5d8", false],
+]
+## v0.1.0 실행기로 만든 스냅숏(--seed=42 --max-ticks=200 의 final.snapshot.json, DESIGN-v0.1 8.3 예시와 같은 실행)과,
+## 그것을 열어 100틱 이어 돌린 역사 해시·22열 SHA-256(연 틱 줄부터 — 기록 방식은 위와 같음).
+const V01_FIXTURE := "res://tests/fixtures/v0.1.0-seed42-t200.snapshot.json"
+const V01_FIXTURE_TICKS := 100
+const V01_FIXTURE_GOLDEN: Array[String] = [
+	"6bd975acd1c93346dc0ecc07569cd44c71e2757c37d6d5f1c1454c67e9b0ac2d", "09419527150c16c265a4ec4811f2d10a080fbd154b19bcf259c91548e95dc56d",
+]
+## v0.1 의 timeseries.csv 22열(순서 그대로 — v0.2 의 열은 이 뒤에 붙음, DESIGN-v0.2 9.3). 금 값의 사영은 이 열만 잇는다.
+const V01_TIMESERIES_COLUMNS: Array[String] = [
+	"tick", "day", "season", "light", "population", "births", "deaths", "mean_gen", "mean_energy",
+	"mean_size", "mean_sense", "mean_age", "food_total", "dropped_total", "stored_total", "carry_total",
+	"civ_stage", "storehouses", "farms", "forage_attempts", "store_drops", "farm_sprouts",
+]
+
+
+## 실행기와 같은 방식으로 기록하며 wd 를 틱 until 까지 돌린다(지금 틱 줄, record.every 배수마다, 끝 줄). 기록기를 돌려준다.
+static func record_until(wd: SimWorld, until: int) -> SimRecorder:
+	var rec := SimRecorder.new()
+	rec.record(wd)
+	while wd.tick < until:
+		wd.step()
+		if wd.tick % int(wd.cfg.record.every) == 0:
+			rec.record(wd)
+	if int(rec.rows.back().tick) != wd.tick:
+		rec.record(wd)
+	return rec
+
+
+## 기록 줄들을 cols 열만으로 이은 CSV 글(SimRecorder.timeseries_csv 와 같은 꼴 — BOM 없음).
+static func csv_of(rows: Array, cols: Array[String]) -> String:
+	var lines := PackedStringArray([",".join(cols)])
+	for r in rows:
+		var cells := PackedStringArray()
+		for c in cols:
+			cells.append(SimRecorder.fmt(r[c]))
+		lines.append(",".join(cells))
+	return "\n".join(lines) + "\n"
+
+
+## 새 장치를 모두 끈 세계 = v0.1 금 값(역사 해시와 22열 사영의 SHA-256), v0.1.0 픽스처가 열리고 이어 돌린 값도 금 값.
+## --skip-slow 면 느린 두 실행(S19·fast_civ 3,400틱)은 건너뜀(S19 는 CI 의 100세대 단계가 실행기 해시로도 봄).
+func test_v01_golden() -> void:
+	check(SimRecorder.TIMESERIES_COLUMNS.slice(0, V01_TIMESERIES_COLUMNS.size()) == V01_TIMESERIES_COLUMNS,
+			"timeseries.csv 의 앞 %d열 = v0.1 열(이름·순서 그대로)" % V01_TIMESERIES_COLUMNS.size())
+	for g in V01_GOLDEN:
+		if g[7] and _skip_slow:
+			continue
+		var wd := world(g[2], g[3], g[1])
+		var rec := record_until(wd, g[4])
+		var sha := csv_of(rec.rows, V01_TIMESERIES_COLUMNS).sha256_text()
+		check(wd.history_hash == g[5] and sha == g[6], "금 값 %s: 역사 해시 %s(금 %s), 22열 SHA-256 %s(금 %s)" % [g[0],
+				wd.history_hash.substr(0, 12), str(g[5]).substr(0, 12), sha.substr(0, 12), str(g[6]).substr(0, 12)])
+	var r := SimSnapshot.from_text(FileAccess.get_file_as_string(V01_FIXTURE))
+	check(r.error == "" and r.world != null, "v0.1.0 픽스처가 열림: " + str(r.error))
+	if r.world != null:
+		var fw: SimWorld = r.world
+		var rec2 := record_until(fw, fw.tick + V01_FIXTURE_TICKS)
+		var sha2 := csv_of(rec2.rows, V01_TIMESERIES_COLUMNS).sha256_text()
+		check(fw.history_hash == V01_FIXTURE_GOLDEN[0] and sha2 == V01_FIXTURE_GOLDEN[1],
+				"v0.1.0 픽스처에서 %d틱 이어 돌린 해시 %s·22열 SHA-256 %s = 금 값" % [V01_FIXTURE_TICKS, fw.history_hash.substr(0, 12), sha2.substr(0, 12)])
 	done()
 
 
