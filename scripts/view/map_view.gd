@@ -14,6 +14,9 @@ extends Node3D
 ## LabMain 은 step() 마다 그 직전에 before_steps() 를 불러 기억이 지금 틱의 한 틱 전이 되게 하고,
 ## 기억이 두 틱 이상 낡았으면(한 번만 부르고 여러 틱 진행) 보간하지 않고 지금 칸에 그린다.
 ## 겹친 개체의 둘레 자리(겹침 배치·저장고 문 앞)도 이전 틱 자리에서 지금 자리로 함께 보간한다.
+## 슬라임 색 방식(v0.2 1단계, DESIGN-v0.2 10절 — set_color_mode): 계통 색(기본, 예전 그대로)·생애 단계(world.life_stage_of)·
+## 배운 양(world.learned_amount_of — 개체마다 행동 × 은닉 번 빼기라 ui.map.learned_refresh_ticks 틱마다만 다시 잼).
+## 몸 크기는 늘 s_size(몸 자람을 켜면 어린 개체가 작게).
 
 signal slime_clicked(id: int)
 
@@ -52,8 +55,15 @@ const SIDE_EPS := 0.001
 const VOLUME_EXP := -0.5
 ## 고리 메시 바깥 반지름(SlimeGeo.ring_mesh, 배율 1). 화면 최소 크기를 반지름으로 바꿀 때 쓴다.
 const RING_OUTER := 1.0
+## 슬라임 색 방식 번호(set_color_mode)와 화면 이름(번호가 첨자)
+const COLOR_LINEAGE := 0
+const COLOR_LIFE_STAGE := 1
+const COLOR_LEARNED := 2
+const COLOR_MODE_NAMES: Array[String] = ["계통 색", "생애 단계", "배운 양"]
 var world: SimWorld
 var follow_selected := false
+## 슬라임 색 방식 COLOR_*(set_color_mode 로 바꿈 — 세계를 다시 붙여도 그대로)
+var color_mode := COLOR_LINEAGE
 
 var _camera: OrbitCamera
 var _sun: DirectionalLight3D
@@ -138,6 +148,15 @@ var _stack_grow := 0.0
 var _stack_max := 0.0
 var _sat := 0.0
 var _val := 0.0
+# 색 방식: 생애 단계 색(단계 번호가 첨자), 배운 양 색 띠(0 ~ _learn_full 에 고르게 펼침), 배운 양을 다시 잴 틱 간격과
+# 마지막으로 잰 틱·id·값(id 오름차순 — 슬라임 배열과 두 포인터로 맞춤, 그사이 태어난 개체는 0)
+var _stage_cols := PackedColorArray()
+var _learn_cols := PackedColorArray()
+var _learn_full := 1.0
+var _learn_every := 1
+var _learn_tick := -1
+var _learn_ids := PackedInt32Array()
+var _learn_vals := PackedFloat64Array()
 var _radius := 0.0
 var _click_px := 0.0
 var _focus_dist := 0.0
@@ -373,6 +392,14 @@ func _load_ui() -> void:
 	_stack_max = stack_max()
 	_sat = UiConfig.num("slime.saturation")
 	_val = UiConfig.num("slime.value")
+	_stage_cols = PackedColorArray()
+	for c in UiConfig.value("slime.life_stage_colors", []):
+		_stage_cols.append(Color.from_string(str(c), Color.MAGENTA))
+	_learn_cols = PackedColorArray()
+	for c in UiConfig.value("slime.learned_colors", []):
+		_learn_cols.append(Color.from_string(str(c), Color.MAGENTA))
+	_learn_full = maxf(UiConfig.num("slime.learned_full"), 0.000001)
+	_learn_every = maxi(1, UiConfig.integer("map.learned_refresh_ticks"))
 	_radius = UiConfig.num("slime.radius")
 	_click_px = UiConfig.num("camera.click_threshold_px")
 	_focus_dist = UiConfig.num("camera.focus_distance")
@@ -600,6 +627,7 @@ func bind(w: SimWorld) -> void:
 	_terrain_pass = false
 	_plant_pass = false
 	_offsets_tick = -1
+	_learn_tick = -1
 	_last_stores = PackedInt32Array()
 	_last_farms = PackedInt32Array()
 	_store_mask = PackedByteArray()
@@ -1532,6 +1560,14 @@ func _update_slimes(alpha: float) -> void:
 	# 밤에는 슬라임 색을 조금 밝혀 어둠 속에서도 계통 색이 읽히게
 	var gain := lerpf(_night_boost, 1.0, clampf(world.light, 0.0, 1.0))
 	var stage := world.stage
+	# 색 방식(계통 색이 아니면): 배운 양은 learned_refresh_ticks 틱마다 다시 잰 값을 id 로 맞춤
+	var mode := color_mode
+	if mode == COLOR_LEARNED:
+		_refresh_learned()
+	var lids := _learn_ids
+	var lvals := _learn_vals
+	var ln := lids.size()
+	var lj := 0
 	_sel_found = false
 	for i in n:
 		var id := ids[i]
@@ -1594,7 +1630,15 @@ func _update_slimes(alpha: float) -> void:
 		buf[o + 9] = 0.0
 		buf[o + 10] = co * wide
 		buf[o + 11] = wz
-		var col := Color.from_hsv(hue[id], _sat, _val)
+		var col: Color
+		if mode == COLOR_LIFE_STAGE:
+			col = _stage_cols[world.life_stage_of(i)]
+		elif mode == COLOR_LEARNED:
+			while lj < ln and lids[lj] < id:
+				lj += 1
+			col = learned_color(lvals[lj] if lj < ln and lids[lj] == id else 0.0)
+		else:
+			col = Color.from_hsv(hue[id], _sat, _val)
 		buf[o + 12] = col.r * gain
 		buf[o + 13] = col.g * gain
 		buf[o + 14] = col.b * gain
@@ -1663,6 +1707,53 @@ func slime_instance_position(k: int) -> Vector3:
 
 
 ## k 번째 슬라임 인스턴스의 축별 배율(가로 = 기저 0열 길이, 세로, 앞뒤). 크기 × 표시 배율 × 늘어남(검사용).
+## (v0.2 1단계) 슬라임 색 방식을 바꾼다(COLOR_*, 범위 밖은 계통 색). 다음 update_view 부터.
+func set_color_mode(m: int) -> void:
+	var nm := m if m >= COLOR_LINEAGE and m <= COLOR_LEARNED else COLOR_LINEAGE
+	if nm == color_mode:
+		return
+	color_mode = nm
+	_learn_tick = -1
+
+
+## 배운 양 → 색: ui.slime.learned_colors 띠를 0 ~ ui.slime.learned_full 에 고르게(넘으면 끝 색).
+func learned_color(v: float) -> Color:
+	var n := _learn_cols.size()
+	if n == 0:
+		return Color.MAGENTA
+	if n == 1:
+		return _learn_cols[0]
+	var f := clampf(v / _learn_full, 0.0, 1.0) * float(n - 1)
+	var k := mini(int(floorf(f)), n - 2)
+	return _learn_cols[k].lerp(_learn_cols[k + 1], f - float(k))
+
+
+## 생애 단계 색(ui.slime.life_stage_colors, SimBrain.LIFE_* 가 첨자).
+func life_stage_color(stage: int) -> Color:
+	return _stage_cols[stage] if stage >= 0 and stage < _stage_cols.size() else Color.MAGENTA
+
+
+## 배운 양을 다시 잼(색 방식이 배운 양일 때만 — 마지막으로 잰 뒤 learned_refresh_ticks 틱이 지났거나 세계가 되돌아갔을 때).
+func _refresh_learned() -> void:
+	var t := world.tick
+	if _learn_tick >= 0 and t >= _learn_tick and t - _learn_tick < _learn_every:
+		return
+	_learn_tick = t
+	_learn_ids = world.s_id.duplicate()
+	var n := _learn_ids.size()
+	_learn_vals.resize(n)
+	for i in n:
+		_learn_vals[i] = world.learned_amount_of(i)
+
+
+## k 번째 슬라임 인스턴스의 칠한 색(밤 밝힘 배수 포함, 검사용).
+func slime_instance_color(k: int) -> Color:
+	if k < 0 or k >= _slime_mm.instance_count:
+		return Color(0, 0, 0, 0)
+	var o := k * XFC
+	return Color(_slime_buf[o + 12], _slime_buf[o + 13], _slime_buf[o + 14], _slime_buf[o + 15])
+
+
 func slime_instance_scale(k: int) -> Vector3:
 	if k < 0 or k >= _slime_mm.instance_count:
 		return Vector3.ZERO

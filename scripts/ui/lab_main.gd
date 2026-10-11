@@ -63,6 +63,12 @@ const DOCK_LEFT := "left"
 const DOCK_BOTTOM := "bottom"
 const LEFT_TOGGLE_TEXT := "실험 조건"
 const BOTTOM_TOGGLE_TEXT := "그래프·연대기"
+## 지도 색 방식 고르기(v0.2 1단계 — 오른쪽 아래, 모든 지도에 같게): 앞 글자·말풍선, 학습 끈 실험의 '배운 양' 항목 말풍선, 범례 말풍선
+const MAP_COLOR_TEXT := "색"
+const MAP_COLOR_TIP := "지도 슬라임 색: 계통 색(색상 = 계통 표지) · 생애 단계(어린·젊은·어른·늙은) · 배운 양(평생 학습으로 바뀐 두뇌의 양)"
+const LEARNED_OFF_TIP := "배운 양: 평생 학습(learn.enabled)을 켠 실험에서만"
+const LEGEND_STAGE_TIP := "생애 단계: 성숙(repro.maturity) 전 어린, 수명 × life.adult_frac 부터 어른, × life.old_frac 부터 늙은"
+const LEGEND_LEARNED_TIP := "배운 양 = 행동 가중치의 abs(배운 - 타고난) 평균. %s 이상은 끝 색(ui.slime.learned_full), 배운 양은 %d틱마다 다시 잼"
 ## 비교 모드 실험 색(이름표 바탕): 그래프 계열 색과 같게(A 실선·B 점선과 한눈에 맞도록)
 const TAG_COLOR_KEYS: Array[String] = ["graph.series_a", "graph.series_b"]
 ## 화면 방향 화살표(카메라가 북쪽 위에서 90° 씩 돈 수만큼 밀어 씀 — 0 북 1 동 2 남 3 서 순서). 지도 나침반·정보 창 방향
@@ -199,6 +205,12 @@ var _fit_btn: Button
 var _hint: PanelContainer
 var _hint_label: Label
 var _dock_toggles: HBoxContainer
+# 지도 색 방식(MapView.COLOR_*): 고르기 상자(오른쪽 아래)·범례, 지금 방식, 학습을 켠 실험이 있나('배운 양' 항목을 켬)
+var _color_box: PanelContainer
+var _color_opt: OptionButton
+var _legend: HBoxContainer
+var _map_color := MapView.COLOR_LINEAGE
+var _any_learning := false
 var _left_toggle: Button
 var _bottom_toggle: Button
 var _toast_box: VBoxContainer
@@ -679,6 +691,7 @@ func _adopt(w: SimWorld) -> void:
 	for k in _panes.size():
 		_panes[k].map.follow_selected = false
 		_panes[k].map.bind(experiments[k].world if k < experiments.size() else null)
+	_sync_map_color()
 	_selected_index = 0
 	select_slime(-1)
 	info_panel.set_follow(false)
@@ -2103,10 +2116,18 @@ static func fit_tail(tail: String, room: float, wid: Callable, seed_shared: bool
 func _fit_hint(area: Vector2) -> void:
 	var m := UiConfig.num("lab.map_overlay_margin")
 	var room := area.x - 2.0 * m
+	# 오른쪽 아래: 접기 단추(있으면 맨 아래) 위에 지도 색 상자. 도움말은 둘 가운데 넓은 쪽의 왼쪽까지
+	var right_w := 0.0
+	var bottom := area.y - m
 	if _dock_toggles.visible:
 		_dock_toggles.reset_size()
 		_dock_toggles.position = Vector2(area.x - m - _dock_toggles.size.x, area.y - m - _dock_toggles.size.y)
-		room -= _dock_toggles.size.x + m
+		right_w = _dock_toggles.size.x
+		bottom = _dock_toggles.position.y - UiConfig.num("lab.overlay_stack_gap")
+	_color_box.reset_size()
+	_color_box.position = Vector2(area.x - m - _color_box.size.x, bottom - _color_box.size.y)
+	right_w = maxf(right_w, _color_box.size.x)
+	room -= right_w + m
 	var font := _hint_label.get_theme_font("font")
 	var fs := _hint_label.get_theme_font_size("font_size")
 	var forms: Array[String] = [MAP_HINT, HINT_MOUSE + "\n" + HINT_KEYS, HINT_MOUSE + "\n" + HINT_KEYS_A + "\n" + HINT_KEYS_B]
@@ -2138,6 +2159,127 @@ func _fit_hint(area: Vector2) -> void:
 	_hint_label.custom_minimum_size.x = maxf(0.0, minf(ceilf(natural) + 1.0, room - chrome))
 	_hint.reset_size()
 	_hint.position = Vector2(m, area.y - m - _hint.size.y)
+
+
+## (v0.2 1단계) 지도 슬라임 색 방식 MapView.COLOR_*(계통 색·생애 단계·배운 양)을 모든 지도에. 학습을 켠 실험이 없으면 배운 양은
+## 계통 색으로(항목도 꺼짐). 계통 색이 아니면 상자 아래에 범례.
+func set_map_color(mode: int) -> void:
+	var m := clampi(mode, MapView.COLOR_LINEAGE, MapView.COLOR_LEARNED)
+	if m == MapView.COLOR_LEARNED and not _any_learning:
+		m = MapView.COLOR_LINEAGE
+	_map_color = m
+	for p in _panes:
+		p.map.set_color_mode(m)
+	_color_opt.select(_color_opt.get_item_index(m))
+	_build_legend()
+	_layout_maps()
+
+
+func map_color() -> int:
+	return _map_color
+
+
+## 실험이 바뀌면(_adopt): 학습을 켠 실험이 있나 보고 '배운 양' 항목을 켜고 끈 뒤, 지금 방식을 모든 지도(새 칸 포함)에 다시.
+func _sync_map_color() -> void:
+	_any_learning = false
+	for x in experiments:
+		var w := x.world
+		if w != null and int(w.L.get("eta_len", 0)) > 0:
+			_any_learning = true
+	var li := _color_opt.get_item_index(MapView.COLOR_LEARNED)
+	_color_opt.set_item_disabled(li, not _any_learning)
+	_color_opt.set_item_tooltip(li, "" if _any_learning else LEARNED_OFF_TIP)
+	set_map_color(_map_color)
+
+
+## 지도 색 상자: "색 [계통 색 ▾]" + 범례 줄(계통 색이면 숨김). 마우스는 지도로 넘기지 않음(누르기가 슬라임 고르기가 되지 않게).
+func _build_color_box() -> void:
+	_color_box = PanelContainer.new()
+	_color_box.name = "MapColor"
+	_color_box.theme_type_variation = UiTheme.OVERLAY
+	_map_area.add_child(_color_box)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", UiConfig.integer("lab.chip_inner_gap"))
+	_color_box.add_child(col)
+	var row := _hbox(UiConfig.integer("lab.chip_inner_gap"))
+	col.add_child(row)
+	var cap := Label.new()
+	cap.text = MAP_COLOR_TEXT
+	cap.theme_type_variation = UiTheme.DIM
+	row.add_child(cap)
+	_color_opt = OptionButton.new()
+	_color_opt.name = "MapColorOption"
+	_color_opt.focus_mode = Control.FOCUS_NONE
+	_color_opt.tooltip_text = MAP_COLOR_TIP
+	_color_opt.add_theme_font_size_override("font_size", UiConfig.integer("lab.font_size_small"))
+	for m in MapView.COLOR_MODE_NAMES.size():
+		_color_opt.add_item(MapView.COLOR_MODE_NAMES[m], m)
+	_color_opt.item_selected.connect(func(idx: int) -> void: set_map_color(_color_opt.get_item_id(idx)))
+	row.add_child(_color_opt)
+	_legend = _hbox(UiConfig.integer("lab.chip_inner_gap"))
+	_legend.name = "MapLegend"
+	_legend.mouse_filter = Control.MOUSE_FILTER_PASS
+	_legend.visible = false
+	col.add_child(_legend)
+
+
+## 범례: 생애 단계 = 단계마다 색 칸 + 이름, 배운 양 = "0 [색 띠] 상한+". 계통 색이면 숨김(색상 자체가 표지라 범례가 없음).
+func _build_legend() -> void:
+	for c in _legend.get_children():
+		_legend.remove_child(c)
+		c.queue_free()
+	_legend.visible = _map_color != MapView.COLOR_LINEAGE
+	var sw := UiConfig.num("lab.legend_swatch_px")
+	var fs := UiConfig.integer("lab.font_size_small")
+	if _map_color == MapView.COLOR_LIFE_STAGE:
+		_legend.tooltip_text = LEGEND_STAGE_TIP
+		var cols: Array = UiConfig.value("slime.life_stage_colors", [])
+		for st in mini(cols.size(), SimBrain.LIFE_STAGE_NAMES.size()):
+			_legend.add_child(_legend_swatch(Color.from_string(str(cols[st]), Color.MAGENTA), sw))
+			_legend.add_child(_legend_label(SimBrain.LIFE_STAGE_NAMES[st], fs))
+	elif _map_color == MapView.COLOR_LEARNED:
+		var full := UiConfig.num("slime.learned_full")
+		var full_text := GraphView.fmt_num(full, GraphView.decimals_for(full))
+		_legend.tooltip_text = LEGEND_LEARNED_TIP % [full_text, UiConfig.integer("map.learned_refresh_ticks")]
+		_legend.add_child(_legend_label("0", fs))
+		var g := Gradient.new()
+		var lc: Array = UiConfig.value("slime.learned_colors", [])
+		var offs := PackedFloat32Array()
+		var cs := PackedColorArray()
+		for k in lc.size():
+			offs.append(float(k) / float(maxi(lc.size() - 1, 1)))
+			cs.append(Color.from_string(str(lc[k]), Color.MAGENTA))
+		g.offsets = offs
+		g.colors = cs
+		var tex := GradientTexture2D.new()
+		tex.gradient = g
+		tex.width = int(UiConfig.num("lab.legend_gradient_px"))
+		tex.height = int(sw)
+		var tr := TextureRect.new()
+		tr.name = "LegendGradient"
+		tr.texture = tex
+		tr.mouse_filter = Control.MOUSE_FILTER_PASS
+		tr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_legend.add_child(tr)
+		_legend.add_child(_legend_label(full_text + "+", fs))
+
+
+func _legend_swatch(c: Color, sw: float) -> ColorRect:
+	var r := ColorRect.new()
+	r.color = c
+	r.custom_minimum_size = Vector2(sw, sw)
+	r.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	r.mouse_filter = Control.MOUSE_FILTER_PASS
+	return r
+
+
+func _legend_label(text: String, fs: int) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.theme_type_variation = UiTheme.DIM
+	l.add_theme_font_size_override("font_size", fs)
+	l.mouse_filter = Control.MOUSE_FILTER_PASS
+	return l
 
 
 ## 위쪽 막대: [재생] [1배…64배] [빨리 감기] │ 틱·날·계절·낮밤 │ 평균 세대·개체·문명(비교 모드: [A] 개체 · 문명 │ [B] …)
@@ -2235,6 +2377,7 @@ func _build_map_overlay() -> void:
 	_map_area.add_child(_dock_toggles)
 	_left_toggle = _dock_toggle("LeftToggle", LEFT_TOGGLE_TEXT, "왼쪽 실험 조건 패널 보이기·숨기기", DOCK_LEFT)
 	_bottom_toggle = _dock_toggle("BottomToggle", BOTTOM_TOGGLE_TEXT, "아래 그래프·연대기 보이기·숨기기", DOCK_BOTTOM)
+	_build_color_box()
 
 	# 공용 알림 묶음(지도 자리 가운데 위). 비교 모드의 실험 알림은 칸마다의 묶음(_make_pane)
 	_toast_box = _make_toast_box("Toasts")

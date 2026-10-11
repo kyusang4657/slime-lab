@@ -66,9 +66,10 @@ const BRAIN_TAB_TIPS: Array[String] = [
 ## 값을 모를 때(죽은 개체의 배운 양·동화 지수, 옛 스냅숏을 연 세계의 먹은 양)
 const UNKNOWN_TEXT := "—"
 const EATEN_UNKNOWN := "모름(옛 스냅숏 전 출생)"
-## 나이 막대의 생애 단계 눈금 두께·불투명도
+## 나이 막대의 생애 단계 눈금 두께·불투명도·길이(막대 높이에 대한 몫 — 위·아래 가장자리에서만, 가운데 글자를 가로지르지 않게)
 const STAGE_TICK_W := 1.5
 const STAGE_TICK_ALPHA := 0.75
+const STAGE_TICK_LEN := 0.3
 
 ## 자식 목록을 다시 훑은 횟수(검사용: 자식 수가 그대로면 refresh 가 훑지 않는다)
 var children_scans := 0
@@ -855,6 +856,7 @@ func _build_state() -> void:
 	_age_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_age_bar.tick_color = Color(_c_text, STAGE_TICK_ALPHA)
 	_age_bar.tick_width = STAGE_TICK_W
+	_age_bar.tick_len = STAGE_TICK_LEN
 	g.add_child(_age_bar)
 	_v_age = _label("", _fs_small, _c_text, true)
 	_v_age.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1314,14 +1316,18 @@ class RelativeButton:
 
 
 ## 나이 막대(v0.2 1단계): ProgressBar(채움 = 생애 단계 색 — InfoPanel 이 fill 모양을 바꿈) 위에 단계 경계 눈금(ticks = 0~1 몫).
+## 눈금은 위·아래 가장자리의 짧은 금(tick_len × 높이)이라 가운데 글자("54 / 209틱")를 가로질러 '|' 로 읽히지 않는다.
 class AgeBar:
 	extends ProgressBar
 	var ticks := PackedFloat64Array()
 	var stage := -1
 	var tick_color := Color.WHITE
 	var tick_width := 1.5
+	var tick_len := 0.3
 
 	func _draw() -> void:
+		var h := size.y * tick_len
 		for f in ticks:
 			var x := roundf(f * size.x)
-			draw_line(Vector2(x, 0.0), Vector2(x, size.y), tick_color, tick_width)
+			draw_line(Vector2(x, 0.0), Vector2(x, h), tick_color, tick_width)
+			draw_line(Vector2(x, size.y - h), Vector2(x, size.y), tick_color, tick_width)

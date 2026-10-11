@@ -5,6 +5,8 @@ extends SceneTree
 ## 시나리오: ① 전경(기본·씨앗 1, 8배로 약 10초) ② demo_fast·씨앗 11 농사 단계 낮, 밭 가까이 자식 있는 개체 선택·카메라 맞춤
 ## ③ 같은 자리의 밤(멈춤) ④ 64배와 실제 배속 표시 ⑤ 4단계 패널 자리(혼자 실험, 자리 접기 단추 클릭)
 ## ⑥ 비교 모드(demo_fast | 기본, 1,500틱 뒤 B 지도의 개체를 실제 마우스로 고름).
+## ⑦ v0.2 1단계 학습 세계(learn_basic·씨앗 1, LEARN_TICKS 틱): 지도 색 '생애 단계'(범례), 배운 두뇌가 있는 개체를 골라 정보 창
+## 두뇌 탭 '차이' — lab-07-learn.jpg. 이어서 '배운 양' 색 범례 확인, 끝에 계통 색으로 되돌림.
 ## 동작: 지도 클릭(실제 마우스 입력) → pick_slime → 정보 창 id, 빈 곳 클릭 → 선택 해제, 속도·멈춤 단추 클릭, 단축키,
 ## 화면으로 진행해도 역사 해시가 헤드리스와 같음. 그림은 lab-*.jpg(품질 0.85, 600KB 이하 확인). 끝에 RESULT 줄.
 ## 이전 프로젝트(little-monster-village, 같은 저자·MIT)의 tests/integration_driver.gd 입력 흉내(_click)를 가져와 고침.
@@ -36,6 +38,8 @@ const MIN_LIFE_LEFT := 90
 ## 지도에 저장고 넷(규칙 고침 g1b 뒤 다시 정함: 예전 1,200틱은 이제 발견 전이라 연대기가 비어 있음)
 const PANEL_TICKS := 2400
 const COMPARE_TICKS := 1500
+## 학습 세계 장면을 미리 진행할 틱(배운 두뇌가 쌓이고 생애 단계가 섞인 뒤)
+const LEARN_TICKS := 600
 
 var out := "res://docs/screenshots/v0.1"
 var copy_to := ""
@@ -79,6 +83,7 @@ func _run() -> void:
 	await _speed64()
 	await _panels()
 	await _compare()
+	await _learn()
 	for f in _files:
 		print("  그림 %s (%d KB)" % [f, FileAccess.get_file_as_bytes(f).size() / 1024])
 	print("RESULT: %d passed, %d failed (ui)" % [_pass, _fail])
@@ -295,6 +300,46 @@ func _compare() -> void:
 	check(lab.selected_index() == 1 and lab.experiment(1).world.index_of_id(lab.selected_id()) >= 0 and lab.map_view_of(1).ring_info().visible,
 			"찍을 때도 B 의 #%d 가 살아 있고 고리가 보임" % lab.selected_id())
 	await _shot("lab-06-compare")
+
+
+## ⑦ 학습 세계: 지도 색 방식·범례·두뇌 탭(DESIGN-v0.2 10절). 화면으로 진행해도 해시가 헤드리스와 같음.
+func _learn() -> void:
+	lab.stop_compare()
+	check(lab.new_experiment("learn_basic", {}, 1) == "", "학습 세계 learn_basic·씨앗 1 실험")
+	lab.set_paused(true)
+	lab.step_ticks(LEARN_TICKS)
+	var w := lab.world
+	lab.set_map_color(MapView.COLOR_LIFE_STAGE)
+	# 배운 양이 가장 큰 살아 있는 개체(남은 수명이 있는) — 정보 창 차이 탭이 비지 않게
+	var best := -1
+	var top := 0.0
+	for i in w.population():
+		var v := w.learned_amount_of(i)
+		if v > top and int(w.s_max_age[i]) - int(w.s_age[i]) > MIN_LIFE_LEFT:
+			top = v
+			best = w.s_id[i]
+	check(best >= 0, "배운 두뇌가 있는 개체 #%d(배운 양 %.4f)" % [best, top])
+	lab.select_slime(best)
+	lab.info_panel.set_brain_mode(BrainView.MODE_DIFF)
+	lab.set_paused(false)
+	lab.set_speed(1)
+	await _park_mouse()
+	await _render(FARM_RENDER_FRAMES)
+	var win := Rect2(Vector2.ZERO, Vector2(root.size))
+	var box := lab._color_box.get_global_rect()
+	check(lab.map_view.color_mode == MapView.COLOR_LIFE_STAGE and lab._legend.visible and win.encloses(box)
+			and lab._map_area.get_global_rect().encloses(box), "지도 색 '생애 단계' + 범례가 지도 자리 안(%s)" % str(box))
+	check(lab.info_panel.brain_tabs_visible() and lab.info_panel.brain_view().mode() == BrainView.MODE_DIFF and lab.info_panel.current_id() == best,
+			"정보 창 #%d 두뇌 탭 '차이'" % best)
+	var ref := _headless("learn_basic", 1, w.tick)
+	check(w.history_hash == ref.history_hash, "학습 세계를 화면으로 %d틱 진행해도 해시가 헤드리스와 같음" % w.tick)
+	await _shot("lab-07-learn")
+	lab.set_map_color(MapView.COLOR_LEARNED)
+	await _render(4)
+	check(lab.map_view.color_mode == MapView.COLOR_LEARNED and lab._legend.visible
+			and lab._map_area.get_global_rect().encloses(lab._color_box.get_global_rect()), "지도 색 '배운 양' + 범례가 지도 자리 안")
+	lab.set_map_color(MapView.COLOR_LINEAGE)
+	lab.info_panel.set_brain_mode(BrainView.MODE_INNATE)
 
 
 # ── 동작 확인 ──

@@ -7,7 +7,7 @@ const DT := 1.0 / 60.0
 ## 빨리 감기 측정 세계의 초기 개체 수(씨앗 3 에서 120프레임 내내 살아 있음)
 const FF_POPULATION := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 293
+const MIN_CHECKS := 305
 ## 비교 모드 B 에만 준 바꾼 값(B 의 설정에만 들어가야 함)
 const B_MUTATION := 0.07
 ## 최소 창(lab.min_width × lab.min_height = 1280×640)·자리 모두 펼침에서 비교 모드 지도 한 칸의 최소 크기,
@@ -50,6 +50,9 @@ const SLOW_SPEED_TOL := 0.15
 ## 죽은 개체 기록이 생길 때까지 진행하는 한도와 한 번에 진행하는 틱
 const DEAD_GUARD_TICKS := 3000
 const DEAD_STEP := 20
+## 지도 색 상자(v0.2 1단계) 겹침 검사에서 훑을 창 폭의 끝·간격(px — 상자 폭보다 잘게)
+const SWEEP_MAX_WIDTH := 2400
+const SWEEP_STEP := 40
 
 
 func run(t) -> void:
@@ -91,6 +94,7 @@ func run(t) -> void:
 	await _compare_layout(t, lab)
 	_export_fail(t, lab)
 	await _dock_empty(t, lab)
+	await _map_color(t, lab)
 	_big_map(t, lab)
 	lab.queue_free()
 	await t.frames(1)
@@ -2025,3 +2029,127 @@ func _dock_empty(t, lab: LabMain) -> void:
 	await t.frames(2)
 	t.check(lab._left_wrap.visible and lab._bottom_wrap.visible and lab._dock_toggles.visible and lab.bottom_dock.get_child(0) == lab.graph_panel,
 			"다시 넣으면 보임")
+
+
+## v0.2 1단계(DESIGN-v0.2 10절) 지도 색 방식: 오른쪽 아래 상자(접기 단추 위) "색 [계통 색 ▾]" — 모든 지도에 같은 방식, 계통 색이
+## 아니면 범례. '배운 양' 은 학습을 켠 실험이 있을 때만(없으면 계통 색으로). 상자는 지도 자리 안이고 도움말·접기 단추와 안 겹침
+## (최소 창·1280×720, 혼자·비교, 범례 둘).
+func _map_color(t, lab: LabMain) -> void:
+	lab.stop_compare()
+	lab.new_experiment("default", {}, 1)
+	lab.set_paused(true)
+	await t.frames(2)
+	var opt := lab._color_opt
+	var li := opt.get_item_index(MapView.COLOR_LEARNED)
+	t.check(lab.map_color() == MapView.COLOR_LINEAGE and lab.map_view.color_mode == MapView.COLOR_LINEAGE and not lab._legend.visible
+			and opt.item_count == MapView.COLOR_MODE_NAMES.size() and opt.is_item_disabled(li),
+			"처음: 계통 색, 범례 없음, 학습 끈 실험이라 '배운 양' 항목 꺼짐")
+	t.check(_color_box_ok(lab), "지도 색 상자: 지도 자리 안, 도움말·접기 단추와 안 겹침(혼자·계통 색)")
+	lab.set_map_color(MapView.COLOR_LEARNED)
+	t.check(lab.map_color() == MapView.COLOR_LINEAGE, "학습 끈 실험에서 배운 양을 고르면 계통 색 그대로")
+	# 사용자가 고르는 길(item_selected) → 모든 지도, 범례 = 단계마다 색 칸 + 이름
+	opt.select(opt.get_item_index(MapView.COLOR_LIFE_STAGE))
+	opt.item_selected.emit(opt.get_item_index(MapView.COLOR_LIFE_STAGE))
+	await t.frames(2)
+	var cols: Array = UiConfig.value("slime.life_stage_colors")
+	var sw: Array[Color] = []
+	var names: Array[String] = []
+	for c in lab._legend.get_children():
+		if c is ColorRect:
+			sw.append((c as ColorRect).color)
+		elif c is Label:
+			names.append((c as Label).text)
+	var sw_ok := sw.size() == cols.size()
+	for k in mini(sw.size(), cols.size()):
+		sw_ok = sw_ok and sw[k].is_equal_approx(Color.from_string(str(cols[k]), Color.MAGENTA))
+	t.check(lab.map_color() == MapView.COLOR_LIFE_STAGE and lab.map_view.color_mode == MapView.COLOR_LIFE_STAGE and lab._legend.visible
+			and sw_ok and names == Array(SimBrain.LIFE_STAGE_NAMES, TYPE_STRING, "", null),
+			"고르기 '생애 단계' → 지도 색 방식·범례(색 칸 %d개 = ui.slime.life_stage_colors, 이름 %s)" % [sw.size(), names])
+	t.check(_color_box_ok(lab), "생애 단계 범례를 펼쳐도 상자가 지도 안, 도움말·접기 단추와 안 겹침")
+	# 창 폭을 바꿔 가며(도움말이 한 줄 ↔ 여러 줄 경계를 지나게) 자리가 빈 때(접기 단추 없음 — 상자가 맨 아래)·찬 때 모두 안 겹침
+	var small0: Vector2i = t.root.size
+	var panels: Array[Control] = [lab.param_panel, lab.graph_panel, lab.chronicle_panel]
+	var parents: Array[Node] = []
+	for pn in panels:
+		parents.append(pn.get_parent())
+	var bad: Array[String] = []
+	var widths := 0
+	for docks in [false, true]:
+		for i in panels.size():
+			if docks and panels[i].get_parent() == null:
+				parents[i].add_child(panels[i])
+			elif not docks and panels[i].get_parent() != null:
+				panels[i].get_parent().remove_child(panels[i])
+		for wpx in range(UiConfig.integer("lab.min_width"), SWEEP_MAX_WIDTH + 1, SWEEP_STEP):
+			t.root.size = Vector2i(wpx, SIZE_720.y)
+			await t.frames(2)
+			widths += 1
+			if not _color_box_ok(lab) or not _color_gap_ok(lab) or lab._dock_toggles.visible != docks:
+				bad.append("%s %dpx" % ["자리 있음" if docks else "자리 없음", wpx])
+	t.root.size = small0
+	await t.frames(2)
+	t.check(bad.is_empty() and widths > 2 * 10, "창 폭 %d가지 × 자리 빔·참: 상자가 지도 안, 도움말·접기 단추와 안 겹치고 도움말과 여백(lab.map_overlay_margin) 이상 떨어짐 %s" % [widths, str(bad)])
+	# 학습 켠 실험: '배운 양' 항목 켜짐, 고른 방식은 새 실험에도 그대로
+	lab.new_experiment("learn_basic", {}, 1)
+	lab.set_paused(true)
+	await t.frames(2)
+	t.check(not opt.is_item_disabled(li) and lab.map_color() == MapView.COLOR_LIFE_STAGE and lab.map_view.color_mode == MapView.COLOR_LIFE_STAGE,
+			"학습 켠 실험: '배운 양' 항목 켜짐, 고른 색 방식(생애 단계)은 새 실험에도 그대로")
+	opt.select(li)
+	opt.item_selected.emit(li)
+	await t.frames(2)
+	var labels: Array[String] = []
+	var grad := false
+	for c in lab._legend.get_children():
+		if c is Label:
+			labels.append((c as Label).text)
+		elif c is TextureRect:
+			grad = (c as TextureRect).texture is GradientTexture2D
+	var full := UiConfig.num("slime.learned_full")
+	t.check(lab.map_view.color_mode == MapView.COLOR_LEARNED and grad and labels.size() == 2 and labels[0] == "0"
+			and labels[1] == GraphView.fmt_num(full, GraphView.decimals_for(full)) + "+",
+			"고르기 '배운 양' → 범례 0 [색 띠] %s" % str(labels))
+	t.check(_color_box_ok(lab), "배운 양 범례도 지도 안, 안 겹침")
+	# 비교 모드(학습 켬 + 끔): 두 지도 모두 같은 방식, 상자는 지도 자리(B 칸) 안
+	lab.start_compare({preset = "learn_basic", seed = 1}, {preset = "default", seed = 1})
+	lab.set_paused(true)
+	await t.frames(2)
+	var both := lab._panes.size() == 2
+	for pn in lab._panes:
+		both = both and pn.map.color_mode == MapView.COLOR_LEARNED
+	t.check(both and _color_box_ok(lab) and _rect(lab._panes[1].container).encloses(_rect(lab._color_box)),
+			"비교 모드: 두 지도 모두 배운 양 색, 상자는 B 지도 칸 안·안 겹침")
+	var small: Vector2i = t.root.size
+	t.root.size = SIZE_720
+	await t.frames(2)
+	t.check(_color_box_ok(lab) and _rect(lab._panes[1].container).encloses(_rect(lab._color_box)), "1280×720 비교 모드에서도 상자가 B 칸 안·안 겹침")
+	t.root.size = small
+	await t.frames(2)
+	# 학습 끈 실험만 남으면 배운 양 → 계통 색, 항목 꺼짐
+	lab.stop_compare()
+	lab.new_experiment("default", {}, 1)
+	lab.set_paused(true)
+	await t.frames(2)
+	t.check(lab.map_color() == MapView.COLOR_LINEAGE and lab.map_view.color_mode == MapView.COLOR_LINEAGE and opt.is_item_disabled(li)
+			and not lab._legend.visible and opt.get_item_id(opt.selected) == MapView.COLOR_LINEAGE,
+			"학습 끈 실험으로 바꾸면 배운 양 → 계통 색, 항목 꺼짐, 범례 숨김")
+	lab.set_paused(false)
+
+
+## 지도 색 상자가 지도 자리 안이고 도움말·접기 단추(보이면)와 겹치지 않음.
+func _color_box_ok(lab: LabMain) -> bool:
+	var area := Rect2(Vector2.ZERO, lab._map_area.size)
+	var br := _rect(lab._color_box)
+	var ok := lab._color_box.visible and area.encloses(br) and not br.intersects(_rect(lab._hint))
+	if lab._dock_toggles.visible:
+		ok = ok and not br.intersects(_rect(lab._dock_toggles))
+	return ok and _overlays_ok(lab)
+
+
+## 도움말과 지도 색 상자가 같은 높이에 걸치면 가로로 여백(lab.map_overlay_margin) 이상 떨어져 있음(접기 단추와 같은 배치 규칙).
+func _color_gap_ok(lab: LabMain) -> bool:
+	var hr := _rect(lab._hint)
+	var br := _rect(lab._color_box)
+	if hr.end.y <= br.position.y or br.end.y <= hr.position.y:
+		return true
+	return br.position.x - hr.end.x >= UiConfig.num("lab.map_overlay_margin") - 0.5

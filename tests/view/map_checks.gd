@@ -9,17 +9,17 @@ const EPS := 0.0005
 const SLIME_US_LIMIT := 6000.0
 const TIMING_FRAMES := 120
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 100
+const MIN_CHECKS := 112
 ## 틱 경계에서 가만히 있는 개체를 지켜볼 틱 수
 const STILL_TICKS := 60
 ## 저장고 움집 처마 반지름(SlimeGeo.storehouse_mesh 의 가장 넓은 지붕 둘레)
 const STORE_EAVE := 0.47
 ## 큰 지도(설정 최대 거리 95 로는 다 안 보이던 크기)
 const BIG_MAPS: Array[Vector2i] = [Vector2i(128, 96), Vector2i(200, 150)]
-## map_view.gd 에 남아도 되는 숫자 상수(버퍼 짜임·해시·단위 바꿈·수치 오차·메시 치수). 보기 조정값은 ui.json(검토 I55).
+## map_view.gd 에 남아도 되는 숫자 상수(버퍼 짜임·해시·단위 바꿈·수치 오차·메시 치수·색 방식 번호). 보기 조정값은 ui.json(검토 I55).
 const TECH_CONSTS: Array[String] = ["XF", "XFC", "HASH_A", "HASH_B", "HASH_C", "HASH_MASK", "HASH_DIV", "SALT_JITTER", "SALT_PLANT_X",
 	"SALT_PLANT_Z", "SALT_PLANT_YAW", "SALT_PLANT_H", "SALT_PLANT_TINT", "SALT_STACK", "SALT_BREATH", "QUARTER", "BYTE", "OPAQUE",
-	"DEFAULT_ASPECT", "SIDE_EPS", "VOLUME_EXP", "RING_OUTER", "DOOR_ORDER"]
+	"DEFAULT_ASPECT", "SIDE_EPS", "VOLUME_EXP", "RING_OUTER", "DOOR_ORDER", "COLOR_LINEAGE", "COLOR_LIFE_STAGE", "COLOR_LEARNED"]
 ## 큰 지도 갱신 비용 검사(검토 I52): 견줄 큰 지도, 진행하며 잴 프레임 수, 시간 비 상한 = 칸 수 비 / COST_RATIO_DIV
 ## (칸 수에 비례하면 시간 비 ≈ 칸 수 비 21 배). 절대 시간이 아니라 같은 실행 안의 비율만 본다.
 const COST_MAP := Vector2i(256, 256)
@@ -37,6 +37,13 @@ const TRY_DISC_ALPHA := 0.7
 ## 건물(저장고·밭) 검사 세계: demo_fast 씨앗 2 를 이만큼 — 저장고 4·밭 67·개체 207(규칙 고침 g1b 뒤 씨앗 1 은 1,750틱에 밭 0)
 const BUILD_SEED := 2
 const BUILD_TICKS := 1500
+## v0.2 1단계(DESIGN-v0.2 10절): 학습·몸 자람 세계(learn_basic)의 씨앗·진행 틱(처음 개체 나이 0~40 이라 어린 개체가 많을 때와
+## 배운 양이 쌓인 뒤), 배운 양 색을 다시 재는지 볼 틱 수(ui.map.learned_refresh_ticks 보다 적게·많게), 시간 잴 프레임
+const LEARN_SEED := 2
+const GROW_TICKS := 5
+const LEARN_TICKS := 300
+const LEARN_TIMING_FRAMES := 60
+const WorldCompare := preload("res://tests/view/world_compare.gd")
 
 
 func run(t) -> void:
@@ -69,6 +76,7 @@ func run(t) -> void:
 	_check_extinct(t, mv)
 	_check_ui_tuning(t)
 	_check_attempt_bob(t, mv)
+	_check_stage1(t, mv)
 	sv.queue_free()
 	await t.frames(1)
 
@@ -1176,3 +1184,119 @@ func _check_farm_ground(t, mv: MapView, w: SimWorld) -> void:
 	t.check(p.y >= top - EPS and sh.y > top, "밭 칸 슬라임 바닥 %.3f·그림자 %.3f 가 흙판 위(%.3f)" % [p.y, sh.y, top])
 	t.check(ri.visible and float((ri.position as Vector3).y) >= ridge, "밭 칸 선택 고리 높이 %.3f ≥ 이랑 꼭대기 %.3f" % [float((ri.position as Vector3).y), ridge])
 	mv.set_selected(-1)
+
+
+# ── v0.2 1단계: 몸 자람(유효 크기 s_size)·색 방식(계통·생애 단계·배운 양) ──
+
+func _check_stage1(t, mv: MapView) -> void:
+	var stage_cols: Array = UiConfig.value("slime.life_stage_colors")
+	t.check(stage_cols.size() == SimBrain.LIFE_STAGE_NAMES.size() and (UiConfig.value("slime.learned_colors") as Array).size() >= 2,
+			"생애 단계 색 %d개(= 단계 수), 배운 양 색 띠 2개 이상" % stage_cols.size())
+	# ① 몸 자람: 그린 몸 = 유효 크기 s_size × 표시 배율(어린 개체는 유전자 크기보다 작게)
+	var w: SimWorld = t.make_world({}, LEARN_SEED, "learn_basic")
+	w.step_n(GROW_TICKS)
+	mv.bind(w)
+	mv.set_color_mode(MapView.COLOR_LINEAGE)
+	mv.fit_map()
+	mv.update_view(1.0)
+	var k := mv.display_scale()
+	var ok := true
+	var young := 0
+	for i in w.population():
+		var sc := mv.slime_instance_scale(i)
+		var drawn := pow(sc.x * sc.x * sc.y, 1.0 / 3.0)
+		if absf(drawn - w.s_size[i] * k) > 0.01:
+			ok = false
+		var gene := float(w.slime_info(w.s_id[i]).size)
+		if w.s_size[i] < gene - 0.01 and drawn < gene * k - 0.01:
+			young += 1
+	t.check(ok and young > 0, "몸 자람 세계: 그린 몸 = 유효 크기 s_size × 표시 배율(%d마리), 어린 %d마리는 유전자 크기보다 작게" % [w.population(), young])
+	# ② 계통 색(기본) = 예전 그대로, 생애 단계 색 = ui.slime.life_stage_colors[life_stage_of]
+	var gain := lerpf(UiConfig.num("map.night_slime_boost"), 1.0, clampf(w.light, 0.0, 1.0))
+	var sat := UiConfig.num("slime.saturation")
+	var val := UiConfig.num("slime.value")
+	var lin_ok := true
+	for i in w.population():
+		lin_ok = lin_ok and _same_rgb(mv.slime_instance_color(i), Color.from_hsv(w.lin_hue[w.s_id[i]], sat, val) * gain)
+	t.check(mv.color_mode == MapView.COLOR_LINEAGE and lin_ok, "계통 색(기본): 인스턴스 색 = 계통 색상 × 밤 밝힘 배수")
+	w.step_n(LEARN_TICKS - GROW_TICKS)
+	mv.before_steps()
+	mv.set_color_mode(MapView.COLOR_LIFE_STAGE)
+	mv.update_view(1.0)
+	gain = lerpf(UiConfig.num("map.night_slime_boost"), 1.0, clampf(w.light, 0.0, 1.0))
+	var st_ok := true
+	var seen := {}
+	for i in w.population():
+		var st := w.life_stage_of(i)
+		seen[st] = true
+		st_ok = st_ok and _same_rgb(mv.slime_instance_color(i), Color.from_string(str(stage_cols[st]), Color.MAGENTA) * gain)
+	t.check(st_ok and seen.size() >= 2, "생애 단계 색 = life_stage_colors[life_stage_of(i)] × 밤 밝힘(단계 %d가지)" % seen.size())
+	# ③ 배운 양 색 = learned_color(learned_amount_of) — 띠 양 끝·가운데, learned_full 을 넘으면 끝 색
+	var lc: Array = UiConfig.value("slime.learned_colors")
+	var full := UiConfig.num("slime.learned_full")
+	var c0 := Color.from_string(str(lc[0]), Color.MAGENTA)
+	var c1 := Color.from_string(str(lc[lc.size() - 1]), Color.MAGENTA)
+	var mid_ok := lc.size() != 3 or _same_rgb(mv.learned_color(full * 0.5), Color.from_string(str(lc[1]), Color.MAGENTA))
+	t.check(_same_rgb(mv.learned_color(0.0), c0) and _same_rgb(mv.learned_color(full), c1) and _same_rgb(mv.learned_color(full * 3.0), c1)
+			and _same_rgb(mv.learned_color(-1.0), c0) and mid_ok, "배운 양 색 띠: 0 → 첫 색, learned_full(%s) 이상 → 끝 색, 가운데 → 가운데 색" % str(full))
+	mv.set_color_mode(MapView.COLOR_LEARNED)
+	mv.update_view(1.0)
+	var lr_ok := true
+	var shades := {}
+	for i in w.population():
+		var want := mv.learned_color(w.learned_amount_of(i)) * gain
+		lr_ok = lr_ok and _same_rgb(mv.slime_instance_color(i), want)
+		shades[want.to_html()] = true
+	t.check(lr_ok and shades.size() >= 3, "배운 양 색 = learned_color(learned_amount_of(i)) × 밤 밝힘(%d가지 색)" % shades.size())
+	# 다시 재는 간격: learned_refresh_ticks 보다 적게 진행하면 잰 값 그대로(태어난 개체는 0), 지나면 새 값
+	var every := UiConfig.integer("map.learned_refresh_ticks")
+	var t0 := int(mv._learn_tick)
+	for s in every - 1:
+		mv.before_steps()
+		w.step()
+		mv.update_view(1.0)
+	var kept := int(mv._learn_tick) == t0
+	mv.before_steps()
+	w.step()
+	mv.update_view(1.0)
+	gain = lerpf(UiConfig.num("map.night_slime_boost"), 1.0, clampf(w.light, 0.0, 1.0))
+	var fresh := int(mv._learn_tick) == w.tick
+	for i in w.population():
+		fresh = fresh and _same_rgb(mv.slime_instance_color(i), mv.learned_color(w.learned_amount_of(i)) * gain)
+	t.check(kept and fresh, "배운 양은 learned_refresh_ticks(%d)틱마다 다시 잼(그 사이 %d틱은 그대로, 지나면 새 값)" % [every, every - 1])
+	# 화면이 세계를 바꾸지 않음(색 방식으로 그린 프레임들 — 같은 씨앗 헤드리스와 견줌)
+	var ref: SimWorld = t.make_world({}, LEARN_SEED, "learn_basic")
+	ref.step_n(w.tick)
+	t.check(WorldCompare.same(w, ref) == "", "색 방식으로 그려도 세계 = 헤드리스(배운 두뇌 포함) %s" % WorldCompare.same(w, ref))
+	# 시간: 배운 양 색(다시 재는 프레임 포함) 슬라임 갱신 평균
+	var us := 0
+	for f in LEARN_TIMING_FRAMES:
+		if f % 4 == 0:
+			mv.before_steps()
+			w.step()
+		mv.update_view(float(f % 4) / 4.0)
+		us += int(mv.view_stats().slime_us)
+	var avg := float(us) / float(LEARN_TIMING_FRAMES)
+	print("  MapView 배운 양 색: 슬라임 %d마리 갱신 평균 %.0fµs(%d틱마다 다시 잼)" % [w.population(), avg, every])
+	t.check(avg < SLIME_US_LIMIT, "배운 양 색 슬라임 갱신 평균 %.0fµs < %.0fµs" % [avg, SLIME_US_LIMIT])
+	# 학습 끈 세계에서 배운 양 색 = 모두 첫 색, 다시 계통 색으로 되돌리면 예전 색
+	var off: SimWorld = t.make_world({}, 3)
+	mv.bind(off)
+	t.check(mv.color_mode == MapView.COLOR_LEARNED, "세계를 다시 붙여도 색 방식 그대로")
+	mv.update_view(1.0)
+	gain = lerpf(UiConfig.num("map.night_slime_boost"), 1.0, clampf(off.light, 0.0, 1.0))
+	var off_ok := true
+	for i in off.population():
+		off_ok = off_ok and _same_rgb(mv.slime_instance_color(i), c0 * gain)
+	mv.set_color_mode(MapView.COLOR_LINEAGE)
+	mv.update_view(1.0)
+	var back := true
+	for i in off.population():
+		back = back and _same_rgb(mv.slime_instance_color(i), Color.from_hsv(off.lin_hue[off.s_id[i]], sat, val) * gain)
+	t.check(off_ok and back, "학습 끈 세계: 배운 양 색은 모두 첫 색(배운 양 0), 계통 색으로 되돌리면 예전 색")
+	mv.set_color_mode(99)
+	t.check(mv.color_mode == MapView.COLOR_LINEAGE, "모르는 색 방식 번호 → 계통 색")
+
+
+func _same_rgb(a: Color, b: Color) -> bool:
+	return absf(a.r - b.r) < EPS and absf(a.g - b.g) < EPS and absf(a.b - b.b) < EPS
