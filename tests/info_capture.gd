@@ -5,7 +5,8 @@ extends SceneTree
 ##   info-alive.png  부모·조부모·자식이 있는 살아 있는 개체(따라가기 켬)
 ##   info-dead.png   지켜보던 중 죽은 개체(refresh 가 죽음을 감지, 마지막 두뇌 유지)
 ## --extra 를 주면 참고용도 찍는다: info-alive-720.png(1280×720 높이, 스크롤), info-record.png(기록만 남은
-##   죽은 조상, 두뇌 없음), info-memory.png(기억 뉴런 2개 세계), info-empty.png(빈 안내)
+##   죽은 조상, 두뇌 없음), info-memory.png(기억 뉴런 2개 세계), info-empty.png(빈 안내),
+##   info-learn.png·info-learn-diff.png(v0.2 1단계 learn_basic 세계 LEARN_TICKS 틱 — 학습 절·생애 단계 막대, 두뇌 탭 배운·차이)
 ## 인자: --out=폴더(기본 res://docs/screenshots/v0.1), --seed=N, --ticks=N, --extra
 
 const TICKS := 1500
@@ -14,6 +15,8 @@ const SEED := 1
 const MARGIN := 16
 ## 1280×720 화면에서 정보 창 높이(위 막대 몫을 뺀 근사)
 const SHORT_HEIGHT := 720
+## 학습 세계(learn_basic)를 돌릴 틱
+const LEARN_TICKS := 600
 
 var _out := "res://docs/screenshots/v0.1"
 var _seed := SEED
@@ -97,7 +100,20 @@ func _run() -> void:
 	panel.show_slime(wm, _pick(wm))
 	await _frames(4)
 	_shot(panel, "info-memory.png")
-	# ⑥ 빈 안내
+	# ⑥ 학습 세계(v0.2 1단계): 배운 탭·차이 탭
+	var bl := SimConfig.build("learn_basic", {})
+	var wl := SimWorld.new()
+	wl.setup(bl.config, _seed)
+	wl.step_n(LEARN_TICKS)
+	panel.show_slime(wl, _pick(wl))
+	panel.set_brain_mode(BrainView.MODE_LEARNED)
+	await _frames(4)
+	_shot(panel, "info-learn.png")
+	panel.set_brain_mode(BrainView.MODE_DIFF)
+	await _frames(4)
+	_shot(panel, "info-learn-diff.png")
+	panel.set_brain_mode(BrainView.MODE_INNATE)
+	# ⑦ 빈 안내
 	panel.clear()
 	await _frames(4)
 	_shot(panel, "info-empty.png")

@@ -193,6 +193,18 @@
 		"squash": 0.16,
 		"saturation": 0.62,
 		"value": 0.95,
+		"life_stage_colors": [
+			"#f2f5ff",
+			"#ffd84d",
+			"#5bc0ff",
+			"#7a52d6"
+		],
+		"learned_colors": [
+			"#40338f",
+			"#c4417f",
+			"#fbd34d"
+		],
+		"learned_full": 0.08,
 		"stack_offset": 0.2,
 		"stack_ring": 4,
 		"stack_grow": 0.12,
@@ -268,6 +280,7 @@
 		"key_width": 64,
 		"swatch_size": 44,
 		"energy_bar_height": 18,
+		"age_bar_height": 16,
 		"energy_warn_frac": 0.35,
 		"energy_danger_frac": 0.15,
 		"relative_dot": 8,
@@ -278,6 +291,8 @@
 		"scrollbar_width": 6,
 		"heatmap_cell_min": 6,
 		"heatmap_highlight_alpha": 0.16,
+		"heatmap_eta_width": 44,
+		"heatmap_diff_min": 0.01,
 		"title_font_size": 20,
 		"inline_gap": 8,
 		"key_gap": 10,

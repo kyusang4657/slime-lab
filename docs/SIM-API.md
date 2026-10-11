@@ -1,4 +1,4 @@
-# 시뮬레이션 API (v0.1 + v0.2 0단계)
+# 시뮬레이션 API (v0.1 + v0.2 0·1단계)
 
 화면(`scripts/view/`, `scripts/ui/`)은 시뮬레이션을 **이 목록에 있는 것만** 써서 읽고 진행시킵니다. 같은 이름·뜻을 갖는 C#/GDExtension 구현으로 바꿔 끼울 수 있도록 고정해 둔 경계입니다. 목록에 없는 필드(밑줄로 시작하는 것, 장부 변수 등)는 화면에서 쓰지 않습니다.
 
@@ -32,8 +32,12 @@
 | `s_energy[i]`, `s_emax[i]`, `s_carry[i]`, `s_size[i]` | PackedFloat64Array | 에너지·최대 에너지·운반량·크기 |
 | `s_last_action[i]` | PackedInt32Array | 마지막 행동 `SimBrain.ACT_*` |
 | `s_last_eff[i]` | PackedByteArray | 마지막 행동에 효과가 났는지(1 = 남, 0 = 없음 — 벽 쪽 앞으로·배부른 먹기·발견 전 줍기·가득 찬 저장고에 내려놓기 등, 갓 태어난 개체는 0). 효과의 정의는 [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 11.1 |
+| `s_w2[k]` | PackedFloat64Array | 배운 두뇌(v0.2 1단계 — 학습을 켠 세계만, 끄면 길이 0). i 번째 개체의 행동 q·은닉 j 가중치 = `s_w2[(i × L.n_act + q) × L.n_hid + j]` — 유전체 W2 의 행동 행(`w2_offset` 부터 `q × n_hid + j`)과 같은 배치이고 기억 출력 행은 없음(늘 유전체). 태어날 때 유전체 값 그대로, 그 뒤 학습이 고침(유전되지 않음 — [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 3.1). 정보 창의 배운·차이 탭 |
+| `life_stage_of(i) -> int` | | i 번째 개체의 생애 단계 `SimBrain.LIFE_*`(0 어린·1 젊은·2 어른·3 늙은, 이름 `SimBrain.LIFE_STAGE_NAMES`). 나이·자기 수명에서 계산(배열 없음 — DESIGN-v0.2 2.1). 학습·몸 자람을 꺼도 계산됨. 지도의 생애 단계 색 |
+| `learned_amount_of(i) -> float` | | i 번째 개체의 배운 양 = 행동 가중치(행동 8 × 은닉) 의 abs(배운 − 타고난) 평균(학습 끔이면 0 — DESIGN-v0.2 11.2, 시계열 `dw_mean` 과 같은 식). 개체마다 행동 × 은닉 번 빼기라 지도는 틱이 바뀔 때만 다시 부름(배운 양 색) |
+| `assim_of(i) -> float` | | i 번째 개체의 동화 지수 0~1(자기 판단 고리의 은닉 값마다 타고난·배운 W2 로 고른 가장 큰 행동이 같은 몫, 고리가 비면 0, 학습 끔이면 0 — DESIGN-v0.2 11.2). 고리 칸 × 2 × 행동 × 은닉 곱이라 고른 개체 하나에만(정보 창) |
 | `lin_hue[id]` | PackedFloat32Array | 색(계통 표지) — 죽은 개체도 id 로 바로 찾음 |
-| `slime_info(id) -> Dictionary` | | 개체 정보(부모·세대·출생·사망·원인·자식 수·특성, 살아 있으면 위치·에너지·행동·유전체). 특성의 sense 는 유전자 실수(실제 감지 반경은 반올림한 칸 수), 혼자 분열한 자식은 parent_b = -1 |
+| `slime_info(id) -> Dictionary` | | 개체 정보(부모·세대·출생·사망·원인·자식 수·특성, 살아 있으면 위치·에너지·행동·유전체). 특성의 sense 는 유전자 실수(실제 감지 반경은 반올림한 칸 수), 혼자 분열한 자식은 parent_b = -1. v0.2 1단계 키: `eta`(태어날 때 학습률 유전자 η 의 행동 8개 평균 — 학습 끔이면 0), `eaten`(평생 먹은 에너지 — 살아 있으면 지금까지, 죽었으면 죽을 때까지. id < `eaten_from_id` 인 개체는 모름), `life_stage`(살아 있을 때만 — `life_stage_of` 와 같음). 살아 있을 때의 `size` 는 유전자 크기이고(몸 자람을 켜면 실제 몸은 `s_size[i]`), `energy_max` 는 실제 최대 에너지 |
 | `children_of(id, limit) -> PackedInt32Array` | | 자식 id(태어난 순서, 최대 limit 개). 계통 전체를 훑으므로 클릭 때만 |
 | `index_of_id(id) -> int` | | 살아 있으면 배열 위치, 아니면 -1 |
 | `mean_generation()`, `mean_of(arr)`, `sum_of(arr)`, `mean_sense()`, `mean_age()` | float | 통계(`mean_sense()` 는 반올림한 감지 반경의 평균, 개체가 없으면 모두 0) |
@@ -41,8 +45,9 @@
 | `chronicle` | Array[Dictionary] | 연대기 `{tick, kind, actor, text, mean_gen, …}` |
 | `drain_events() -> Array` | | 지난 호출 이후 새 사건(알림·소리용). 사건 사전은 `chronicle` 항목의 **사본**이라 받는 쪽이 고쳐 써도 연대기·기록이 바뀌지 않음 |
 | `history_hash` | String | 역사 해시(같은 씨앗·설정이면 같음). setup 끝과 `cfg.hash.every` 틱마다(검사점)만 상태를 섞으므로 검사점 사이 틱의 차이는 담지 않음 — 두 세계가 지금 같은 상태인지는 `SimSnapshot.to_text` 글 전체로 견줌 |
+| `eaten_from_id` | int | 평생 먹은 양(`slime_info` 의 `eaten`)을 출생부터 센 첫 개체 id. v0.2 에서 만든 세계는 0, 개체별 셈이 없던 옛 스냅숏을 연 세계는 연 틱의 계통 수(그 앞 개체의 값은 모름 — DESIGN-v0.2 9.1) |
 | `is_extinct()`, `extinct_tick`, `peak_population` | | 멸종(-1 = 아직, 값은 진행한 뒤 틱 = 마지막 개체가 죽은 틱 번호 + 1)·최고 인구. 처음부터 개체가 없는 세계(초기 개체 0, 지나갈 칸 없음)는 `setup` 이 `extinct_tick = 0` 과 멸종 사건을 남김 — 실행기는 틱 0 에서 끝나고 실험실도 같은 기록 |
-| `cfg` | Dictionary | 이 세계의 실험 설정(`SimConfig.build` 결과). **읽기 전용 — 화면은 절대 쓰지 않음**(시뮬레이션이 매 틱 읽는 살아 있는 사전). 화면이 읽는 키: `cfg.time.day_ticks`(날 표시, LabMain), `cfg.time.night_light_threshold`(낮/밤 표시 — `light` 가 이 값보다 작으면 밤, 시뮬레이션의 밤 감지와 같은 문턱, LabMain), `cfg.brain.weight_clamp`(두뇌 열지도 색 상한, InfoPanel), `cfg.hash.every`(검사만), **모든 잎 키**(ParamPanel — `cfg` 를 깊은 사본으로 떠서 다음 실험 조건과 견주고 "지금 실험" 요약에만 씀). ParamPanel 은 스냅숏 저장 파일 이름에 `tick` 도 읽음 |
+| `cfg` | Dictionary | 이 세계의 실험 설정(`SimConfig.build` 결과). **읽기 전용 — 화면은 절대 쓰지 않음**(시뮬레이션이 매 틱 읽는 살아 있는 사전). 화면이 읽는 키: `cfg.time.day_ticks`(날 표시, LabMain), `cfg.time.night_light_threshold`(낮/밤 표시 — `light` 가 이 값보다 작으면 밤, 시뮬레이션의 밤 감지와 같은 문턱, LabMain), `cfg.brain.weight_clamp`(두뇌 열지도 색 상한, InfoPanel), `cfg.repro.maturity`·`cfg.life.adult_frac`·`cfg.life.old_frac`(나이 막대의 생애 단계 눈금, InfoPanel — 판정은 `SimBrain.life_stage` 와 같은 순서), `cfg.hash.every`(검사만), **모든 잎 키**(ParamPanel — `cfg` 를 깊은 사본으로 떠서 다음 실험 조건과 견주고 "지금 실험" 요약에만 씀). ParamPanel 은 스냅숏 저장 파일 이름에 `tick` 도 읽음 |
 
 사건 `kind`: `discovery`(+`stage`), `store_built`(+`tile`), `first_farm`(세계에서 한 번 — 밭을 모두 잃고 다시 심어도 다시 나오지 않음), `farm_lost`, `milestone`, `extinction`(처음부터 개체가 없으면 틱 0). 사건의 `tick` 은 `discovery`·`store_built`·`first_farm`·`farm_lost` 가 진행 중인 틱 번호, `milestone`·`extinction` 이 진행한 뒤 틱이다. `mean_gen` = 사건 때의 평균 세대(0.01 단위) — `extinction` 은 개체가 모두 사라진 뒤라 마지막 개체군(마지막 틱에 죽은 개체)의 평균 세대. 사건마다 어느 상태의 평균인지는 DESIGN 8.4 "틱 기준".
 
@@ -70,5 +75,8 @@
 |---|---|
 | `world.L` = `SimBrain.layout(config)` | `{n_in, n_hid, n_out, n_mem, n_act, w2_offset, trait_offset, eta_offset, eta_len, genes}` — `n_act` = 행동 출력 수(8), `eta_offset`·`eta_len` = 학습률 유전자 η 구간(특성 뒤, 학습 끔이면 길이 0 — 유전자 163, 켜면 171. [`DESIGN-v0.2.md`](DESIGN-v0.2.md) 3.7) |
 | `SimBrain.forward(L, genome, base, inputs, sharpness) -> {hidden, out, probs, action}` | 정보 창의 두뇌 그림용 순전파 |
+| `SimBrain.forward_phen(L, genome, base, w2, w2_base, inputs, sharpness) -> {hidden, out, probs, action}` | (v0.2 1단계) 학습을 켠 세계의 순전파 — 행동 출력 행의 W2 는 배운 두뇌 `w2`(`w2_base` 부터, `s_w2` 의 배치), 기억 출력 행과 W1 은 유전체. 세계의 판단과 비트 단위로 같음 |
+| `SimBrain.LIFE_*`(`LIFE_JUVENILE`·`LIFE_YOUNG`·`LIFE_ADULT`·`LIFE_OLD`), `SimBrain.LIFE_STAGE_NAMES` | (v0.2 1단계) 생애 단계 번호 0~3 과 화면 이름 "어린"·"젊은"·"어른"·"늙은"(번호가 첨자) |
+| `SimBrain.life_stage(age, max_age, maturity, adult_frac, old_frac) -> int` | (v0.2 1단계) 생애 단계 판정: 나이 < 성숙이면 어린, 그다음 늙은(나이 ≥ old_frac × 수명) → 어른(≥ adult_frac × 수명) → 젊은. 그래서 단계 경계 = 성숙 나이와 max(성숙, 몫 × 수명) |
 | `SimBrain.INPUT_NAMES`, `SimBrain.ACTION_NAMES` | 화면 이름(행동 1·2 "왼쪽 돌기"·"오른쪽 돌기" 는 제자리에서 방향만 바꿈 — 칸을 옮기는 것은 0 "앞으로" 뿐) |
 | `SimWorld.STAGE_NAMES`, `SimWorld.CAUSE_NAMES` | 화면 이름. 번호가 첨자: 단계 0 없음·1 채집·2 저장·3 농사, 사망 원인 0 살아 있음·1 굶주림·2 노화(lineage.csv 의 death_cause 와 같은 번호 — DESIGN 8.4) |

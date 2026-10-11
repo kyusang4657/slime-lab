@@ -9,7 +9,7 @@ const DEATH_GUARD := 1000
 ## 지켜볼 개체의 남은 수명 하한(틱): refresh 와 자식 단추 늘어남을 여러 번 겪도록
 const MIN_LIFE_LEFT := 60
 ## 이 모듈이 적어도 하는 검사 수(중간에 스크립트 오류로 끊기면 실행기가 실패로 셈)
-const MIN_CHECKS := 65
+const MIN_CHECKS := 90
 ## 1600×900 실험실에서 정보 창 높이(창 높이 − 위쪽 막대 최소 높이) — V07
 const LAB_HEIGHT_1600 := 900.0
 ## V07 을 재 볼 개체 수 한도
@@ -17,6 +17,18 @@ const V07_SAMPLES := 60
 ## 자동 줄바꿈 안내를 나눠 볼 가장 좁은 폭과 폭 간격(px) — 한 낱말보다 넓게
 const WRAP_SWEEP_MIN := 160.0
 const WRAP_SWEEP_STEP := 2.0
+## v0.2 1단계 검사(DESIGN-v0.2 10절): 학습 세계(learn_basic + 기억 2 — 기억 출력 행은 배우지 않음을 보려고)를 돌릴 틱, 씨앗,
+## 배운 두뇌가 바뀔 때까지 기다릴 최대 틱
+const LEARN_TICKS := 300
+const LEARN_SEED := 2
+const LEARN_WAIT := 200
+## 생애 단계 경계 표를 볼 (수명, 성숙, 어른 몫, 늙음 몫): 기본·몫 × 수명이 반올림 끝인 것·젊은 구간이 빔·어린 다음 바로 늙은·
+## 성숙이 수명보다 큼
+const STAGE_CASES := [[200, 30, 0.4, 0.8], [230, 30, 0.4, 0.8], [171, 30, 0.7, 0.9], [200, 30, 0.1, 0.8], [200, 30, 0.1, 0.1],
+		[10, 3, 0.7, 0.7], [20, 30, 0.4, 0.8], [1, 0, 0.0, 1.0]]
+## 차이 탭 색 상한(1·2·5 × 10^k, 아래는 info.heatmap_diff_min 0.01): [가장 큰 차이, 기대 상한]
+const DIFF_SCALES := [[0.0, 0.01], [0.01, 0.01], [0.011, 0.02], [0.037, 0.05], [0.05, 0.05], [0.14, 0.2], [0.21, 0.5], [3.0, 5.0], [8.0, 10.0]]
+const WorldCompare := preload("res://tests/view/world_compare.gd")
 
 
 func run(t) -> void:
@@ -284,6 +296,7 @@ func run(t) -> void:
 	t.check(tip != null and tip.bg_color.is_equal_approx(UiConfig.color("theme.topbar")), "정보 창 말풍선 = 공용 말풍선 모양")
 	# ── V07: 1600×900 실험실 높이에서 보통 개체(자식 두 줄 이하)는 스크롤 없이 두뇌 범례까지(여유 info.min_vertical_slack) ──
 	await _v07(t, panel, world)
+	await _stage1(t, panel, world)
 	panel.queue_free()
 	await t.frames(1)
 
@@ -480,3 +493,218 @@ func _fmt(n: int) -> String:
 		out = "," + s.substr(s.length() - 3) + out
 		s = s.substr(0, s.length() - 3)
 	return s + out
+
+
+## v0.2 1단계 화면(DESIGN-v0.2 10절): 생애 단계 나이 막대, 먹은 양, 학습 절, 두뇌 탭 타고난 / 배운 / 차이, 학습률 열.
+## 학습을 끈 세계는 예전과 같고(탭·학습 절·학습률 열 없음, 그림 = 유전체), 켠 세계는 탭마다 다른 값.
+func _stage1(t, panel: InfoPanel, world: SimWorld) -> void:
+	# ── 생애 단계 경계 = SimBrain.life_stage 와 같은 판정(나이 0 ~ 수명 모든 값) ──
+	var bad: Array[String] = []
+	for c in STAGE_CASES:
+		var mx: int = c[0]
+		var mat: int = c[1]
+		var b := InfoPanel.stage_bounds(mx, mat, c[2], c[3])
+		for age in mx + 1:
+			var want := SimBrain.life_stage(age, mx, mat, c[2], c[3])
+			var got := SimBrain.LIFE_JUVENILE
+			if age >= b[2]:
+				got = SimBrain.LIFE_OLD
+			elif age >= b[1]:
+				got = SimBrain.LIFE_ADULT
+			elif age >= b[0]:
+				got = SimBrain.LIFE_YOUNG
+			if got != want:
+				bad.append("%s 나이 %d: 경계 %s → %d ≠ %d" % [str(c), age, b, got, want])
+				break
+	t.check(bad.is_empty(), "나이 막대 단계 경계 = SimBrain.life_stage(경우 %d개, 나이 0~수명): %s" % [STAGE_CASES.size(), "; ".join(bad)])
+	var tb := InfoPanel.stage_ranges_text(InfoPanel.stage_bounds(200, 30, 0.1, 0.8), 200)
+	t.check(tb.contains("어린 0~29") and not tb.contains("젊은") and tb.contains("어른 30~159") and tb.contains("늙은 160~200"),
+			"단계 구간 말풍선(젊은 구간이 비면 뺌): " + tb.replace("\n", " / "))
+	# ── 학습 끈 세계(기본): 나이 막대·먹은 양은 있고, 학습 절·탭·학습률 열은 없고 그림 = 유전체 ──
+	var i0 := 0
+	var id0 := world.s_id[i0]
+	var d0 := world.slime_info(id0)
+	panel.set_brain_mode(BrainView.MODE_DIFF)
+	panel.show_slime(world, id0)
+	await t.frames(1)
+	var bv := panel.brain_view()
+	var st0 := world.life_stage_of(i0)
+	var cfg: Dictionary = world.cfg
+	var b0 := InfoPanel.stage_bounds(int(d0.max_age), int(cfg.repro.maturity), float(cfg.life.adult_frac), float(cfg.life.old_frac))
+	var want_ticks := PackedFloat64Array()
+	for k in b0:
+		if k > 0 and k < int(d0.max_age):
+			want_ticks.append(float(k) / float(int(d0.max_age)))
+	t.check(panel._v_age.text == "%d / %d틱 · %s" % [int(d0.age), int(d0.max_age), SimBrain.LIFE_STAGE_NAMES[st0]]
+			and panel._age_bar.ticks == want_ticks and panel._age_bar.stage == st0
+			and is_equal_approx(panel._age_bar.value, float(d0.age)) and is_equal_approx(panel._age_bar.max_value, float(d0.max_age)),
+			"나이 막대: \"%s\", 눈금 %s = 단계 경계 ÷ 수명, 단계 %d" % [panel._v_age.text, panel._age_bar.ticks, st0])
+	var fill := panel._age_bar.get_theme_stylebox("fill") as StyleBoxFlat
+	var stage_cols: Array = UiConfig.value("slime.life_stage_colors")
+	t.check(fill != null and fill.bg_color.is_equal_approx(Color.from_string(str(stage_cols[st0]), Color.MAGENTA).darkened(InfoPanel.FILL_DARKEN)),
+			"나이 막대 채움 = 생애 단계 색(ui.slime.life_stage_colors[%d])" % st0)
+	t.check(panel._v_eaten.text == "에너지 %.1f" % world.s_eaten[i0], "먹은 양 = s_eaten: " + panel._v_eaten.text)
+	t.check(not panel._sec_learn.visible and not panel.brain_tabs_visible() and not bv.has_learned() and not bv.has_eta()
+			and bv.mode() == BrainView.MODE_INNATE, "학습 끈 세계: 학습 절·두뇌 탭·학습률 열 없음, 탭을 차이로 골라 두어도 타고난만")
+	var same_off := true
+	var L: Dictionary = world.L
+	var g0: PackedFloat32Array = d0.genome
+	for q in int(L.n_out):
+		for j in int(L.n_hid):
+			same_off = same_off and bv.weight_of(BrainView.BLOCK_W2, q, j) == float(g0[int(L.w2_offset) + q * int(L.n_hid) + j])
+	for j in int(L.n_hid):
+		for k in int(L.n_in):
+			same_off = same_off and bv.weight_of(BrainView.BLOCK_W1, j, k) == float(g0[j * int(L.n_in) + k])
+	t.check(same_off and bv.color_scale() == float(cfg.brain.weight_clamp)
+			and bv.custom_minimum_size.is_equal_approx(BrainView.size_for(L, InfoPanel.brain_width()))
+			and BrainView.eta_extra(L) == 0.0, "학습 끈 세계: 열지도 칸 = 유전체, 색 상한 = weight_clamp, 크기 그대로(학습률 열 0)")
+	# 옛 스냅숏을 연 세계: 그 전에 태어난 개체의 먹은 양은 모름
+	t.check(InfoPanel.eaten_text({id = 3, eaten = 0.0}, 5) == InfoPanel.EATEN_UNKNOWN and InfoPanel.eaten_text({id = 5, eaten = 1.5}, 5) == "에너지 1.5",
+			"먹은 양: id < eaten_from_id 면 모름")
+	# ── 차이 탭 색 상한 ──
+	var sc_bad: Array[String] = []
+	for c in DIFF_SCALES:
+		var got := BrainView.diff_scale_for(c[0])
+		if not is_equal_approx(got, c[1]):
+			sc_bad.append("%s → %s" % [str(c[0]), str(got)])
+	t.check(sc_bad.is_empty(), "차이 탭 색 상한 = 가장 큰 차이 이상의 1·2·5 × 10^k: %s" % ", ".join(sc_bad))
+	# ── 학습 켠 세계(learn_basic + 기억 2) ──
+	var wl: SimWorld = t.make_world({"brain.memory_units": 2}, LEARN_SEED, "learn_basic")
+	if wl == null:
+		t.check(false, "학습 세계를 만듦")
+		return
+	wl.step_n(LEARN_TICKS)
+	var li := -1
+	var best := 0.0
+	for i in wl.population():
+		var v := wl.learned_amount_of(i)
+		if v > best and int(wl.s_max_age[i]) - int(wl.s_age[i]) > LEARN_WAIT:
+			best = v
+			li = i
+	t.check(li >= 0 and best > 0.0, "배운 두뇌가 타고난 것과 다른 개체를 찾음(배운 양 %.4f)" % best)
+	if li < 0:
+		return
+	var lid := wl.s_id[li]
+	var before := WorldCompare.fingerprint(wl)
+	panel.set_brain_mode(BrainView.MODE_INNATE)
+	panel.show_slime(wl, lid)
+	await t.frames(1)
+	bv = panel.brain_view()
+	var LL: Dictionary = wl.L
+	var n_hid := int(LL.n_hid)
+	var n_act := int(LL.n_act)
+	var dl := wl.slime_info(lid)
+	var gl: PackedFloat32Array = dl.genome
+	var w2n := n_act * n_hid
+	t.check(panel._sec_learn.visible and panel.brain_tabs_visible() and bv.has_learned() and bv.has_eta() and bv.mode() == BrainView.MODE_INNATE,
+			"학습 켠 세계: 학습 절·두뇌 탭·학습률 열이 보임")
+	t.check(panel._v_eta.text == "평균 %.3f" % float(dl.eta) and panel._v_dw.text == "%.4f" % wl.learned_amount_of(li)
+			and panel._v_assim.text == "%.2f" % wl.assim_of(li),
+			"학습 절 = slime_info.eta·learned_amount_of·assim_of: %s · %s · %s" % [panel._v_eta.text, panel._v_dw.text, panel._v_assim.text])
+	# 탭마다 칸 값: 타고난 = 유전체, 배운 = 행동 행만 s_w2(기억 행·W1 은 유전체), 차이 = 배운 − 타고난(나머지 0)
+	var tabs_ok := {}
+	var any_diff := false
+	for m in [BrainView.MODE_INNATE, BrainView.MODE_LEARNED, BrainView.MODE_DIFF]:
+		panel.set_brain_mode(m)
+		var ok: bool = bv.mode() == m
+		for q in int(LL.n_out):
+			for j in n_hid:
+				var inn := float(gl[int(LL.w2_offset) + q * n_hid + j])
+				var lw := wl.s_w2[li * w2n + q * n_hid + j] if q < n_act else inn
+				var want_v := inn
+				if m == BrainView.MODE_LEARNED:
+					want_v = lw
+				elif m == BrainView.MODE_DIFF:
+					want_v = lw - inn
+				ok = ok and bv.weight_of(BrainView.BLOCK_W2, q, j) == want_v
+				if q < n_act and lw != inn:
+					any_diff = true
+		for j in n_hid:
+			for k in int(LL.n_in):
+				var w1v := float(gl[j * int(LL.n_in) + k])
+				ok = ok and bv.weight_of(BrainView.BLOCK_W1, j, k) == (0.0 if m == BrainView.MODE_DIFF else w1v)
+		tabs_ok[BrainView.MODE_NAMES[m]] = ok
+	t.check(not tabs_ok.values().has(false) and any_diff,
+			"탭 타고난 / 배운 / 차이 칸 값(행동 행만 배운 두뇌, 기억 행·입력층은 타고난, 차이 탭은 그 둘이 0): %s, 다른 칸 있음 %s" % [tabs_ok, any_diff])
+	# 차이 탭 색 상한·범례, 배운 탭은 weight_clamp
+	var mxd := 0.0
+	for q in n_act:
+		for j in n_hid:
+			mxd = maxf(mxd, absf(wl.s_w2[li * w2n + q * n_hid + j] - float(gl[int(LL.w2_offset) + q * n_hid + j])))
+	panel.set_brain_mode(BrainView.MODE_DIFF)
+	await t.frames(1)
+	var ds := bv.color_scale()
+	t.check(ds == BrainView.diff_scale_for(mxd) and ds >= mxd and bv.last_scale == ds and bv.last_legend == BrainView.legend_texts(ds),
+			"차이 탭 색 상한 %s ≥ 가장 큰 차이 %.4f, 범례 %s" % [str(ds), mxd, bv.last_legend])
+	panel.set_brain_mode(BrainView.MODE_LEARNED)
+	await t.frames(1)
+	t.check(bv.last_scale == float(wl.cfg.brain.weight_clamp), "배운 탭 색 상한 = weight_clamp")
+	# 학습률 열: 값 = 유전체 η, 칸 풍선
+	var eta_ok := true
+	for q in n_act:
+		eta_ok = eta_ok and bv.eta_of(q) == float(gl[int(LL.eta_offset) + q])
+	var cell := UiConfig.num("info.heatmap_cell")
+	var cw := BrainView.cell_width_for(LL, InfoPanel.brain_width())
+	var y2 := UiConfig.num("info.heatmap_header_height") + float(n_hid) * cell + UiConfig.num("info.heatmap_block_gap") + cell
+	var ex := UiConfig.num("info.heatmap_label_width") + float(n_hid) * cw + BrainView.eta_extra(LL) - UiConfig.num("info.heatmap_eta_width") * 0.5
+	var ce := bv.cell_at(Vector2(ex, y2 + cell * (float(SimBrain.ACT_EAT) + 0.5)))
+	t.check(eta_ok and ce.get("block", "") == BrainView.BLOCK_ETA and int(ce.row) == SimBrain.ACT_EAT
+			and float(ce.weight) == float(gl[int(LL.eta_offset) + SimBrain.ACT_EAT]) and str(ce.text).contains("학습률"),
+			"학습률 열 = 유전체 학습률 유전자(먹기 칸 풍선: %s)" % str(ce.get("text", "")).replace("\n", " / "))
+	t.check(bv.custom_minimum_size.x <= InfoPanel.brain_width() + 0.5 and panel.get_combined_minimum_size().x <= UiConfig.num("lab.right_panel_width") + 0.5,
+			"학습률 열을 더해도 열지도 %.0f ≤ %.0f, 창 너비 그대로" % [bv.custom_minimum_size.x, InfoPanel.brain_width()])
+	# 탭 단추: 누르면 그 탭, 다른 개체로 옮겨도 유지
+	var tab_btns: Array[Button] = []
+	for n in panel.find_children("*", "Button", true, false):
+		if n.has_meta(InfoPanel.META_BRAIN_MODE):
+			tab_btns.append(n as Button)
+	t.check(tab_btns.size() == 3, "두뇌 탭 단추 3개")
+	if tab_btns.size() == 3:
+		tab_btns[BrainView.MODE_DIFF].pressed.emit()
+		var other := wl.s_id[(li + 1) % wl.population()]
+		panel.show_slime(wl, other)
+		panel.show_slime(wl, lid)
+		t.check(panel.brain_mode() == BrainView.MODE_DIFF and bv.mode() == BrainView.MODE_DIFF and tab_btns[BrainView.MODE_DIFF].button_pressed
+				and not tab_btns[BrainView.MODE_INNATE].button_pressed, "탭 단추 '차이' → 차이 탭, 다른 개체로 옮겼다 와도 유지")
+	# refresh 가 배운 두뇌를 다시 읽음(배운 두뇌가 바뀔 때까지 진행) — 정보 창은 세계를 바꾸지 않음
+	var w0 := wl.s_w2.slice(li * w2n, (li + 1) * w2n)
+	var waited := 0
+	while waited < LEARN_WAIT and wl.index_of_id(lid) != -1:
+		wl.step()
+		waited += 1
+		var ii := wl.index_of_id(lid)
+		if ii >= 0 and wl.s_w2.slice(ii * w2n, (ii + 1) * w2n) != w0:
+			break
+	var ni := wl.index_of_id(lid)
+	panel.refresh()
+	var now_w2 := wl.s_w2.slice(ni * w2n, (ni + 1) * w2n) if ni >= 0 else PackedFloat64Array()
+	var fresh := ni >= 0 and now_w2 != w0
+	for q in n_act:
+		for j in n_hid:
+			if fresh:
+				fresh = bv.weight_of(BrainView.BLOCK_W2, q, j) == now_w2[q * n_hid + j] - float(gl[int(LL.w2_offset) + q * n_hid + j])
+	t.check(fresh and panel._v_dw.text == "%.4f" % wl.learned_amount_of(ni),
+			"%d틱 뒤 배운 두뇌가 바뀌면 refresh 가 차이 탭·배운 양을 다시 읽음" % waited)
+	var ref: SimWorld = t.make_world({"brain.memory_units": 2}, LEARN_SEED, "learn_basic")
+	ref.step_n(wl.tick)
+	t.check(WorldCompare.same(wl, ref) == "", "정보 창(학습 절·탭)을 거쳐도 학습 세계 상태(배운 두뇌·고리 포함)가 헤드리스와 같음 %s" % WorldCompare.same(wl, ref))
+	before = WorldCompare.fingerprint(wl)
+	for m in 3:
+		panel.set_brain_mode(m)
+		panel.refresh()
+	t.check(WorldCompare.diff(before, wl) == "", "탭을 바꾸고 refresh 해도 세계 그대로")
+	# 지켜보다 죽으면 마지막 배운 두뇌·탭을 남김
+	var guard := 0
+	while wl.index_of_id(lid) != -1 and guard < DEATH_GUARD:
+		wl.step()
+		guard += 1
+	panel.refresh()
+	t.check(wl.index_of_id(lid) == -1 and panel.brain_tabs_visible() and bv.has_learned() and UiTheme.plain_text(panel._brain_note.text).contains("죽기 직전"),
+			"지켜보던 학습 개체가 죽으면 마지막 배운 두뇌와 탭이 남음(죽음 %s, 탭 %s, 배운 두뇌 %s, 안내 \"%s\")" % [
+				wl.index_of_id(lid) == -1, panel.brain_tabs_visible(), bv.has_learned(), UiTheme.plain_text(panel._brain_note.text)])
+	t.check(panel._v_eaten_dead.text == "에너지 %.1f" % float(wl.slime_info(lid).eaten), "죽은 개체의 먹은 양 = 평생: " + panel._v_eaten_dead.text)
+	# 기록만 남은 학습 개체: 두뇌·탭 없음, 학습률 평균은 계통 기록, 배운 양은 모름
+	panel.show_slime(wl, lid)
+	t.check(not panel.brain_tabs_visible() and panel._sec_learn.visible and panel._v_eta.text == "평균 %.3f" % float(wl.slime_info(lid).eta)
+			and panel._v_dw.text == InfoPanel.UNKNOWN_TEXT, "기록만 남은 학습 개체: 탭 없음, 학습률 = 계통 기록, 배운 양 모름")
+	panel.set_brain_mode(BrainView.MODE_INNATE)

@@ -4,6 +4,9 @@ extends PanelContainer
 ## 계약: docs/VIEW-API.md "InfoPanel".
 ##
 ## 시뮬레이션은 SIM-API 의 읽기 질의(slime_info·children_of·index_of_id·lin_hue·L)와 읽기 전용 cfg(brain.weight_clamp)만 쓴다.
+## v0.2 1단계(DESIGN-v0.2 10절): 나이 막대에 생애 단계(이름·경계 눈금 — cfg.repro.maturity·cfg.life.*), 먹은 양, 학습을 켠 세계는
+## '학습' 절(학습률 평균·배운 양 learned_amount_of·동화 지수 assim_of)과 두뇌 탭 타고난 / 배운 / 차이(배운 두뇌 s_w2). 학습을 끈
+## 세계는 학습 절·탭이 없고 두뇌 그림이 예전과 같다.
 ## 노드는 모두 코드로 만든다(.tscn 없음). 머리(색 견본·#id·세대·생사·따라가기)는 위에 고정, 나머지는 세로 스크롤.
 ## 테마는 실험실 공용 UiTheme 을 바탕으로(단추·말풍선이 실험실과 같은 모양), 이 창에만 있는 것(작은 단추 글자·가계 단추·
 ## 에너지 막대·가는 스크롤 막대·촘촘한 구분선)만 더한다. 수치는 ui.json 의 info·theme 절.
@@ -53,6 +56,19 @@ const GRAB_PRESS_DARKEN := 0.2
 const BAR_RADIUS_K := 0.75
 ## 마우스 휠 한 칸에 바깥 스크롤을 움직이는 몫(ScrollContainer 기본과 같은 page/8)
 const WHEEL_PAGE := 0.125
+## 두뇌 탭 단추의 메타(탭 번호 BrainView.MODE_*)·풍선 도움말
+const META_BRAIN_MODE := "brain_mode"
+const BRAIN_TAB_TIPS: Array[String] = [
+	"타고난 두뇌: 유전체 가중치 그대로(평생 바뀌지 않음)",
+	"배운 두뇌: 출력층 행동 행을 평생 학습한 값으로(입력층·기억 출력은 타고난 그대로)",
+	"차이: 배운 - 타고난(행동 행만). 색 상한 = 가장 큰 차이 이상의 둥근 값",
+]
+## 값을 모를 때(죽은 개체의 배운 양·동화 지수, 옛 스냅숏을 연 세계의 먹은 양)
+const UNKNOWN_TEXT := "—"
+const EATEN_UNKNOWN := "모름(옛 스냅숏 전 출생)"
+## 나이 막대의 생애 단계 눈금 두께·불투명도
+const STAGE_TICK_W := 1.5
+const STAGE_TICK_ALPHA := 0.75
 
 ## 자식 목록을 다시 훑은 횟수(검사용: 자식 수가 그대로면 refresh 가 훑지 않는다)
 var children_scans := 0
@@ -61,6 +77,10 @@ var _world: SimWorld
 var _id := -1
 var _alive := false
 var _has_brain := false
+# 이 세계가 평생 학습을 켰나(L.eta_len > 0)와 사용자가 고른 두뇌 탭(개체를 바꿔도 유지), 마지막으로 넣은 배운 두뇌
+var _learn_on := false
+var _brain_mode := BrainView.MODE_INNATE
+var _last_w2 := PackedFloat64Array()
 # 가계 단추로 옮겨 가는 중(slime_requested 를 내는 동안 true): 스크롤 위치를 그대로 둔다
 var _nav_from_panel := false
 # 자식 목록 캐시: (세계, id) 와 그때의 자식 수. 수가 바뀌고 목록이 한도 미만일 때만 다시 훑는다.
@@ -97,6 +117,9 @@ var _body: VBoxContainer
 var _sec_state: VBoxContainer
 var _sec_death: VBoxContainer
 var _v_age: Label
+var _age_bar: AgeBar
+var _stage_styles: Array[StyleBoxFlat] = []
+var _v_eaten: Label
 var _energy_bar: ProgressBar
 var _energy_label: Label
 var _v_carry: Label
@@ -106,6 +129,13 @@ var _v_head: Label
 var _v_cause: Label
 var _v_death: Label
 var _v_life: Label
+var _v_eaten_dead: Label
+var _sec_learn: VBoxContainer
+var _v_eta: Label
+var _v_dw: Label
+var _v_assim: Label
+var _brain_tabs: HBoxContainer
+var _tab_btns: Array[Button] = []
 var _v_size: Label
 var _v_sense: Label
 var _hue_dot: ColorDot
@@ -346,20 +376,32 @@ func _fill_static(d: Dictionary) -> void:
 	_hue_dot.color = _hue_color(hue)
 	_v_hue.text = "%.3f" % hue
 	_v_birth.text = "틱 " + _fmt_int(int(d.birth))
+	# 학습(v0.2 1단계): 학습률 유전자 평균은 계통 기록이라 죽은 개체도, 배운 양·동화 지수는 살아 있을 때만(_update_live)
+	_learn_on = int(_world.L.get("eta_len", 0)) > 0
+	_sec_learn.visible = _learn_on
+	_v_eta.text = "평균 %.3f" % float(d.get("eta", 0.0))
+	_v_dw.text = UNKNOWN_TEXT
+	_v_assim.text = UNKNOWN_TEXT
 	if d.has("genome"):
 		_brain.weight_clamp = float(_world.cfg["brain"]["weight_clamp"])
 		_brain.max_width = brain_width()
 		_brain.set_genome(_world.L, d.genome)
+		_last_w2 = _learned_now()
+		_brain.set_learned(_last_w2)
+		_brain.set_mode(_brain_mode)
 		_brain_scroll.scroll_horizontal = 0
 		_brain_scroll.show()
 		_brain_note.hide()
 		_has_brain = true
 	else:
 		_brain_scroll.hide()
+		_last_w2 = PackedFloat64Array()
+		_brain.set_learned(_last_w2)
 		# 낱말 단위로 줄바꿈(검토 I49: ICU 줄바꿈이 "없/습니다" 처럼 음절 사이에서 끊었음)
 		_brain_note.text = UiTheme.keep_words(NO_BRAIN_TEXT)
 		_brain_note.show()
 		_has_brain = false
+	_sync_tabs()
 
 
 ## 부모(2)·조부모(최대 4) 단추. 계통은 바뀌지 않으므로 개체가 바뀔 때만 만든다.
@@ -414,6 +456,7 @@ func _apply_life(d: Dictionary, force: bool) -> void:
 	_v_cause.text = cname
 	_v_death.text = "틱 " + _fmt_int(death)
 	_v_life.text = "%s틱  (출생 %s)" % [_fmt_int(death - int(d.birth)), _fmt_int(int(d.birth))]
+	_v_eaten_dead.text = eaten_text(d, _world.eaten_from_id)
 	_brain.set_highlight_action(-1)
 	if _has_brain:
 		_brain_note.text = UiTheme.keep_words("죽기 직전의 두뇌")
@@ -424,7 +467,10 @@ func _apply_life(d: Dictionary, force: bool) -> void:
 func _update_live(d: Dictionary) -> void:
 	if not _alive:
 		return
-	_v_age.text = "%s / %s틱" % [_fmt_int(int(d.age)), _fmt_int(int(d.max_age))]
+	_show_age(d)
+	_v_eaten.text = eaten_text(d, _world.eaten_from_id)
+	if _learn_on:
+		_update_learning()
 	var e := float(d.energy)
 	var emax := maxf(float(d.energy_max), 0.0001)
 	_energy_bar.max_value = emax
@@ -448,6 +494,128 @@ func _update_live(d: Dictionary) -> void:
 	_v_pos.text = "(%d, %d)" % [int(d.x), int(d.y)]
 	_heading = int(d.heading)
 	_v_head.text = heading_text(_heading)
+
+
+## 나이 막대: 채움 = 나이 ÷ 자기 수명(생애 단계 색), 눈금 = 단계 경계(stage_bounds), 글 "나이 / 수명틱 · 단계".
+func _show_age(d: Dictionary) -> void:
+	var age := int(d.age)
+	var mx := maxi(int(d.max_age), 1)
+	var cfg: Dictionary = _world.cfg
+	var maturity := int(cfg.repro.maturity)
+	var b := stage_bounds(mx, maturity, float(cfg.life.adult_frac), float(cfg.life.old_frac))
+	var st := int(d.get("life_stage", SimBrain.life_stage(age, mx, maturity, float(cfg.life.adult_frac), float(cfg.life.old_frac))))
+	_v_age.text = age_text(age, mx, st)
+	_age_bar.max_value = float(mx)
+	_age_bar.value = float(mini(age, mx))
+	var ticks := PackedFloat64Array()
+	for k in b:
+		if k > 0 and k < mx:
+			ticks.append(float(k) / float(mx))
+	if ticks != _age_bar.ticks:
+		_age_bar.ticks = ticks
+		_age_bar.queue_redraw()
+	if st != _age_bar.stage and st >= 0 and st < _stage_styles.size():
+		_age_bar.stage = st
+		_age_bar.add_theme_stylebox_override("fill", _stage_styles[st])
+	var tip := stage_ranges_text(b, mx)
+	if tip != _age_bar.tooltip_text:
+		_age_bar.tooltip_text = tip
+
+
+## 학습을 켠 세계에서 살아 있는 개체의 배운 양·동화 지수와 배운 두뇌(두뇌 그림의 배운·차이 탭)를 다시 읽는다.
+func _update_learning() -> void:
+	var i := _world.index_of_id(_id)
+	if i < 0:
+		return
+	_v_dw.text = "%.4f" % _world.learned_amount_of(i)
+	_v_assim.text = "%.2f" % _world.assim_of(i)
+	if _has_brain:
+		var w2 := _learned_now()
+		if w2 != _last_w2:
+			_last_w2 = w2
+			_brain.set_learned(w2)
+			_brain.set_mode(_brain_mode)
+
+
+## 지금 개체의 배운 두뇌(행동 행 n_act × 은닉, SIM-API s_w2 의 한 개체분). 학습 끔·죽음이면 빈 배열.
+func _learned_now() -> PackedFloat64Array:
+	if not _learn_on or _world == null:
+		return PackedFloat64Array()
+	var i := _world.index_of_id(_id)
+	var n := int(_world.L.n_act) * int(_world.L.n_hid)
+	if i < 0 or _world.s_w2.size() < (i + 1) * n:
+		return PackedFloat64Array()
+	return _world.s_w2.slice(i * n, (i + 1) * n)
+
+
+## (추가, v0.2 1단계) 두뇌 탭 BrainView.MODE_*(타고난·배운·차이). 고른 탭은 개체를 바꿔도 유지하고, 학습을 끈 세계(배운 두뇌
+## 없음)에서는 타고난만 그린다.
+func set_brain_mode(m: int) -> void:
+	_brain_mode = clampi(m, BrainView.MODE_INNATE, BrainView.MODE_DIFF)
+	_brain.set_mode(_brain_mode)
+	_sync_tabs()
+
+
+## (추가) 사용자가 고른 두뇌 탭(그리는 탭은 brain_view().mode() — 배운 두뇌가 없으면 타고난).
+func brain_mode() -> int:
+	return _brain_mode
+
+
+## (추가, 검사용) 두뇌 열지도.
+func brain_view() -> BrainView:
+	return _brain
+
+
+## (추가) 두뇌 탭이 보이나(학습을 켠 세계에서 두뇌를 그릴 수 있을 때만).
+func brain_tabs_visible() -> bool:
+	return _brain_tabs.visible
+
+
+func _sync_tabs() -> void:
+	_brain_tabs.visible = _learn_on and _has_brain and _brain.has_learned()
+	var shown := _brain.mode()
+	for k in _tab_btns.size():
+		_tab_btns[k].set_pressed_no_signal(k == shown)
+
+
+func _on_tab_pressed(m: int) -> void:
+	set_brain_mode(m)
+
+
+## (추가, v0.2 1단계) 생애 단계가 바뀌는 나이 [성숙, 어른 시작, 늙음 시작] — SimBrain.life_stage 와 같은 판정(어린 먼저, 그다음
+## 늙은 → 어른 → 젊은)이라 어른·늙음 시작은 max(성숙, 몫 × 수명 이상인 첫 정수 나이)이고 어른 시작 ≤ 늙음 시작(빈 구간은 같은 값).
+static func stage_bounds(max_age: int, maturity: int, adult_frac: float, old_frac: float) -> PackedInt32Array:
+	var m := float(max_age)
+	var old_start := maxi(maturity, ceili(old_frac * m))
+	var adult_start := mini(maxi(maturity, ceili(adult_frac * m)), old_start)
+	return PackedInt32Array([maturity, adult_start, old_start])
+
+
+## (추가) 나이 막대 글 "45 / 210틱 · 젊은".
+static func age_text(age: int, max_age: int, stage: int) -> String:
+	var name: String = SimBrain.LIFE_STAGE_NAMES[stage] if stage >= 0 and stage < SimBrain.LIFE_STAGE_NAMES.size() else "?"
+	return "%s / %s틱 · %s" % [_fmt_int(age), _fmt_int(max_age), name]
+
+
+## (추가) 나이 막대 말풍선: 단계마다 나이 구간(빈 구간은 뺌) "생애 단계(틱): 어린 0~29 · 젊은 30~79 · …".
+static func stage_ranges_text(b: PackedInt32Array, max_age: int) -> String:
+	var starts := [0, b[0], b[1], b[2]]
+	var parts: Array[String] = []
+	for st in starts.size():
+		var lo: int = starts[st]
+		var hi: int = (starts[st + 1] - 1) if st + 1 < starts.size() else max_age
+		if hi < lo:
+			continue
+		parts.append("%s %s~%s" % [SimBrain.LIFE_STAGE_NAMES[st], _fmt_int(lo), _fmt_int(hi)])
+	return "생애 단계(나이, 틱): " + " · ".join(parts) + "\n눈금 = 단계가 바뀌는 나이(성숙 repro.maturity, 수명 × life.adult_frac·old_frac)"
+
+
+## (추가) 먹은 양 글: 태어난 뒤 먹은 에너지(살아 있으면 지금까지, 죽었으면 평생). 옛 스냅숏을 연 세계에서 그 전에 태어난 개체
+## (id < eaten_from_id)는 모름.
+static func eaten_text(d: Dictionary, eaten_from_id: int) -> String:
+	if int(d.get("id", 0)) < eaten_from_id:
+		return EATEN_UNKNOWN
+	return "에너지 %.1f" % float(d.get("eaten", 0.0))
 
 
 ## (추가) "운반" 값: 나르는 먹이 양에 단위를 붙인다("먹이 0.6", 없으면 "없음" — 검토 I47: 예전엔 단위 없는 "0.6").
@@ -614,6 +782,7 @@ func _build() -> void:
 	_build_state()
 	_build_death()
 	_build_traits()
+	_build_learning()
 	_build_family()
 	_build_brain()
 
@@ -675,7 +844,26 @@ func _build_header() -> void:
 func _build_state() -> void:
 	_sec_state = _section("현재 상태")
 	var g := _grid(_sec_state)
-	_v_age = _row(g, "나이")
+	# 나이 막대(v0.2 1단계): 채움 = 나이 ÷ 수명(생애 단계 색), 눈금 = 단계 경계, 글 = "나이 / 수명틱 · 단계"
+	_key(g, "나이")
+	_age_bar = AgeBar.new()
+	_age_bar.show_percentage = false
+	_age_bar.mouse_filter = Control.MOUSE_FILTER_PASS
+	# 글 줄 높이(16)에 맞춤 — 줄이 높아지지 않게(V07)
+	_age_bar.custom_minimum_size = Vector2(0.0, UiConfig.num("info.age_bar_height"))
+	_age_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_age_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_age_bar.tick_color = Color(_c_text, STAGE_TICK_ALPHA)
+	_age_bar.tick_width = STAGE_TICK_W
+	g.add_child(_age_bar)
+	_v_age = _label("", _fs_small, _c_text, true)
+	_v_age.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_v_age.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_v_age.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_v_age.add_theme_constant_override("outline_size", UiConfig.integer("info.energy_outline"))
+	_v_age.add_theme_color_override("font_outline_color", _c_bg)
+	_v_age.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_age_bar.add_child(_v_age)
 	_key(g, "에너지")
 	_energy_bar = ProgressBar.new()
 	_energy_bar.show_percentage = false
@@ -695,8 +883,22 @@ func _build_state() -> void:
 	_v_action = _row(g, "고른 행동")
 	_v_action.tooltip_text = "두뇌가 고른 행동. 아직 발견하지 않은 줍기·심기는 효과 없이 '시도'로만 셉니다(발견의 재료)"
 	_v_action.mouse_filter = Control.MOUSE_FILTER_PASS
-	_v_pos = _row(g, "위치")
-	_v_head = _row(g, "방향")
+	# 위치·방향은 한 줄(v0.2 1단계에서 먹은 양 줄을 더하며 — 1600×900 에서 보통 개체가 스크롤 없이 보이게, 검사 V07)
+	_key(g, "위치·방향")
+	var ph := HBoxContainer.new()
+	ph.add_theme_constant_override("separation", UiConfig.integer("info.inline_gap"))
+	ph.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	g.add_child(ph)
+	_v_pos = _label("", _fs, _c_text)
+	ph.add_child(_v_pos)
+	_v_head = _label("", _fs, _c_text)
+	_v_head.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_v_head.clip_text = true
+	_v_head.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	ph.add_child(_v_head)
+	_v_eaten = _row(g, "먹은 양")
+	_v_eaten.tooltip_text = "태어난 뒤 먹은 에너지"
+	_v_eaten.mouse_filter = Control.MOUSE_FILTER_PASS
 
 
 func _build_death() -> void:
@@ -706,6 +908,9 @@ func _build_death() -> void:
 	_v_cause.add_theme_color_override("font_color", _c_danger)
 	_v_death = _row(g, "사망")
 	_v_life = _row(g, "산 기간")
+	_v_eaten_dead = _row(g, "먹은 양")
+	_v_eaten_dead.tooltip_text = "평생 먹은 에너지"
+	_v_eaten_dead.mouse_filter = Control.MOUSE_FILTER_PASS
 
 
 func _build_traits() -> void:
@@ -729,8 +934,43 @@ func _build_traits() -> void:
 	_v_children = _row(g, "자식 수")
 
 
+## 학습 절(v0.2 1단계, 학습을 켠 세계만 보임): 학습률 유전자 평균(행동마다는 두뇌 그림 오른쪽 열), 배운 양, 동화 지수.
+func _build_learning() -> void:
+	_sec_learn = _section("학습")
+	var g := _grid(_sec_learn)
+	_v_eta = _row(g, "학습률")
+	_v_eta.tooltip_text = "학습률 유전자의 행동 8개 평균(태어날 때 정해짐 — 행동마다의 값은 두뇌 그림 오른쪽)"
+	_v_dw = _row(g, "배운 양")
+	_v_dw.tooltip_text = "행동 가중치의 abs(배운 - 타고난) 평균(DESIGN-v0.2 11.2)"
+	_v_assim = _row(g, "동화 지수")
+	_v_assim.tooltip_text = "최근 판단마다 타고난·배운 두뇌가 같은 행동을 가장 크게 고르는 몫(0~1, 1 = 배운 것이 이미 타고난 것과 같음)"
+	for v: Label in [_v_eta, _v_dw, _v_assim]:
+		v.mouse_filter = Control.MOUSE_FILTER_PASS
+	_sec_learn.visible = false
+
+
 func _build_brain() -> void:
 	var sec := _section("두뇌 가중치")
+	# 탭(학습을 켠 세계만): 타고난 / 배운 / 차이
+	_brain_tabs = HBoxContainer.new()
+	_brain_tabs.name = "BrainTabs"
+	_brain_tabs.add_theme_constant_override("separation", UiConfig.integer("info.relative_gap"))
+	sec.add_child(_brain_tabs)
+	var group := ButtonGroup.new()
+	for m in BrainView.MODE_NAMES.size():
+		var b := Button.new()
+		b.text = BrainView.MODE_NAMES[m]
+		b.toggle_mode = true
+		b.button_group = group
+		b.theme_type_variation = SMALL_BUTTON
+		b.focus_mode = Control.FOCUS_ALL
+		b.mouse_filter = Control.MOUSE_FILTER_PASS
+		b.tooltip_text = BRAIN_TAB_TIPS[m]
+		b.set_meta(META_BRAIN_MODE, m)
+		b.pressed.connect(_on_tab_pressed.bind(m))
+		_brain_tabs.add_child(b)
+		_tab_btns.append(b)
+	_brain_tabs.visible = false
 	# 안내(죽기 직전의 두뇌 / 두뇌 없음)는 열지도 위에 둬서 스크롤 없이 보이게
 	_brain_note = _label("", _fs_small, _c_dim)
 	_brain_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -923,6 +1163,9 @@ func _make_theme() -> Theme:
 	for c in [_c_accent, _c_warn, _c_danger]:
 		_fill_styles.append(_box(Color(c).darkened(FILL_DARKEN), br, 0.0, 0.0))
 	th.set_stylebox("fill", "ProgressBar", _fill_styles[ENERGY_OK])
+	# 나이 막대 채움: 생애 단계 색(ui.slime.life_stage_colors — 지도의 생애 단계 색과 같음)
+	for c in UiConfig.value("slime.life_stage_colors", []):
+		_stage_styles.append(_box(Color.from_string(str(c), _c_accent).darkened(FILL_DARKEN), br, 0.0, 0.0))
 	# 촘촘한 구분선(머리 아래·절 제목 옆, 높이 info.separator_gap)
 	var line := StyleBoxLine.new()
 	line.color = _c_border
@@ -1068,3 +1311,17 @@ class RelativeButton:
 			draw_circle(c, r, dot_color, true, -1.0, true)
 		else:
 			draw_arc(c, r - RING_W * 0.5, 0.0, TAU, RING_SEGS, Color(dot_color, dead_alpha), RING_W, true)
+
+
+## 나이 막대(v0.2 1단계): ProgressBar(채움 = 생애 단계 색 — InfoPanel 이 fill 모양을 바꿈) 위에 단계 경계 눈금(ticks = 0~1 몫).
+class AgeBar:
+	extends ProgressBar
+	var ticks := PackedFloat64Array()
+	var stage := -1
+	var tick_color := Color.WHITE
+	var tick_width := 1.5
+
+	func _draw() -> void:
+		for f in ticks:
+			var x := roundf(f * size.x)
+			draw_line(Vector2(x, 0.0), Vector2(x, size.y), tick_color, tick_width)
