@@ -3242,12 +3242,13 @@ const SNAP_F32_ETA_MAX := 0.2
 const ETA_OVER_MAX := 0.5
 ## 관문 A 재조정으로 고른 학습 기본값(TEST-REPORT "v0.2 관문 A 재조정" 3절 — 씨앗 1~12 의 후보 C15: η 묶음 eta_init 0.8·cost_per_eta
 ## 0.0025(= 0.002 ÷ 0.8 — 틱당 학습 비용은 첫 값 그대로)·eta_max 8.0(= 10 × eta_init), 고리 감쇠 λ 0.95, 나머지는 첫 값).
-## 새 씨앗 13~24 의 관문 A 판정이 이 기본값으로 돌므로 바뀌면 test_learn_config 가 알림(바꾸려면 재조정 기록과 함께).
+## 새 씨앗 13~24 의 관문 A 재판정이 이 기본값으로 돌았고, 3차 판정(씨앗 25~36 — DESIGN-v0.2 14.3 '3차 판정', 사전 고정 'v0.2 관문 A 3차(3)')도
+## 이 기본값을 판정하므로 바뀌면 test_learn_config 가 알림(바꾸려면 고른 기록과 새 사전 고정과 함께).
 const LEARN_TUNED := {"learn.eta_init": 0.8, "learn.eta_max": 8.0, "learn.cost_per_eta": 0.0025, "learn.decay": 0.95,
 	"learn.stage_mult": [1.0, 0.6, 0.3, 0.1], "learn.min_surprise": 0.2, "learn.ring_len": 8, "learn.baseline_rate": 0.05, "learn.diag_factor": "exact"}
 const INHERIT_ETA_B := 0.015625
-## 학습 스냅숏 검사(test_learn_snapshot)의 learn_basic 씨앗: 관문 A 의 재판정·예비 씨앗(13~36 — learn_basic 은 A-2 의 기준 실행 세계)을
-## 쓰지 않게 101 이상(씨앗 규율 — DESIGN-v0.2 14.3 '재판정(씨앗 13~24)'. 처음에는 21 이었음)
+## 학습 스냅숏 검사(test_learn_snapshot)의 learn_basic 씨앗: 관문 A 의 판정 씨앗(지난 재판정 13~24·3차 25~36 — learn_basic 은 A-2 의
+## 기준 실행 세계)을 쓰지 않게 101 이상(씨앗 규율 — DESIGN-v0.2 14.3 '재판정(씨앗 13~24)'·'3차 판정(씨앗 25~36)'. 처음에는 21 이었음)
 const LEARN_SNAP_SEED := 101
 
 

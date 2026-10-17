@@ -8,7 +8,7 @@
   python3 tools/analyze.py sweep  --param mutation.rate=0.02,0.1 --seeds 1-4 --generations 50 --out results/sweep
   python3 tools/analyze.py report results/batch [--out 보고서폴더]
   python3 tools/analyze.py ablate --runs results/base --at-gen 30 --set mutation.rate=0.2 --ticks 340 --seeds 1-12
-  python3 tools/analyze.py gate-a --seeds 1-12 --prereg COMMIT --out results/gate-a1-life      # 공식 A-1(= --variant A-1-life)
+  python3 tools/analyze.py gate-a --seeds 1-12 --prereg COMMIT --out results/gate-a1-life3     # 공식 A-1(= --variant A-1-life3)
   python3 tools/analyze.py gate-a --variant A-2 --seeds 1-12 --prereg COMMIT --out results/gate-a2
   python3 tools/analyze.py baldwin results/learn [--probe 이식시험폴더 …] [--control-probe 대조폴더 …]
 
@@ -118,10 +118,13 @@ ACT_GEN_BIN = 10
 ACT_TICK_EDGES = [0, 200, 400, 600, 800, 1000]
 ## 먹은 양 표의 개체 세대 구간 폭(lineage.csv 의 gen)
 EATEN_GEN_BIN = 10
-## 관문 A-1(DESIGN-v0.2 14.3)의 대상 출생 틱 구간 [시작, 끝), 처음 정의(A-1)의 판정에 필요한 틱(그 전에 멸종하면 판정 불가 — 공식
-## A-1-life 에는 이 요구가 없음, 사용자 결정 2026-10-11), 씨앗마다 필요한 대상 출생 수(GATE_A_MIN_BIRTHS). 0단계 기준선 보고가 우연 기준
-## 세계에서 처음 정의의 판정이 가능한지 미리 본다(판정 자체는 gate-a).
+## 관문 A-1(DESIGN-v0.2 14.3)의 대상 출생 틱 구간 [시작, 끝) — 처음 정의(A-1)·지난 공식(A-1-life — 첫 판정·재판정)·0단계 미리 보기, 처음
+## 정의의 판정에 필요한 틱(그 전에 멸종하면 판정 불가 — A-1-life·A-1-life3 에는 이 요구가 없음, 사용자 결정 2026-10-11), 씨앗마다 필요한
+## 대상 출생 수(GATE_A_MIN_BIRTHS). 0단계 기준선 보고가 우연 기준 세계에서 처음 정의의 판정이 가능한지 미리 본다(판정 자체는 gate-a).
 GATE_A_BIRTH_WINDOW = (200, 600)
+## 3차 공식 A-1(A-1-life3 — 사용자 결정 2026-10-17, DESIGN-v0.2 14.3 '3차 판정(씨앗 25~36)')의 대상 출생 틱 [시작, 끝): 처음 개체가 아닌
+## 출생을 틱 0 부터(첫 자식 무리 전체 — 시작 경계 앞에 출생이 없어 학습이 출생 시점을 옮겨도 갈래마다 다른 몫이 들어가지 않음), 끝은 그대로
+GATE_A3_BIRTH_WINDOW = (0, 600)
 GATE_A_TICKS = 1000
 GATE_A_MIN_BIRTHS = 30
 ## 반사실 재생(ablate)의 두 갈래 폴더 이름(그대로 · 바꿈)과, 갈래 실행에 주는 평균 세대 끝 조건(세대가 먼저 끝내지 않게 큰 값 — 11.4)
@@ -952,10 +955,10 @@ def write_ablate_md(path: Path, args, runs_root: Path, pairs: list, md_rows: lis
 # ── 관문 A 판정(gate-a — DESIGN-v0.2 14.3) ──
 
 ## 판정 문턱(실행 전 고정 — 14.3·11.5, 명령 인자로 바꿀 수 없음. 보고서 머리에 그대로 인쇄). 씨앗 GATE_A_SEEDS 개 기준이라 씨앗 수가
-## 다르면 판정하지 않는다(값만 적음). A-1 의 대상 출생 틱 구간·대상 수 하한은 위의 GATE_A_BIRTH_WINDOW·GATE_A_MIN_BIRTHS(A-2 의 대상 수
-## 하한도 같음), GATE_A_TICKS 는 처음 정의(A-1)의 생존 틱.
+## 다르면 판정하지 않는다(값만 적음). A-1 계열의 대상 출생 틱 구간은 위의 GATE_A3_BIRTH_WINDOW(공식 A-1-life3)·GATE_A_BIRTH_WINDOW(A-1·
+## A-1-life — 변형의 window), 대상 수 하한은 GATE_A_MIN_BIRTHS(A-2 의 대상 수 하한도 같음), GATE_A_TICKS 는 처음 정의(A-1)의 생존 틱.
 GATE_A_WIN = 10
-## ① 의 묶은 먹은 양 중앙값 비(학습 ÷ freeze) 하한 — A-1(공식 A-1-life 와 처음 정의 A-1)만. A-2 의 통과 기준(14.3)에는 비 문턱이 없음(보고)
+## ① 의 묶은 먹은 양 중앙값 비(학습 ÷ freeze) 하한 — A-1 계열(공식 A-1-life3·지난 공식 A-1-life·처음 정의 A-1)만. A-2 의 통과 기준(14.3)에는 비 문턱이 없음(보고)
 GATE_A_RATIO = 1.05
 GATE_A_SECONDARY_WIN = 8
 GATE_A_SEEDS = 12
@@ -963,14 +966,18 @@ GATE_A_SEEDS = 12
 ## 나이 death_tick − birth_tick 의 평균, 묶은 값도 평균). 사전 결정(설계 운영자 2026-10-11, 판정 실행 전 — 14.3): 처음 정의의 '성숙까지
 ## 산 몫'은 기본값에서 늘 1.000 이라 갈래를 가르지 못해(1단계 검증) 표에 보고만 한다.
 GATE_A_SECONDARY = ("life", "children")
-## A-1-life 의 틱 상한: 대상(틱 GATE_A_BIRTH_WINDOW 출생)이 모두 죽을 때까지 — 최대 수명(life.max_age 200 + 흔들림 30)이면 830틱 전에
-## 모두 죽으므로 넉넉한 끝. 그 전에 멸종하면 실행기가 멈춤. 끝에 살아 있는 대상이 있으면 그 씨앗은 판정 불가(평생 값이 잘림)
+## A-1-life·A-1-life3 의 틱 상한: 대상(틱 600 전 출생 — GATE_A_BIRTH_WINDOW·GATE_A3_BIRTH_WINDOW 의 끝)이 모두 죽을 때까지 — 최대
+## 수명(life.max_age 200 + 흔들림 30)이면 830틱 전에 모두 죽으므로 넉넉한 끝. 그 전에 멸종하면 실행기가 멈춤. 끝에 살아 있는 대상이
+## 있으면 그 씨앗은 판정 불가(평생 값이 잘림)
 GATE_A_LIFE_MAX_TICKS = 1500
 ## 관문 A 세계(14.3 A-1): 우연 기준 예설정 + 학습 + 몸 자람(A-2 의 learn_basic 과 같은 몸). A-2 의 기준 행(우연 기준)도 이 세계
 GATE_A_PRESET = "chance_baseline"
 GATE_A_BASE_SETS = [("learn.enabled", "true"), ("body.grow_enabled", "true")]
-## 공식 A-1 판정 조건(사용자 결정 2026-10-11 — 14.3) = gate-a 의 기본 --variant
-GATE_A_OFFICIAL = "A-1-life"
+## A-1′ 세계에 생존 틱 요구를 뺀 A-1 계열(A-1-life·A-1-life3)의 세계 설정(GATE_A_BASE_SETS 뒤에 붙임 — 사용자 결정 2026-10-11)
+GATE_A_LIFE_SETS = [("population.initial", "400"), ("population.cap", "400"), ("plants.initial_fill", "1.0")]
+## 공식 A-1 판정 조건 = gate-a 의 기본 --variant. 3차(사용자 결정 2026-10-17 — 14.3 '3차 판정(씨앗 25~36)')부터 A-1-life3. 첫 판정·재판정의
+## 공식은 A-1-life(사용자 결정 2026-10-11 — 기록 재현을 위해 변형은 그대로 둠)
+GATE_A_OFFICIAL = "A-1-life3"
 ## A-2(14.3 — 보고): 예설정 GATE_A2_PRESET 을 평균 GATE_A2_AT_GEN 세대까지(끝 스냅숏의 틱 = F), 그 스냅숏에서 두 갈래를 F + GATE_A2_TICKS
 ## 까지, 대상 = 틱 [F, F + GATE_A2_WINDOW) 출생(F + 330 전에 모두 죽음). 기준 실행은 OUT/GATE_A2_BASE/seed<N>
 GATE_A2_PRESET = "learn_basic"
@@ -978,20 +985,27 @@ GATE_A2_AT_GEN = "30"
 GATE_A2_TICKS = 340
 GATE_A2_WINDOW = 100
 GATE_A2_BASE = "base"
-## 판정 조건의 이름 붙은 변형. kind = "start"(틱 0 부터 세 갈래) · "fork"(A-2 — 기준 실행의 끝 스냅숏에서 갈라짐). need_ticks = 대상과
+## 판정 조건의 이름 붙은 변형. kind = "start"(틱 0 부터 세 갈래) · "fork"(A-2 — 기준 실행의 끝 스냅숏에서 갈라짐). window = 대상 출생 틱
+## [시작, 끝)(start 만 — A-2 는 [F, F + GATE_A2_WINDOW)). need_ticks = 대상과
 ## 상관없이 그 틱까지 살아야 판정(0 = 요구 없음), max_ticks = 실행기 --max-ticks(틱 0 부터, 그 전에 멸종하면 멈춤). ratio = ① 에
 ## GATE_A_RATIO 문턱을 쓰나. strict = 판정 불가 씨앗이 하나라도 있으면 변형 전체가 판정 불가(A-1) — 거짓이면 남은 씨앗으로 문턱을 세고
 ## 판정 불가 씨앗은 높은 씨앗으로 세지 않음(A-2 — 14.3 '씨앗 단위 판정 불가는 표에 그대로').
 GATE_A_VARIANTS = {
-    "A-1": {"kind": "start", "sets": GATE_A_BASE_SETS, "max_ticks": GATE_A_TICKS, "need_ticks": GATE_A_TICKS,
-            "ratio": True, "strict": True,
+    "A-1": {"kind": "start", "sets": GATE_A_BASE_SETS, "window": GATE_A_BIRTH_WINDOW, "max_ticks": GATE_A_TICKS,
+            "need_ticks": GATE_A_TICKS, "ratio": True, "strict": True,
             "text": f"처음 정의(공식 아님 — 0단계 미리 보기에서 판정 불가로 보여 바꿈, 14.3) — 틱 0 부터 {GATE_A_TICKS:,}틱, "
                     f"두 갈래 모두 {GATE_A_TICKS:,}틱까지 살고 대상 ≥ {GATE_A_MIN_BIRTHS}"},
-    "A-1-life": {"kind": "start", "sets": GATE_A_BASE_SETS + [("population.initial", "400"), ("population.cap", "400"),
-                                                              ("plants.initial_fill", "1.0")],
+    "A-1-life": {"kind": "start", "sets": GATE_A_BASE_SETS + GATE_A_LIFE_SETS, "window": GATE_A_BIRTH_WINDOW,
                  "max_ticks": GATE_A_LIFE_MAX_TICKS, "need_ticks": 0, "ratio": True, "strict": True,
-                 "text": f"공식 A-1(사용자 결정 2026-10-11 — A-1′ 세계에서 생존 틱 요구를 뺌) — 두 갈래 모두 대상 ≥ {GATE_A_MIN_BIRTHS}, "
-                         f"대상이 모두 죽을 때까지(또는 멸종까지, 최대 {GATE_A_LIFE_MAX_TICKS:,}틱)"},
+                 "text": f"지난 공식 A-1(첫 판정·재판정 — 사용자 결정 2026-10-11, A-1′ 세계에서 생존 틱 요구를 뺌. 3차부터 공식 아님 — "
+                         f"{GATE_A_OFFICIAL}) — 대상 [{GATE_A_BIRTH_WINDOW[0]}, {GATE_A_BIRTH_WINDOW[1]}) 출생, 두 갈래 모두 대상 ≥ "
+                         f"{GATE_A_MIN_BIRTHS}, 대상이 모두 죽을 때까지(또는 멸종까지, 최대 {GATE_A_LIFE_MAX_TICKS:,}틱)"},
+    "A-1-life3": {"kind": "start", "sets": GATE_A_BASE_SETS + GATE_A_LIFE_SETS, "window": GATE_A3_BIRTH_WINDOW,
+                  "max_ticks": GATE_A_LIFE_MAX_TICKS, "need_ticks": 0, "ratio": True, "strict": True,
+                  "text": f"공식 A-1(3차 — 사용자 결정 2026-10-17: A-1-life 와 같은 세계·갈래·문턱에서 대상 출생 구간만 "
+                          f"[{GATE_A3_BIRTH_WINDOW[0]}, {GATE_A3_BIRTH_WINDOW[1]}) 로) — 처음 개체가 아닌 틱 "
+                          f"[{GATE_A3_BIRTH_WINDOW[0]}, {GATE_A3_BIRTH_WINDOW[1]}) 출생, 두 갈래 모두 대상 ≥ {GATE_A_MIN_BIRTHS}, "
+                          f"대상이 모두 죽을 때까지(또는 멸종까지, 최대 {GATE_A_LIFE_MAX_TICKS:,}틱)"},
     "A-2": {"kind": "fork", "ratio": False, "strict": False,
             "text": f"A-2(보고 — 진화한 두뇌에서도 득인가) — `{GATE_A2_PRESET}` 을 평균 {GATE_A2_AT_GEN}세대까지(끝 스냅숏의 틱 = F), "
                     f"그 스냅숏에서 그대로·freeze 를 F + {GATE_A2_TICKS} 까지, 두 갈래 모두 대상 ≥ {GATE_A_MIN_BIRTHS}"},
@@ -1022,14 +1036,17 @@ PREREG_GIT_TIMEOUT = 60
 GATE_A_RUN_STATUS_KO = {"ok": "조건 채움", "extinct": "생존 틱 전 멸종", "short": "생존 틱 전에 끝남", "few": "대상 모자람",
                         "alive": "끝에 대상이 살아 있음", "nolineage": "lineage.csv 없음", "failed": "실행 실패",
                         "nobase": "기준 실행 없음(갈래 안 돌림)"}
-## 관문 A 재판정의 씨앗 규율(사용자 결정 2026-10-11 — DESIGN-v0.2 14.3 'A-1 실패' 경로의 '재판정(씨앗 13~24)'): 조정·진단은 씨앗 1~12 만,
-## GATE_A_REJUDGE_SEEDS 는 재판정 사전 고정 커밋 뒤 판정 실행에서만, GATE_A_RESERVE_SEEDS 는 쓰지 않음(예비 — 쓰려면 사용자 결정과 새
-## 사전 고정으로 이 상수를 고침). 작은 도구 확인은 씨앗 101 이상. gate-a 는 실행 전에 gate_a_seed_guard 로 거른다(판정 계산은 그대로).
-GATE_A_REJUDGE_SEEDS = tuple(range(13, 25))
-GATE_A_RESERVE_SEEDS = tuple(range(25, 37))
-## 판정 도구(저장소 안 경로) — 재판정 씨앗은 --repo 의 이 파일과 바이트까지 같은 analyze.py 로만 돌림
+## 관문 A 의 씨앗 규율(사용자 결정 2026-10-11·2026-10-17 — DESIGN-v0.2 14.3 '3차 판정(씨앗 25~36)'): 조정·고르기는 씨앗 1~12 만.
+## GATE_A_JUDGE_SEEDS(3차 판정 씨앗)는 3차 사전 고정 커밋 뒤 판정 실행에서만, 사전 고정의 세 명령(공식 A-1·그 보조 판·A-2 — 변형
+## GATE_A_JUDGE_VARIANTS)으로. 지난 판정 씨앗 GATE_A_SPENT_SEEDS(첫 판정 1~12·재판정 13~24 — 재판정 때의 GATE_A_REJUDGE_SEEDS)는 이제
+## 판정 씨앗이 아니므로 거르지 않음(판정 가능성 확인에 다시 돌려도 됨 — 사용자 결정 2026-10-17). 예비 씨앗은 없음(새 판정 씨앗은 사용자
+## 결정과 새 사전 고정으로 이 상수를 고침). 작은 도구 확인은 씨앗 101 이상. gate-a 는 실행 전에 gate_a_seed_guard 로 거른다(판정 계산은 그대로).
+GATE_A_JUDGE_SEEDS = tuple(range(25, 37))
+GATE_A_JUDGE_VARIANTS = (GATE_A_OFFICIAL, "A-2")
+GATE_A_SPENT_SEEDS = tuple(range(1, 25))
+## 판정 도구(저장소 안 경로) — 판정 씨앗은 --repo 의 이 파일과 바이트까지 같은 analyze.py 로만 돌림
 GATE_A_TOOL_PATH = "tools/analyze.py"
-## 재판정 씨앗을 돌릴 때 --prereg 커밋과 바이트까지 같아야 하는 저장소 경로(실행 결과를 정하는 것 — Godot 프로젝트 파일, 설정 기본값·
+## 판정 씨앗을 돌릴 때 --prereg 커밋과 바이트까지 같아야 하는 저장소 경로(실행 결과를 정하는 것 — Godot 프로젝트 파일, 설정 기본값·
 ## 예설정, 스크립트 전체, 헤드리스 실행기, 판정 도구). 문서·검사 등 그 밖은 달라도 됨. .gitignore 로 무시하는 파일(.godot/)은 보지 않음
 GATE_A_FROZEN_PATHS = ("project.godot", "config", "scripts", "tests/run_experiment.gd", GATE_A_TOOL_PATH)
 ## 씨앗 규율 거부 문장에 이름을 적는 다른 파일 수(넘으면 '외 N개')
@@ -1231,7 +1248,7 @@ def _seed_span(seeds) -> str:
 
 
 def gate_a_frozen_diff(commit: str, repo: Path) -> str:
-    """재판정 씨앗의 실행 전 확인: 저장소 repo 의 GATE_A_FROZEN_PATHS 가 커밋 commit 과 바이트까지 같은가 → 같으면 "", 아니면 까닭.
+    """판정 씨앗의 실행 전 확인: 저장소 repo 의 GATE_A_FROZEN_PATHS 가 커밋 commit 과 바이트까지 같은가 → 같으면 "", 아니면 까닭.
     파일마다 그 커밋의 blob 해시 = 지금 파일의 git hash-object(경로의 줄 끝 설정을 따름 — prereg_text 와 같은 방식, 인덱스를 믿지
     않아 같은 초에 고친 파일도 가려냄). 그 커밋에 있는데 지금 없는 파일, 그 커밋에 없는데 지금 있는 파일(추적하지 않는 파일도 —
     .gitignore 로 무시하는 것만 뺌)도 '다름'. git 이 없거나 저장소 밖·없는 커밋이면 '확인 못 함'(돌리지 않음)."""
@@ -1270,30 +1287,30 @@ def gate_a_frozen_diff(commit: str, repo: Path) -> str:
             + (f" 외 {more}개" if more > 0 else ""))
 
 
-def gate_a_seed_guard(seeds: list[int], prereg: str, repo: Path) -> str:
-    """gate-a 의 씨앗 규율(GATE_A_REJUDGE_SEEDS·GATE_A_RESERVE_SEEDS — 사용자 결정 2026-10-11)을 실행 전에 확인 → 어기면 까닭, 지키면 "".
-    예비 씨앗은 늘 거부. 재판정 씨앗은 ① 그 씨앗 모두를 함께·다른 씨앗 없이 ② --prereg 를 주고 ③ 지금 도는 이 파일이 repo 의
-    GATE_A_TOOL_PATH 와 바이트까지 같고 ④ repo 의 GATE_A_FROZEN_PATHS 가 그 커밋과 같을 때만(gate_a_frozen_diff). 그 밖의 씨앗
-    (조정용 1~12·도구 확인 101 이상 등)은 거르지 않음 — 판정 계산·보고서는 이 확인과 상관없이 그대로."""
-    reserve = [s for s in seeds if s in GATE_A_RESERVE_SEEDS]
-    if reserve:
-        return (f"씨앗 {_seed_span(reserve)} 은 예비 씨앗({_seed_span(GATE_A_RESERVE_SEEDS)})이라 gate-a 에 쓰지 않습니다"
-                "(쓰려면 사용자 결정과 새 사전 고정 — DESIGN-v0.2 14.3 '재판정(씨앗 13~24)')")
-    if not any(s in GATE_A_REJUDGE_SEEDS for s in seeds):
+def gate_a_seed_guard(seeds: list[int], prereg: str, repo: Path, variant: str = GATE_A_OFFICIAL) -> str:
+    """gate-a 의 씨앗 규율(GATE_A_JUDGE_SEEDS — 사용자 결정 2026-10-17)을 실행 전에 확인 → 어기면 까닭, 지키면 "".
+    판정 씨앗은 ① 그 씨앗 모두를 함께·다른 씨앗 없이 ② 사전 고정의 변형(GATE_A_JUDGE_VARIANTS — 공식 A-1·그 --aux 보조 판·A-2)으로
+    ③ --prereg 를 주고 ④ 지금 도는 이 파일이 repo 의 GATE_A_TOOL_PATH 와 바이트까지 같고 ⑤ repo 의 GATE_A_FROZEN_PATHS 가 그 커밋과
+    같을 때만(gate_a_frozen_diff). 그 밖의 씨앗(조정용 1~12·지난 판정 씨앗 13~24·도구 확인 101 이상 등)은 거르지 않음 — 판정 계산·
+    보고서는 이 확인과 상관없이 그대로."""
+    if not any(s in GATE_A_JUDGE_SEEDS for s in seeds):
         return ""
-    rj = _seed_span(GATE_A_REJUDGE_SEEDS)
-    if tuple(seeds) != GATE_A_REJUDGE_SEEDS:
-        return (f"재판정 씨앗({rj})은 {len(GATE_A_REJUDGE_SEEDS)}개를 함께, 다른 씨앗 없이만 돌립니다(`--seeds {GATE_A_REJUDGE_SEEDS[0]}-{GATE_A_REJUDGE_SEEDS[-1]}`"
-                f" — 받은 씨앗 {_seed_span(seeds)})")
+    js = _seed_span(GATE_A_JUDGE_SEEDS)
+    if tuple(seeds) != GATE_A_JUDGE_SEEDS:
+        return (f"3차 판정 씨앗({js})은 {len(GATE_A_JUDGE_SEEDS)}개를 함께, 다른 씨앗 없이만 돌립니다"
+                f"(`--seeds {GATE_A_JUDGE_SEEDS[0]}-{GATE_A_JUDGE_SEEDS[-1]}` — 받은 씨앗 {_seed_span(seeds)})")
+    if variant not in GATE_A_JUDGE_VARIANTS:
+        return (f"3차 판정 씨앗({js})은 사전 고정의 변형({' · '.join(f'`{v}`' for v in GATE_A_JUDGE_VARIANTS)} — 공식 A-1 은 "
+                f"`--aux` 보조 판도)으로만 돌립니다 — 받은 변형 `{variant}`")
     if not prereg:
-        return f"재판정 씨앗({rj})은 `--prereg 사전 고정 커밋` 을 주고만 돌립니다"
+        return f"3차 판정 씨앗({js})은 `--prereg 사전 고정 커밋` 을 주고만 돌립니다"
     tool = Path(__file__).resolve()
     mine = repo / GATE_A_TOOL_PATH
     if not mine.is_file() or mine.read_bytes() != tool.read_bytes():
-        return f"재판정 씨앗({rj})은 저장소(--repo)의 `{GATE_A_TOOL_PATH}` 로만 돌립니다 — 지금 도는 {tool} 와 다름"
+        return f"3차 판정 씨앗({js})은 저장소(--repo)의 `{GATE_A_TOOL_PATH}` 로만 돌립니다 — 지금 도는 {tool} 와 다름"
     diff = gate_a_frozen_diff(prereg, repo)
     if diff:
-        return (f"재판정 씨앗({rj})은 실행을 정하는 파일({', '.join(GATE_A_FROZEN_PATHS)})이 사전 고정 커밋과 같을 때만 돌립니다"
+        return (f"3차 판정 씨앗({js})은 실행을 정하는 파일({', '.join(GATE_A_FROZEN_PATHS)})이 사전 고정 커밋과 같을 때만 돌립니다"
                 f" — {diff}")
     return ""
 
@@ -1319,7 +1336,7 @@ def cmd_gate_a(args) -> int:
       A-2: ① OUT/base/seed<N> 에 learn_basic 을 평균 30세대까지(끝 스냅숏 틱 F) ② 그 스냅숏에서 학습(그대로)·freeze 를 F + 340 까지,
            우연 기준 세계를 틱 0 부터 F + 340 까지 ③ 대상 [F, F + 100) 출생.
     판정 문턱은 GATE_A_* 상수(명령 인자로 바꿀 수 없음), --prereg 는 보고서 머리의 사전 고정 줄(prereg_text).
-    씨앗 규율(gate_a_seed_guard — 재판정·예비 씨앗)을 어기면 아무것도 돌리지 않고(결과 폴더도 만들지 않음) 종료 코드 2.
+    씨앗 규율(gate_a_seed_guard — 3차 판정 씨앗)을 어기면 아무것도 돌리지 않고(결과 폴더도 만들지 않음) 종료 코드 2.
     종료 코드: 0 보고서를 씀(판정 결과와 상관없이), 1 실패한 실행이 있음, 2 인자·저장소 오류·씨앗 규율."""
     repo = Path(args.repo).resolve()
     err = _check_repo(repo)
@@ -1330,7 +1347,7 @@ def cmd_gate_a(args) -> int:
     if args.aux and spec["kind"] != "start":
         print(f"오류: --aux(보조 판)는 A-1 계열 변형만입니다(14.3 — {args.variant} 는 아님)", file=sys.stderr)
         return 2
-    err = gate_a_seed_guard(list(args.seeds), args.prereg, repo)
+    err = gate_a_seed_guard(list(args.seeds), args.prereg, repo, args.variant)
     if err:
         print("오류: 씨앗 규율 — " + err, file=sys.stderr)
         return 2
@@ -1357,7 +1374,7 @@ def cmd_gate_a(args) -> int:
         failed = run_jobs(jobs, out_root, repo, args.jobs, args.timeout)
         rows_csv = read_runs_csv(out_root / "runs.csv")
         for job in jobs:
-            runs[(job.cell, job.seed)] = _gate_a_collect(job, rows_csv, GATE_A_BIRTH_WINDOW, int(spec["need_ticks"]))
+            runs[(job.cell, job.seed)] = _gate_a_collect(job, rows_csv, spec["window"], int(spec["need_ticks"]))
     table = []
     for b, _, _ in branches:
         for seed in args.seeds:
@@ -1436,7 +1453,6 @@ def write_gate_a_md(path: Path, args, runs: dict, ev: dict, prereg: str) -> None
     branches = gate_a_branches(args.variant)
     names = {b: n for b, n, _ in branches}
     third = ev["third"]
-    lo, hi = GATE_A_BIRTH_WINDOW
     head = [f"# 관문 A 보고서 — 변형 `{args.variant}`{' · 보조 판' if args.aux else ''}", "",
             f"- 변형: {spec['text']}"]
     if spec["kind"] == "fork":
@@ -1450,16 +1466,18 @@ def write_gate_a_md(path: Path, args, runs: dict, ev: dict, prereg: str) -> None
                  f"- 대상: 틱 [F, F + {GATE_A2_WINDOW}) 에 태어난 개체. 씨앗 {', '.join(str(s) for s in args.seeds)}",
                  "- A-2 는 보고입니다(관문 A 통과 = A-1 통과, 2단계로 갈지는 사용자가 판단 — 14.3)"]
     else:
+        lo, hi = spec["window"]
         sets = ", ".join(f"`{k}={v}`" for k, v in spec["sets"])
         head += [f"- 세계: 예설정 `{GATE_A_PRESET}` + {sets}" + (f" + 학습·freeze 갈래에 {', '.join(f'`{k}={v}`' for k, v in GATE_A_AUX_SETS)}"
                                                                if args.aux else ""),
                  "- 갈래: " + " · ".join(f"{n}(`{', '.join(f'{k}={v}' for k, v in st)}`)" for _, n, st in branches)
                  + " — 같은 씨앗, 틱 0 부터",
                  f"- 대상: 틱 [{lo}, {hi}) 에 태어난 개체(처음 개체 제외). 씨앗 {', '.join(str(s) for s in args.seeds)}"]
-    # 재판정 씨앗이면 실행 전에 지난 씨앗 규율(gate_a_seed_guard — 거부되면 여기까지 오지 않음)을 적음. 그 밖의 씨앗은 줄 없음
-    rule = ([f"- 씨앗 규율: 재판정 씨앗({_seed_span(GATE_A_REJUDGE_SEEDS)}) — 실행 전 확인(`gate_a_seed_guard`): 씨앗 모두를 함께, "
-             f"`--prereg` 커밋과 실행을 정하는 파일({', '.join(f'`{x}`' for x in GATE_A_FROZEN_PATHS)})이 같음"]
-            if tuple(args.seeds) == GATE_A_REJUDGE_SEEDS else [])
+    # 판정 씨앗이면 실행 전에 지난 씨앗 규율(gate_a_seed_guard — 거부되면 여기까지 오지 않음)을 적음. 그 밖의 씨앗은 줄 없음
+    rule = ([f"- 씨앗 규율: 3차 판정 씨앗({_seed_span(GATE_A_JUDGE_SEEDS)}) — 실행 전 확인(`gate_a_seed_guard`): 씨앗 모두를 함께, "
+             f"사전 고정의 변형(`{args.variant}`), `--prereg` 커밋과 실행을 정하는 파일"
+             f"({', '.join(f'`{x}`' for x in GATE_A_FROZEN_PATHS)})이 같음"]
+            if tuple(args.seeds) == GATE_A_JUDGE_SEEDS else [])
     out = head + [f"- 사전 고정: {prereg}"] + rule + [f"- **판정: {ev['verdict']}**", "",
                   "## 고정 문턱(`analyze.py` 상수 — 명령 인자로 바꿀 수 없음)", ""]
     sec = " · ".join(n for k, n, _ in GATE_A_METRICS if k in GATE_A_SECONDARY)
@@ -1471,8 +1489,11 @@ def write_gate_a_md(path: Path, args, runs: dict, ev: dict, prereg: str) -> None
          "② 의 지표(사전 결정 2026-10-11 — 생존 = 평균 산 나이, 성숙까지 산 몫은 보고만)"],
         ["`GATE_A_MIN_BIRTHS`", str(GATE_A_MIN_BIRTHS), "씨앗·갈래마다 필요한 대상 수"],
         ["`GATE_A_SEEDS`", str(GATE_A_SEEDS), "문턱의 기준 씨앗 수(다르면 판정하지 않음)"],
-        ["`GATE_A_BIRTH_WINDOW`", f"[{lo}, {hi})", "A-1: 대상 출생 틱"],
-        ["`GATE_A_LIFE_MAX_TICKS`", f"{GATE_A_LIFE_MAX_TICKS:,}", f"{GATE_A_OFFICIAL}(공식 A-1): 틱 상한(그 전에 대상이 모두 죽음)"],
+        ["`GATE_A3_BIRTH_WINDOW`", f"[{GATE_A3_BIRTH_WINDOW[0]}, {GATE_A3_BIRTH_WINDOW[1]})",
+         "A-1-life3(공식 A-1 — 3차): 대상 출생 틱(처음 개체 제외)"],
+        ["`GATE_A_BIRTH_WINDOW`", f"[{GATE_A_BIRTH_WINDOW[0]}, {GATE_A_BIRTH_WINDOW[1]})",
+         "A-1(처음 정의)·A-1-life(지난 공식): 대상 출생 틱(처음 개체 제외)"],
+        ["`GATE_A_LIFE_MAX_TICKS`", f"{GATE_A_LIFE_MAX_TICKS:,}", "A-1-life3·A-1-life: 틱 상한(그 전에 대상이 모두 죽음)"],
         ["`GATE_A_TICKS`", f"{GATE_A_TICKS:,}", "A-1(처음 정의): 두 갈래 모두 이 틱까지 살아야 판정"],
         ["`GATE_A2_AT_GEN`", GATE_A2_AT_GEN, f"A-2: 기준 실행(`{GATE_A2_PRESET}`)의 평균 세대 — 끝 스냅숏 틱 F"],
         ["`GATE_A2_TICKS`", str(GATE_A2_TICKS), "A-2: 갈래·기준 행을 F + 이 틱까지"],
@@ -2858,8 +2879,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_ablate)
     p = sub.add_parser("gate-a", help="관문 A(DESIGN-v0.2 14.3): 학습·freeze·셋째 행 갈래를 씨앗마다 돌려 판정 보고서")
     p.add_argument("--variant", choices=list(GATE_A_VARIANTS), default=GATE_A_OFFICIAL,
-                   help=f"판정 조건(기본 {GATE_A_OFFICIAL} = 공식 A-1, 사용자 결정 2026-10-11 — A-1′ 세계, 생존 틱 요구 없음, 대상이 모두 "
-                        "죽을 때까지). A-1 = 처음 정의(1,000틱 생존 필요 — 공식 아님). A-2 = 진화한 두뇌(보고 — learn_basic 30세대 "
+                   help=f"판정 조건(기본 {GATE_A_OFFICIAL} = 공식 A-1, 사용자 결정 2026-10-17 — A-1′ 세계, 생존 틱 요구 없음, 대상 = "
+                        f"처음 개체가 아닌 틱 [{GATE_A3_BIRTH_WINDOW[0]}, {GATE_A3_BIRTH_WINDOW[1]}) 출생, 대상이 모두 죽을 때까지). "
+                        f"A-1-life = 지난 공식(첫 판정·재판정 — 대상 [{GATE_A_BIRTH_WINDOW[0]}, {GATE_A_BIRTH_WINDOW[1]})). "
+                        "A-1 = 처음 정의(1,000틱 생존 필요 — 공식 아님). A-2 = 진화한 두뇌(보고 — learn_basic 30세대 "
                         "스냅숏에서 그대로·freeze, 기준 행 우연 기준)")
     p.add_argument("--seeds", type=_arg_type(parse_seeds), default=parse_seeds("1-12"),
                    help=f'씨앗(기본 1-12 — 판정 문턱은 씨앗 {GATE_A_SEEDS}개 기준, 다르면 값만 적고 판정하지 않음)')
