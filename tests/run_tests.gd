@@ -2712,8 +2712,10 @@ const V01_GOLDEN := [
 		"44929f8442f0bc95835cbe214be4d878570dcf6b24f019d6c7d1686e1b7c4691", "110bf754b763d49953b632e10659e865870ec9972bdc8e4611e215d135baa5d8", false],
 ]
 ## 꺼진 1단계 장치(learn.enabled·body.grow_enabled 끔)의 다른 키와 생애 단계 비율: 바꿔도 역사에 닿지 않아야 함(금 값 그대로 — 14.2 검사 기준 1).
+## 값마다 기본값과 달라야 '바꾼 키' 가 됨(test_v01_golden 이 확인). learn.decay 는 0.5 였으나 관문 A 3차의 기본값(N10 — λ 0.5, 사용자 결정
+## 2026-10-18)과 같아져 0.3 으로 고침(첫 값 0.8·재조정 0.95·N10 0.5 모두 아님).
 const V01_OFF_KEYS := {"learn.freeze": true, "learn.cost_per_eta": 1.0, "learn.lamarck_frac": 1.0, "learn.ring_len": 3, "learn.diag_factor": "none",
-	"learn.stage_mult": [0.5, 0.5, 0.5, 0.5], "learn.decay": 0.5, "learn.baseline_rate": 0.2, "learn.min_surprise": 0.0, "learn.eta_init": 0.3,
+	"learn.stage_mult": [0.5, 0.5, 0.5, 0.5], "learn.decay": 0.3, "learn.baseline_rate": 0.2, "learn.min_surprise": 0.0, "learn.eta_init": 0.3,
 	"learn.eta_max": 1.0, "learn.mutation_scale_eta": 2.0, "body.birth_size_frac": 0.2, "life.adult_frac": 0.1, "life.old_frac": 0.2}
 ## v0.1.0 실행기로 만든 스냅숏(--seed=42 --max-ticks=200 의 final.snapshot.json, DESIGN-v0.1 8.3 예시와 같은 실행)과,
 ## 그것을 열어 100틱 이어 돌린 역사 해시·22열 SHA-256(연 틱 줄부터 — 기록 방식은 위와 같음).
@@ -2747,6 +2749,23 @@ static func record_until(wd: SimWorld, until: int) -> SimRecorder:
 	return rec
 
 
+## 설정 잎 값 have(설정 사전에서 읽은 값)가 want 와 같은가: 배열은 길이·원소(float), 글자는 글자, 참거짓은 참거짓, 나머지는 float
+## (JSON 의 정수 8 = 8.0 — LEARN_TUNED·V01_OFF_KEYS 를 기본값과 견줄 때).
+static func same_cfg_value(have, want) -> bool:
+	if typeof(want) == TYPE_ARRAY:
+		if typeof(have) != TYPE_ARRAY or (have as Array).size() != (want as Array).size():
+			return false
+		for j in (want as Array).size():
+			if float(have[j]) != float(want[j]):
+				return false
+		return true
+	if typeof(want) == TYPE_STRING:
+		return typeof(have) == TYPE_STRING and str(have) == want
+	if typeof(want) == TYPE_BOOL:
+		return typeof(have) == TYPE_BOOL and bool(have) == want
+	return typeof(have) in [TYPE_INT, TYPE_FLOAT] and float(have) == float(want)
+
+
 ## 기록 줄들을 cols 열만으로 이은 CSV 글(SimRecorder.timeseries_csv 와 같은 꼴 — BOM 없음).
 static func csv_of(rows: Array, cols: Array[String]) -> String:
 	var lines := PackedStringArray([",".join(cols)])
@@ -2771,7 +2790,14 @@ func test_v01_golden() -> void:
 		var sha := csv_of(rec.rows, V01_TIMESERIES_COLUMNS).sha256_text()
 		check(wd.history_hash == g[5] and sha == g[6], "금 값 %s: 역사 해시 %s(금 %s), 22열 SHA-256 %s(금 %s)" % [g[0],
 				wd.history_hash.substr(0, 12), str(g[5]).substr(0, 12), sha.substr(0, 12), str(g[6]).substr(0, 12)])
-	# 꺼진 1단계 장치의 키만 바꾼 세계(학습·몸 자람 끔 — DESIGN-v0.2 14.2 검사 기준 1): 금 값 2번(기본·씨앗 11·1,500틱) 그대로
+	# 꺼진 1단계 장치의 키만 바꾼 세계(학습·몸 자람 끔 — DESIGN-v0.2 14.2 검사 기준 1): 금 값 2번(기본·씨앗 11·1,500틱) 그대로.
+	# 키마다 값이 기본값과 달라야 바꾼 키(기본값이 바뀌어 같아지면 그 키는 검사되지 않음 — 관문 A 3차의 learn.decay 0.5)
+	var cdef := cfg_with()
+	var same_off: Array[String] = []
+	for k: String in V01_OFF_KEYS:
+		if same_cfg_value(cdef[k.get_slice(".", 0)][k.get_slice(".", 1)], V01_OFF_KEYS[k]):
+			same_off.append("%s = %s" % [k, str(V01_OFF_KEYS[k])])
+	check(same_off.is_empty(), "꺼진 장치 키 %d개의 값이 모두 기본값과 다름(같은 키: %s)" % [V01_OFF_KEYS.size(), ", ".join(same_off)])
 	var g2: Array = V01_GOLDEN[1]
 	var wo := world(V01_OFF_KEYS, g2[3], g2[1])
 	var reco := record_until(wo, g2[4])
@@ -3231,6 +3257,11 @@ const HAND_HID := 2
 const HAND_RING := 4
 ## 손 계산 갱신의 세계 경로에서 개체의 수명(단계 경계 = 비율 × 이 값).
 const HAND_MAX_AGE := 200
+## 손 계산 갱신의 세계 경로(hand_learner)의 고리 길이·단계 배수 — 기본값과 따로 박아 둠: 고리는 다음 자리 3·빈칸 2 가 고리 안에 있게(> 3),
+## 단계 배수는 단계마다 달라 단계를 잘못 고른 갱신이 비트로 드러나게. 관문 A 3차의 기본값 N10(H 2·[1,1,1,1] — 사용자 결정 2026-10-18)으로는
+## 둘 다 못 해(검사는 통과하지만 빈칸·단계 배수를 보지 못함) 그 전 기본값(재조정 C15)의 8·[1, 0.6, 0.3, 0.1] 을 그대로 씀.
+const HAND_WORLD_RING := 8
+const HAND_STAGE_MULT := [1.0, 0.6, 0.3, 0.1]
 ## 세계 번식 경로의 η 유전 검사(test_learn_genome): 부모 a 의 η[k] = A × (k + 1), 부모 b = B × (2k + 1) — 2진 소수라 float32 그대로,
 ## 유전자마다 두 부모가 다르고 eta_init·[0, eta_max] 경계와도 다름(첫 값 0.05·0.5, 관문 A 재조정 뒤 0.8·8.0 — 둘 다 아님).
 const INHERIT_ETA_A := 0.046875
@@ -3240,12 +3271,14 @@ const SNAP_LOW_ETA_MAX := 0.01
 const SNAP_F32_ETA_MAX := 0.2
 ## 관계 검사 eta_init ≤ eta_max(test_learn_config): 기본 상한에 이 값을 더한 처음 값은 거부.
 const ETA_OVER_MAX := 0.5
-## 관문 A 재조정으로 고른 학습 기본값(TEST-REPORT "v0.2 관문 A 재조정" 3절 — 씨앗 1~12 의 후보 C15: η 묶음 eta_init 0.8·cost_per_eta
-## 0.0025(= 0.002 ÷ 0.8 — 틱당 학습 비용은 첫 값 그대로)·eta_max 8.0(= 10 × eta_init), 고리 감쇠 λ 0.95, 나머지는 첫 값).
-## 새 씨앗 13~24 의 관문 A 재판정이 이 기본값으로 돌았고, 3차 판정(씨앗 25~36 — DESIGN-v0.2 14.3 '3차 판정', 사전 고정 'v0.2 관문 A 3차(3)')도
-## 이 기본값을 판정하므로 바뀌면 test_learn_config 가 알림(바꾸려면 고른 기록과 새 사전 고정과 함께).
-const LEARN_TUNED := {"learn.eta_init": 0.8, "learn.eta_max": 8.0, "learn.cost_per_eta": 0.0025, "learn.decay": 0.95,
-	"learn.stage_mult": [1.0, 0.6, 0.3, 0.1], "learn.min_surprise": 0.2, "learn.ring_len": 8, "learn.baseline_rate": 0.05, "learn.diag_factor": "exact"}
+## 관문 A 3차의 사용자 결정(2026-10-18)으로 고른 학습 기본값 N10(TEST-REPORT "v0.2 관문 A 3차 준비" 4.6·8절 — 계획 밖 고름: 계획의 성능
+## 규칙을 순위 6위 아래로 이어 잰 측정에서 처음 통과한 씨앗 1~12 의 후보 e4s2m1h1d1g0b1): η 묶음 eta_init 0.8·cost_per_eta 0.0025
+## (= 0.002 ÷ 0.8 — 틱당 학습 비용은 첫 값 그대로)·eta_max 8.0(= 10 × eta_init), 단계 배수 [1,1,1,1], 고리 길이 H 2·감쇠 λ 0.5, 나머지는 첫 값.
+## 그 전(재판정 13~24·3차 사전 고정 2de06ac)의 기본값은 재조정의 C15(λ 0.95·H 8·단계 배수 [1, 0.6, 0.3, 0.1]). 3차 판정(씨앗 25~36 —
+## DESIGN-v0.2 14.3 '3차 판정')이 이 값을 판정하고, 통과하면 2단계도 이 값 그대로 가므로(사용자 결정 — 나중에 바꾸면 새 판정) 바뀌면
+## test_learn_config 가 알림(바꾸려면 고른 기록·새 사전 고정과 함께).
+const LEARN_TUNED := {"learn.eta_init": 0.8, "learn.eta_max": 8.0, "learn.cost_per_eta": 0.0025, "learn.decay": 0.5,
+	"learn.stage_mult": [1.0, 1.0, 1.0, 1.0], "learn.min_surprise": 0.2, "learn.ring_len": 2, "learn.baseline_rate": 0.05, "learn.diag_factor": "exact"}
 const INHERIT_ETA_B := 0.015625
 ## 학습 스냅숏 검사(test_learn_snapshot)의 learn_basic 씨앗: 관문 A 의 판정 씨앗(지난 재판정 13~24·3차 25~36 — learn_basic 은 A-2 의
 ## 기준 실행 세계)을 쓰지 않게 101 이상(씨앗 규율 — DESIGN-v0.2 14.3 '재판정(씨앗 13~24)'·'3차 판정(씨앗 25~36)'. 처음에는 21 이었음)
@@ -3488,10 +3521,12 @@ func test_learn_genome() -> void:
 	done()
 
 
-## 손 계산 갱신의 세계 경로용 개체 하나(test_learn_update_hand): 학습 켠 빈 세계(몸 자람 grow)에 나이 age·수명 HAND_MAX_AGE·에너지 0.5 인
-## 개체 0 을 놓고, 고리(다음 자리 3, 칸 2 는 빈칸)·은닉·보정 e·η(0.0625 × (k + 1))·기준선 0.5 를 정함.
+## 손 계산 갱신의 세계 경로용 개체 하나(test_learn_update_hand): 학습 켠 빈 세계(몸 자람 grow, 고리 길이 HAND_WORLD_RING·단계 배수
+## HAND_STAGE_MULT)에 나이 age·수명 HAND_MAX_AGE·에너지 0.5 인 개체 0 을 놓고, 고리(다음 자리 3, 칸 2 는 빈칸)·은닉·보정 e·
+## η(0.0625 × (k + 1))·기준선 0.5 를 정함.
 func hand_learner(grow: bool, age: int) -> SimWorld:
-	var wd := empty_world({"learn.enabled": true, "body.grow_enabled": grow})
+	var wd := empty_world({"learn.enabled": true, "body.grow_enabled": grow, "learn.ring_len": HAND_WORLD_RING,
+			"learn.stage_mult": HAND_STAGE_MULT})
 	var i := wd.index_of_id(add_slime(wd, grass_spot(wd), 0.5, age, 1))
 	wd.s_max_age[i] = HAND_MAX_AGE
 	var hn := wd._ring
@@ -3550,6 +3585,14 @@ func test_learn_update_hand() -> void:
 	# 경우: [이름, 나이, 기대 단계, 몸 자람]. 단계 경계 바로 앞(성숙 − 1·어른 시작 − 1·늙음 시작 − 1 — 갱신의 단계는 나이 + 1 전의 나이로,
 	# 3.8)과 몸 자람 세계의 어린 개체(보상 분모 = 유효 크기 s_size, 3.2 — 유전자 크기가 아님)를 더함(검증 지적)
 	var hc := cfg_with({"learn.enabled": true})
+	var hw := hand_learner(false, 5)
+	var hm: Array = hw.cfg.learn.stage_mult
+	var hm_distinct := true
+	for a in hm.size():
+		for b in range(a + 1, hm.size()):
+			hm_distinct = hm_distinct and float(hm[a]) != float(hm[b])
+	check(hw._ring > 3 and hw.s_ring_a[2] == SimWorld.RING_EMPTY and hw.s_ring_pos[0] == 3 and hm.size() == SimBrain.LIFE_STAGE_NAMES.size() and hm_distinct,
+			"손 계산 세계 경로: 고리 길이 %d > 3(다음 자리 3·빈칸 2 가 고리 안), 단계 배수 %s 가 단계마다 다름(기본값과 따로 박음)" % [hw._ring, str(hm)])
 	var hmat := int(hc.repro.maturity)
 	var adult_at := ceili(float(hc.life.adult_frac) * float(HAND_MAX_AGE))
 	var old_at := ceili(float(hc.life.old_frac) * float(HAND_MAX_AGE))
@@ -3988,25 +4031,15 @@ func test_learn_config() -> void:
 	var e2 := str(SimConfig.build("default", {"learn.eta_init": emax + ETA_OVER_MAX}).error)
 	check(e2.contains("learn.eta_init") and e2.contains("learn.eta_max"), "eta_init %s > eta_max %s(기본) 거부: %s" % [str(emax + ETA_OVER_MAX), str(emax), e2])
 	check(SimConfig.build("default", {"learn.eta_init": emax}).error == "", "eta_init = eta_max(%s) 는 받음" % str(emax))
-	# 기본값 = 관문 A 재조정으로 고른 값(LEARN_TUNED)
+	# 기본값 = 관문 A 3차에서 고른 값(LEARN_TUNED — N10, 사용자 결정 2026-10-18)
 	var cd := cfg_with()
 	var off_tuned: Array[String] = []
 	for k: String in LEARN_TUNED:
 		var want = LEARN_TUNED[k]
 		var have = cd[k.get_slice(".", 0)][k.get_slice(".", 1)]
-		var same := false
-		if typeof(want) == TYPE_ARRAY:
-			same = typeof(have) == TYPE_ARRAY and have.size() == want.size()
-			if same:
-				for j in want.size():
-					same = same and float(have[j]) == float(want[j])
-		elif typeof(want) == TYPE_STRING:
-			same = str(have) == want
-		else:
-			same = float(have) == float(want)
-		if not same:
-			off_tuned.append("%s = %s(조정 값 %s)" % [k, str(have), str(want)])
-	check(off_tuned.is_empty(), "학습 기본값 = 관문 A 재조정으로 고른 값(%d키 — 다른 키: %s)" % [LEARN_TUNED.size(), ", ".join(off_tuned)])
+		if not same_cfg_value(have, want):
+			off_tuned.append("%s = %s(고른 값 %s)" % [k, str(have), str(want)])
+	check(off_tuned.is_empty(), "학습 기본값 = 관문 A 3차에서 고른 값 N10(%d키 — 다른 키: %s)" % [LEARN_TUNED.size(), ", ".join(off_tuned)])
 	check(SimConfig.CHOICES["learn.diag_factor"] == [SimBrain.DIAG_EXACT, SimBrain.DIAG_NONE] and str(cfg_with().learn.diag_factor) == SimBrain.DIAG_EXACT,
 			"learn.diag_factor 고를 값 = SimBrain.DIAG_*, 기본 exact")
 	for bad in [["learn.diag_factor", "Exact"], ["learn.stage_mult", [1.0, 0.5, 0.2]], ["learn.stage_mult", [1.0, 0.5, 0.2, 1.5]],

@@ -111,8 +111,8 @@
 	"learn": {
 		"enabled": false,
 		"freeze": false,
-		"ring_len": 8,
-		"decay": 0.95,
+		"ring_len": 2,
+		"decay": 0.5,
 		"baseline_rate": 0.05,
 		"min_surprise": 0.2,
 		"eta_init": 0.8,
@@ -121,9 +121,9 @@
 		"cost_per_eta": 0.0025,
 		"stage_mult": [
 			1.0,
-			0.6,
-			0.3,
-			0.1
+			1.0,
+			1.0,
+			1.0
 		],
 		"lamarck_frac": 0.0,
 		"diag_factor": "exact"
