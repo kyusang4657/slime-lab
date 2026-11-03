@@ -225,7 +225,7 @@
 | 절 | 키 | 꼴 | 길이 | 뜻 |
 |---|---|---|---|---|
 | (맨 위) | `format`, `version` | 글자, 수 | | `"slime-lab-snapshot"`, `1` |
-| | `app_version` | 글자 | | 만든 판(`project.godot` 의 `config/version`, 지금 `"0.1.0"`) |
+| | `app_version` | 글자 | | 만든 판(`project.godot` 의 `config/version` — v0.1 은 `"0.1.0"`, 릴리스 v0.2.0 부터 `"0.2.0"`) |
 | | `seed`, `tick` | 64비트 글자, 정수 | | 씨앗, 지금 틱(진행한 틱 수) |
 | | `config` | 사전 | | 실제로 쓴 전체 설정(JSON 수) |
 | | `rng.world`, `rng.life` | 64비트 글자 | | 두 난수 흐름의 PCG32 상태 |
@@ -558,7 +558,7 @@ docs/                  DESIGN-v0.1.md, SIM-API.md, VIEW-API.md, CONFIG.md, ANALY
 
 ## 20. 5단계: 빌드·배포 결정
 
-- **내보내기:** `export_presets.cfg` 에 Linux·Windows Desktop·Web 세 판. 실행 파일 하나에 pck 를 넣고(`embed_pck`), 검사(`tests/`)·도구(`tools/`)·문서(`docs/`)는 뺍니다. 글꼴 OFL 전문은 포함 필터로 넣습니다(OFL 조건). 배포판(zip·웹 묶음)에는 `LICENSE`·`CREDITS.md`·`OFL-NanumGothic.txt`·`GODOT-LICENSE.txt`(엔진 MIT·제3자 고지 — 내보낼 때 엔진에서 만듦, 검토 I16)를 함께 넣습니다(`tools/build_dist.sh`). Windows 실행 파일의 아이콘·버전 정보(회사 kyusang4657, 제품·설명 "슬라임 인공생명 실험실", 저작권, 판 0.1.0.0)는 CI 에서 wine64 아래 rcedit v2.0.0(박아 둔 SHA-512 로 확인)으로 씁니다(검토 I57). **서명은 없습니다.** macOS 는 서명·공증이 필요해 1단계에서 빼고 소스 실행만 안내합니다.
+- **내보내기:** `export_presets.cfg` 에 Linux·Windows Desktop·Web 세 판. 실행 파일 하나에 pck 를 넣고(`embed_pck`), 검사(`tests/`)·도구(`tools/`)·문서(`docs/`)는 뺍니다. 글꼴 OFL 전문은 포함 필터로 넣습니다(OFL 조건). 배포판(zip·웹 묶음)에는 `LICENSE`·`CREDITS.md`·`OFL-NanumGothic.txt`·`GODOT-LICENSE.txt`(엔진 MIT·제3자 고지 — 내보낼 때 엔진에서 만듦, 검토 I16)를 함께 넣습니다(`tools/build_dist.sh`). Windows 실행 파일의 아이콘·버전 정보(회사 kyusang4657, 제품·설명 "슬라임 인공생명 실험실", 저작권, 판 — `config/version` 에 .0 을 붙임: v0.1.0 은 0.1.0.0, v0.2.0 은 0.2.0.0)는 CI 에서 wine64 아래 rcedit v2.0.0(박아 둔 SHA-512 로 확인)으로 씁니다(검토 I57). **서명은 없습니다.** macOS 는 서명·공증이 필요해 1단계에서 빼고 소스 실행만 안내합니다.
 - **웹 체험판(포트폴리오용 예외):** 처음 결정은 "PC 전용, 모바일·웹은 고려하지 않음"이었습니다. 포트폴리오 사이트에서 바로 만져 볼 수 있게 하려고 사용자 결정으로 웹판을 더했습니다(2026-10-08). 스레드 없는 템플릿이라 특별한 서버 머리글(COOP/COEP)이 필요 없습니다. 브라우저에는 고를 파일 시스템이 없어 내보내기·스냅숏 저장은 브라우저 내려받기(zip·JSON)로, 스냅숏 열기는 숨깁니다. 브라우저 GDScript(wasm)는 데스크톱보다 느려 높은 배속이 덜 나오며, 화면의 "실제 M배"가 그대로 보여 줍니다(벽시계로 잼 — 검토 J04). 화면 배율·좁은 창은 10절. 배포는 이 저장소의 GitHub Pages(`https://kyusang4657.github.io/slime-lab/`)이고, 저장소 설정에서 Pages(Source = GitHub Actions)를 켜야 배포됩니다 — 켜기 전에는 `pages` 잡이 실패하고 주소가 열리지 않습니다(TEST-REPORT).
 - **웹판의 결정성(같은 결과) 근거 — 검토 I78:** 시뮬레이션 스크립트(`scripts/sim`)와 설정 JSON 만 담은 탐침 장면을 배포판과 같은 4.4.1 웹 템플릿(`web_nothreads_release`)으로 내보내 헤드리스 Chromium(SwiftShader)에서 돌리고, 같은 장면을 Linux 데스크톱에서 돌려 견줬습니다. 전체 검토 때(규칙 고침 전 코드) 7가지, **검토 고침 뒤 코드(2026-10-10)로 다시 8가지** — 기본(씨앗 11·1,500틱, 씨앗 42·2,500틱 농사, 씨앗 7·800틱 멸종, 씨앗 5·기억 2·1,000틱), `fast_civ`(씨앗 1·3,400틱 밭 7, 씨앗 3·3,000틱), `harsh_winter`(씨앗 9·800틱), `demo_fast`(씨앗 2·1,500틱 밭 67) — 모두 **역사 해시 64자리와 에너지 합 비트가 데스크톱과 같았습니다**. 자동 검사(CI)는 아닙니다: 시뮬레이션 코드를 바꾸면 다시 확인해야 하고, Chromium 하나로만 확인했습니다(TEST-REPORT).
 - **Actions**(`.github/workflows/build.yml`, 이전 저장소의 같은 파일을 바탕으로): `test`(규칙 검사·화면 검사·100세대 짧은 실험·분석 도구와 저장소 규칙 `tools/test_*.py` — 로그에 `SCRIPT ERROR` 가 있거나 RESULT 가 `0 failed` 가 아니면 실패, 실험은 줄 끝까지 `reason=generations$`) → `export`(세 판 내보내기·고지 파일 넣기·zip 묶기 `tools/build_dist.sh` — 경고·오류·판 번호·실행 파일 정보도 확인, Linux 실행 파일을 빈 폴더에서 헤드리스로 띄워 메인 장면을 읽고 오류 없이 200프레임 `tools/smoke_run.sh`) → `main` 의 푸시·수동 실행이면 `pages`(웹 체험판 배포), `v*` 태그면 `release`(Linux·Windows zip 을 GitHub Release 에 — 태그는 `v` + `project.godot` 의 `config/version` 이어야 함). 모든 단계는 `bash -eo pipefail`, 내려받는 Godot·템플릿은 공식 SHA512-SUMS 로 확인(`tools/fetch_godot.sh`), 잡마다 시간 제한(20·15·10·10분), 러너는 `ubuntu-24.04` 로 고정. 워크플로의 단계·도구는 `tools/test_build_ci.py` 가 가짜 godot 으로 흉내 내어 검사합니다.

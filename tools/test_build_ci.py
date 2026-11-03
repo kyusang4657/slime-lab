@@ -281,10 +281,10 @@ class TestWorkflowShape(unittest.TestCase):
         self.assertTrue(eval_if(cond, "push", main))
         self.assertTrue(eval_if(cond, "workflow_dispatch", main), "Actions 탭 'Run workflow' 도 배포")
         self.assertFalse(eval_if(cond, "pull_request", "refs/pull/1/merge"))
-        self.assertFalse(eval_if(cond, "push", "refs/tags/v0.1.0"))
+        self.assertFalse(eval_if(cond, "push", "refs/tags/v0.2.0"))
         self.assertFalse(eval_if(cond, "workflow_dispatch", "refs/heads/other"))
         rel = wf()["jobs"]["release"]["if"]
-        self.assertTrue(eval_if(rel, "push", "refs/tags/v0.1.0"))
+        self.assertTrue(eval_if(rel, "push", "refs/tags/v0.2.0"))
         self.assertFalse(eval_if(rel, "push", main))
 
     def test_pages_steps(self) -> None:
@@ -543,6 +543,19 @@ class TestBuildDist(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         rc, out = self.build(GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main")
         self.assertEqual(rc, 0, out)
+
+    def test_release_tag_of_real_version(self) -> None:
+        # 저장소의 project.godot 그대로(TEST_VERSION 로 바꾸지 않음): 릴리스 태그 v<config/version> 을 받아들이고,
+        # 판이 숫자·점뿐이라 Windows 실행 파일 정보의 판까지 확인한다(build_dist.sh 의 ^[0-9.]+$ 갈래)
+        shutil.copy(REPO / "project.godot", self.root / "project.godot")
+        real = re.search(r'(?m)^config/version="(.*)"$', (REPO / "project.godot").read_text(encoding="utf-8")).group(1)
+        self.assertRegex(real, r"^[0-9]+\.[0-9]+\.[0-9]+$")
+        rc, out = self.build(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME=f"v{real}")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Windows 실행 파일 정보:", out)
+        self.assertIn(real, out.split("Windows 실행 파일 정보:", 1)[1].splitlines()[0])
+        for p in ("linux", "windows"):
+            self.assertTrue((self.root / "build" / f"slime-lab-{real}-{p}.zip").is_file())
 
     def test_export_problems_fail(self) -> None:
         cases = {
